@@ -301,7 +301,9 @@ private:
     Object_deleter(Test_owner_shm_pool_collection_2* pool_collection) :
       m_pool_collection(pool_collection)
     {
-      static size_t s_count = 0;
+      /* @todo What's this? It's never used; some compilers warn about it; had to add [[maybe_unused]].
+       * Revisit? -ygoldfel */
+      [[maybe_unused]] static size_t s_count = 0;
       ++s_count;
     }
 
