@@ -25,7 +25,7 @@
 #pragma once
 
 #include "ipc/shm/arena_lend/shm_pool.hpp"
-#include <boost/unordered/unordered_map.hpp>
+#include <unordered_map>
 #include <map>
 #include <memory>
 #include <mutex>
