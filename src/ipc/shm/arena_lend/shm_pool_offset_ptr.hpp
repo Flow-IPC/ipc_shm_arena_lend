@@ -132,6 +132,15 @@ public:
   {
   }
 
+  /**
+   * Default copy assignment.  Without declaring it explicitly, some compilers (at least clang-17)
+   * warn, because of the presence of the auto-generated copy-ctor above.
+   *
+   * @param other The other offset pointer to copy from.
+   * @return `*this`.
+   */
+  Shm_pool_offset_ptr& operator=(const Shm_pool_offset_ptr& other) = default;
+
 #pragma GCC diagnostic pop // See above.
 
   /**
