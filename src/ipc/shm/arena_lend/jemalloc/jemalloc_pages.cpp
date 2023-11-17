@@ -22,17 +22,22 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
-// echan - This file is taken from src/pages.c from jemalloc source, namely version 5.2.1.1.
+// echan - This file is taken from src/pages.c from jemalloc source, namely version 5.2.1.
+
 // echan - Added for compilation purposes
 #include <cstddef>
 #include <cstdint>
-#include <assert.h>
+#include <cassert>
 #include <sys/mman.h>
 #include <cstdarg>
 #include <unistd.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <string.h>
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
+#include <flow/common.hpp>
+
+#include <jemalloc/jemalloc.h>
 
 // echan - Build warnings from jemalloc internal functions
 #pragma GCC diagnostic push
@@ -43,31 +48,85 @@ using std::size_t;
 namespace ipc::shm::arena_lend::jemalloc
 {
 
-#define JEMALLOC_PAGES_C_
-// echan - Certain headers are not exposed, so replacing with necessary headers and definitions
-// #include "jemalloc/internal/jemalloc_preamble.h"
-#include <jemalloc/jemalloc.h>
-#include <jemalloc/internal/jemalloc_internal_macros.h>
-#include <jemalloc/internal/jemalloc_internal_defs.h>
-#include <jemalloc/internal/jemalloc_internal_types.h>
-#ifdef JEMALLOC_DEFINE_MADVISE_FREE
-#  define JEMALLOC_MADV_FREE 8
+/* ygoldfel - My understanding is, indeed, echan needed to make some additions for SHM support
+ * in a jemalloc-compatible way and thus, as he noted above, leveraged existing existing
+ * *internal* jemalloc source code. Hence such code was placed here and then somewhat modified (as little
+ * as possible). One complication was that, to compile/work, these pages.c snippets also needed
+ * certain items from also-internal jemalloc header files: ones residing in include/internal/<...>.h. To be clear:
+ * these are not like STL/Boost .../detail/... headers which are not supposed to be #include<>d *directly* by user
+ * but physically *can* be (and indirectly are, via non-`detail` ones). These jemalloc/internal/<...>.h
+ * are in fact not installed into the include-path when one `make install`s
+ * jemalloc. So there was a choice of either shipping entire such files inside this SHM-jemalloc project;
+ * or trying to replicate just the necessary parts. Pleasantly enough, the latter was very doable: it is
+ * just a handful of straightforward macros/constants, the definition of which is unlikely to change.
+ *
+ * The following are the headers/stuff a small subset of which we then replicate just below. */
+
+#if 0
+
+#  define JEMALLOC_PAGES_C_
+
+#  include "jemalloc/internal/jemalloc_preamble.h"
+#  include <jemalloc/internal/jemalloc_internal_macros.h>
+#  include <jemalloc/internal/jemalloc_internal_defs.h>
+#  include <jemalloc/internal/jemalloc_internal_types.h>
+
+/* ygoldfel - echan had this being compiled in this spot, but the relevant code was `#if 0`d out (search below), so
+ * we can `#if 0` this out too. */
+#  ifdef JEMALLOC_DEFINE_MADVISE_FREE
+#    define JEMALLOC_MADV_FREE 8
+#  endif
+
+#  include "jemalloc/internal/pages.h"
+#  include "jemalloc/internal/jemalloc_internal_includes.h"
+#  include "jemalloc/internal/assert.h"
+#  include "jemalloc/internal/malloc_io.h"
+
+// ygoldfel - echan had this being compiled in this spot, but it is a BSD thing, so let's just keep it tight.
+#  ifdef JEMALLOC_SYSCTL_VM_OVERCOMMIT
+#    include <sys/sysctl.h>
+#    ifdef __FreeBSD__
+#      include <vm/vm_param.h>
+#    endif
+#  endif
+
+#endif // #if 0
+
+#ifndef FLOW_OS_LINUX
+#  error "We are doing things here which, even if they built OK in non-Linux OS, we'd need to carefully test first."
 #endif
+// Now we assume Linux which might matter at least for the next few lines.
 
-#include "jemalloc/internal/pages.h"
+/* ygoldfel - This is the replication of the needed subset of the above. These are copy/pasted (except tabs vs.
+ * spaces/etc.) from jemalloc except where noted. */
 
-// echan - Many internal headers are not exposed
-// #include "jemalloc/internal/jemalloc_internal_includes.h"
+#define PAGE \
+  ((size_t)(1U << LG_PAGE))
+#define PAGE_MASK \
+  ((size_t)(PAGE - 1))
+#define PAGE_ADDR2BASE(a)\
+  ((void *)((uintptr_t)(a) & ~PAGE_MASK))
+#define PAGE_CEILING(s)\
+  (((s) + PAGE_MASK) & ~PAGE_MASK)
 
-#include "jemalloc/internal/assert.h"
-#include "jemalloc/internal/malloc_io.h"
+#define ALIGNMENT_ADDR2BASE(a, alignment) \
+  ((void *)((uintptr_t)(a) & ((~(alignment)) + 1)))
+#define ALIGNMENT_ADDR2OFFSET(a, alignment) \
+  ((size_t)((uintptr_t)(a) & (alignment - 1)))
+#define ALIGNMENT_CEILING(s, alignment) \
+  (((s) + (alignment - 1)) & ((~(alignment)) + 1))
 
-#ifdef JEMALLOC_SYSCTL_VM_OVERCOMMIT
-#include <sys/sysctl.h>
-#ifdef __FreeBSD__
-#include <vm/vm_param.h>
-#endif
-#endif
+/* ygoldfel - That leaves LG_PAGE. Substance-wise: if the page size is X, which is always a 1 bit followed by
+ * N zeroes, then LG_PAGE is the index of the 1-bit (0-based). Commonly that's 12 (1 << 12 == 4096).
+ * Technically jemalloc has this set at compile-time by splicing it into #define in a generated .h after finding it
+ * programmatically in a similar way (during configure step) to how we are about to do it. We could do something
+ * like that, but finding it before main() at run-time, and referring to the `const` in the code below, is hardly
+ * a major perf loss. Nor do we need it set before main().
+ * @todo Revisit. It can after all be precomputed and spliced-in. It's just annoying build-wise.
+ *
+ * I choose the type as `int` only because a "naked" literal (`#define 12` in jemalloc-configure-generated code)
+ * is `int` in C/C++. */
+static const auto LG_PAGE = int(::ffsl(::sysconf(_SC_PAGESIZE)) - 1);
 
 /******************************************************************************/
 /* Data. */
