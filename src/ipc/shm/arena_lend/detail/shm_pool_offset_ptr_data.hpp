@@ -36,14 +36,14 @@ namespace ipc::shm::arena_lend::detail
 {
 
 #if defined(__GNUC__) && !defined(__clang__)
-#  define GCC_COMPILER 1
+#  define IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER 1
 #else
-#  define GCC_COMPILER 0
+#  define IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER 0
 #endif
 
 /* gcc is pretty paranoid about some bit-field paths below and gives some *very* cryptic warnings
  * that amount to maybe-uninitialized.  The code appears solid, so let's bypass it temporarily. */
-#if GCC_COMPILER
+#if IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #endif
@@ -577,15 +577,22 @@ public:
   void increment(diff_t bytes) noexcept;
 
 private:
+  // Types.
+
+  /// Short-hand from base.
   using rep_t = Base::rep_t;
+  /// Short-hand from base.
   using Offset_ptr_rep = Base::Offset_ptr_rep;
+  /// Short-hand from base.
   using Raw_ptr_rep = Base::Raw_ptr_rep;
 
   // Friends.
 
+  /// Friend of this class.
   template<typename Repository_type2, bool CAN_STORE_RAW_PTR2>
   friend std::ostream& operator<<(std::ostream& os,
                                   Shm_pool_offset_ptr_data<Repository_type2, CAN_STORE_RAW_PTR2> val);
+
   /**
    * The raw bits.  See our class doc header and #Base internals.  The preferred method of interpreting it is:
    *   -# Check against simply being equal to 0 (all bits).  If so => not-a-pointer (null).
@@ -886,10 +893,10 @@ std::ostream& operator<<(std::ostream& os,
   return os << "pool_id[" << offset_ptr_rep->m_pool_id << "]+[" << offset_ptr_rep->m_pool_offset << "]@" << val.get();
 } // operator<<(ostream, Shm_pool_offset_ptr_data)
 
-#if GCC_COMPILER
+#if IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER
 #  pragma GCC diagnostic pop // See above.
 #endif
 
-#undef GCC_COMPILER
+#undef IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER
 
 } // namespace ipc::shm::arena_lend::detail
