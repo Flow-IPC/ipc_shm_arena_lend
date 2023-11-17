@@ -348,8 +348,8 @@ bool Test_shm_session_server::handle_accept(const shared_ptr<Server_session>& se
             session_data->get_shm_session()->set_disconnected();
           }
         },
-        [this, session_wp = weak_ptr(session)](App_channel_base&& app_channel_base,
-                                               Session_mdt_reader&& mdt_reader) mutable
+        [this, session_wp = weak_ptr<Server_session>(session)](App_channel_base&& app_channel_base,
+                                                               Session_mdt_reader&& mdt_reader) mutable
         {
           auto session = session_wp.lock();
           if (session == nullptr)
