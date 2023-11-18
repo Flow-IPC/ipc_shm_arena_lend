@@ -70,12 +70,12 @@ TEST(Divisible_shm_pool_test, Interface)
     const size_t SIZE_1 = S_SIZE / 2;
     const size_t EXPECTED_REMAINING_SIZE = S_SIZE - SIZE_1;
     EXPECT_TRUE(pool.remove_size(SIZE_1));
-    EXPECT_EQ(pool.get_remaining_size(), EXPECTED_REMAINING_SIZE);
+    EXPECT_EQ(size_t(pool.get_remaining_size()), EXPECTED_REMAINING_SIZE);
     EXPECT_FALSE(pool.is_completely_removed());
 
     // Remove remaining size
     EXPECT_TRUE(pool.remove_size(EXPECTED_REMAINING_SIZE));
-    EXPECT_EQ(pool.get_remaining_size(), 0UL);
+    EXPECT_EQ(size_t(pool.get_remaining_size()), 0UL);
     EXPECT_TRUE(pool.is_completely_removed());
   }
 
@@ -84,12 +84,12 @@ TEST(Divisible_shm_pool_test, Interface)
 
     // Remove excessive size
     EXPECT_FALSE(pool.remove_size(S_SIZE + 1));
-    EXPECT_EQ(pool.get_remaining_size(), 0UL);
+    EXPECT_EQ(size_t(pool.get_remaining_size()), 0UL);
     EXPECT_TRUE(pool.is_completely_removed());
 
     // Remove after empty
     EXPECT_FALSE(pool.remove_size(S_SIZE + 1));
-    EXPECT_EQ(pool.get_remaining_size(), 0UL);
+    EXPECT_EQ(size_t(pool.get_remaining_size()), 0UL);
     EXPECT_TRUE(pool.is_completely_removed());
   }
 }
