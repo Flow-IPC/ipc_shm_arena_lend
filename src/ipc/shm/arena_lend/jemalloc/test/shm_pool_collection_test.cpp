@@ -1720,7 +1720,7 @@ TEST_F(Jemalloc_shm_pool_collection_test, Multiprocess)
     Shm_pool::size_t offset;
     if (shm_pool1->determine_offset(p1, offset))
     {
-      EXPECT_EQ(offset, 0UL);
+      EXPECT_EQ(offset, static_cast<Shm_pool::size_t>(0));
       // In new process, open and read the data and ensure it matches the contents
       Test_borrower borrower;
       EXPECT_EQ(0, borrower.execute_read_check(collection->get_id(),

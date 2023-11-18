@@ -76,7 +76,7 @@ TEST(Shm_pool_repository_test, Interface)
   repository.from_address(SHM_POOL_ADDRESS, converted_shm_pool, converted_offset);
   EXPECT_TRUE(converted_shm_pool);
   EXPECT_EQ(converted_shm_pool->get_name(), SHM_POOL_NAME);
-  EXPECT_EQ(converted_offset, 0UL);
+  EXPECT_EQ(converted_offset, static_cast<Shm_pool::size_t>(0));
   repository.from_address(FAKE_OBJECT_ADDRESS, converted_shm_pool, converted_offset);
   EXPECT_TRUE(converted_shm_pool);
   EXPECT_EQ(converted_shm_pool->get_name(), SHM_POOL_NAME);
@@ -94,7 +94,7 @@ TEST(Shm_pool_repository_test, Interface)
   repository.from_address(SHM_POOL_ADDRESS, converted_shm_pool, converted_offset);
   EXPECT_TRUE(converted_shm_pool);
   EXPECT_EQ(converted_shm_pool->get_name(), SHM_POOL_NAME);
-  EXPECT_EQ(converted_offset, 0UL);
+  EXPECT_EQ(converted_offset, static_cast<Shm_pool::size_t>(0));
   // Remove from repository and ensure conversion fails
   EXPECT_TRUE(repository.erase(SHM_POOL_ID));
   EXPECT_EQ(repository.to_address(SHM_POOL_ID, 0), nullptr);
@@ -111,14 +111,14 @@ TEST(Shm_pool_repository_test, Interface)
   repository.from_address(SHM_POOL_ADDRESS, converted_shm_pool, converted_offset);
   EXPECT_TRUE(converted_shm_pool);
   EXPECT_EQ(converted_shm_pool->get_name(), SHM_POOL_DUPLICATE_ADDRESS_NAME);
-  EXPECT_EQ(converted_offset, 0UL);
+  EXPECT_EQ(converted_offset, static_cast<Shm_pool::size_t>(0));
   // Ensure conversion succeeds
   EXPECT_EQ(repository.to_address(SHM_POOL_ID, 0), SHM_POOL_ADDRESS_2);
   repository.from_address(SHM_POOL_ADDRESS_2, converted_shm_pool, converted_offset);
   EXPECT_TRUE(converted_shm_pool);
   EXPECT_EQ(converted_shm_pool->get_name(), SHM_POOL_NAME);
   EXPECT_EQ(converted_shm_pool->get_id(), SHM_POOL_ID);
-  EXPECT_EQ(converted_offset, 0UL);
+  EXPECT_EQ(converted_offset, static_cast<Shm_pool::size_t>(0));
   // Remove from repository
   EXPECT_TRUE(repository.erase(SHM_POOL_ID));
   // Ensure conversion fails
