@@ -67,7 +67,7 @@ TEST(Shm_pool_test, Interface)
   EXPECT_EQ(shm_pool.get_id(), S_ID);
   EXPECT_EQ(shm_pool.get_name(), S_NAME);
   EXPECT_EQ(shm_pool.get_address(), S_ADDRESS);
-  EXPECT_EQ(shm_pool.get_size(), S_SIZE);
+  EXPECT_EQ(size_t(shm_pool.get_size()), S_SIZE);
   EXPECT_EQ(shm_pool.get_fd(), S_FD);
   // Sanity check to make sure it doesn't crash
   std::ostringstream os;
@@ -79,13 +79,13 @@ TEST(Shm_pool_test, Interface)
 
   {
     EXPECT_TRUE(shm_pool.determine_offset(S_ADDRESS, offset));
-    EXPECT_EQ(offset, 0UL);
+    EXPECT_EQ(offset, static_cast<Shm_pool::size_t>(0));
     EXPECT_TRUE(shm_pool.determine_offset(S_ADDRESS + OFFSET_1, offset));
     EXPECT_EQ(offset, OFFSET_1);
     EXPECT_TRUE(shm_pool.determine_offset(S_ADDRESS + OFFSET_2, offset));
     EXPECT_EQ(offset, OFFSET_2);
     EXPECT_TRUE(shm_pool.determine_offset(S_ADDRESS + (S_SIZE - 1), offset));
-    EXPECT_EQ(offset, S_SIZE - 1);
+    EXPECT_EQ(offset, static_cast<Shm_pool::size_t>(S_SIZE - 1));
     // Address prior to region
     EXPECT_FALSE(shm_pool.determine_offset(S_ADDRESS - 1, offset));
     // Address after region
@@ -112,10 +112,10 @@ TEST(Shm_pool_test, Interface)
     {
       // Start address at start of pool, end address in pool
       EXPECT_TRUE(shm_pool.is_subset(S_ADDRESS, S_SIZE - 1, &offset));
-      EXPECT_EQ(offset, 0UL);
+      EXPECT_EQ(offset, static_cast<Shm_pool::size_t>(0));
       // Start address at start of pool, end address at end of pool
       EXPECT_TRUE(shm_pool.is_subset(S_ADDRESS, S_SIZE, &offset));
-      EXPECT_EQ(offset, 0UL);
+      EXPECT_EQ(offset, static_cast<Shm_pool::size_t>(0));
       // Start address at start of pool, end address past end of pool
       EXPECT_FALSE(shm_pool.is_subset(S_ADDRESS, S_SIZE + 1, &offset));
     }

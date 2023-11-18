@@ -669,7 +669,7 @@ private:
         {
           Lock lock(m_test_shm_pool_data_mutex);
 
-          EXPECT_EQ(m_test_shm_pool_id, 0);
+          EXPECT_EQ(m_test_shm_pool_id, pool_id_t(0));
           m_test_shm_pool_id = reader.getShmPoolIdToCheck();
           EXPECT_FALSE(m_test_shm_pool_address);
           m_test_shm_pool_address =
