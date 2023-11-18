@@ -59,7 +59,7 @@ TEST(Divisible_shm_pool_test, Interface)
     EXPECT_EQ(pool.get_address(), S_ADDRESS);
     EXPECT_EQ(size_t(pool.get_size()), S_SIZE);
     EXPECT_EQ(pool.get_fd(), S_FD);
-    EXPECT_EQ(pool.get_remaining_size(), S_SIZE);
+    EXPECT_EQ(size_t(pool.get_remaining_size()), S_SIZE);
     EXPECT_FALSE(pool.is_completely_removed());
 
     // Sanity check to make sure printing doesn't crash
