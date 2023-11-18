@@ -220,10 +220,10 @@ protected:
      *
      * @note If #pool_offset_t is signed, then this *can* be negative!  Please read that alias's doc header.
      */
-    pool_offset_t m_pool_offset : S_N_POOL_OFFSET_BITS;
+    volatile pool_offset_t m_pool_offset : S_N_POOL_OFFSET_BITS;
 
     /// If and only if #m_selector_offset_else_raw: The pool ID.
-    pool_id_t m_pool_id : (sizeof(rep_t) * 8) - S_N_POOL_OFFSET_BITS - 1;
+    volatile pool_id_t m_pool_id : (sizeof(rep_t) * 8) - S_N_POOL_OFFSET_BITS - 1;
 
     /**
      * Either 0 (raw or null pointer; do not use the other bit members) or 1 (offset pointer).
@@ -231,7 +231,7 @@ protected:
      * @note With gcc/clang/x64-64 this is listed *last*, because it is the *most* significant datum.
      *       The fields are thus in reverse order of bit order.
      */
-    rep_t m_selector_offset_else_raw : 1;
+    volatile rep_t m_selector_offset_else_raw : 1;
   }; // struct Offset_ptr_rep
   static_assert(sizeof(Offset_ptr_rep) == sizeof(rep_t),
                 "Expecting bit-field to be packed tightly; not guaranteed by standard but in practice is.");
@@ -258,13 +258,13 @@ protected:
      * canonical form (except #m_selector_offset_else_raw which we use as metadata in our pointer-tagging
      * scheme).
      */
-    rep_t m_val_bits : S_N_VAL_BITS;
+    volatile rep_t m_val_bits : S_N_VAL_BITS;
 
     /**
      * If `!m_selector_offset_else_raw`, and the entire value is not all-zero-bits:
      * #m_ext_sign_msb repeated.
      */
-    rep_t m_ext_sign_bits_except_msb : ((sizeof(rep_t) * 8) - S_N_VAL_BITS - 1 - 1);
+    volatile rep_t m_ext_sign_bits_except_msb : ((sizeof(rep_t) * 8) - S_N_VAL_BITS - 1 - 1);
 
     /**
      * If `!m_selector_offset_else_raw`, and the entire value is not all-zero-bits: The most
@@ -276,7 +276,7 @@ protected:
      *     (a/k/a *sign extension*).
      *   - If this is 1, then the next 15 bits shall also be 1.
      */
-    rep_t m_ext_sign_msb : 1;
+    volatile rep_t m_ext_sign_msb : 1;
 
     /**
      * Either 0 (raw or null pointer; if all other bits are also 0, then do not use the other bit members) or 1
@@ -286,7 +286,7 @@ protected:
      * @note With gcc/clang/x64-64 this is listed *last*, because it is the *most* significant datum.
      *       The fields are thus in reverse order of bit order.
      */
-    rep_t m_selector_offset_else_raw : 1;
+    volatile rep_t m_selector_offset_else_raw : 1;
   }; // struct Raw_ptr_rep
   static_assert(sizeof(Raw_ptr_rep) == sizeof(rep_t),
                 "Expecting bit-field to be packed tightly; not guaranteed by standard but in practice is.");
@@ -410,6 +410,18 @@ private:
  * Ultimately we decided, for now at least, that since this code is already built around a particular architecture,
  * non-portability is much less of a concern that normal.  On the other hand performance and clarity are extremely
  * and rather important (respectively).  So we went with bit fields.
+ *
+ * @note The key members, most importantly `m_rep`, are declared `volatile`.  This is subtly important.
+ *       Without any `volatile` at least gcc-9, at least with -O3, saw fit to optimize in such a way as
+ *       to sometimes cause `.increment()` to either no-op or not run at all (it was not immediately clear which).
+ *       What was clear was that a pointer `+=` or `+` would have no effect.
+ *       Adding nothing more than `std::cout` debug statements inside various branches of
+ *       `.increment()` made it "snap out of it" and do what the code logically wants.  In other words
+ *       the optimizer apparently believed certain assignment code had no side effect, perhaps due to the
+ *       aforementioned aliasing technique being used.  However adding `volatile` made it "understand"
+ *       and behave as expected.  This can be seen as an argument in favor of the bit-shift approach
+ *       and against type-punning.  That said for now we stick with the latter -- while emphasizing the
+ *       importance of exhaustive unit-testing (which we do have).
  *
  * @todo Internally to Shm_pool_offset_ptr_data and its base Shm_pool_offset_ptr_data_base, consider
  * using native `union` and/or `bit_cast` (in lieu of `reinterpret_cast*`), to aid in the bit-field-type-punning
@@ -608,7 +620,7 @@ private:
    *
    * If `!S_RAW_OK`, then (corruption/undefined behavior aside) in step 2 `m_selector_offset_else_raw == 1` always.
    */
-  rep_t m_rep;
+  volatile rep_t m_rep;
 }; // class Shm_pool_offset_ptr_data
 
 // Free functions.
@@ -679,7 +691,7 @@ Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_pt
 #endif
 
       // Set MSB to 0.  Operate on bit-field for clarity and probably speed (see class doc header for discussion).
-      const auto raw_ptr_rep = reinterpret_cast<Raw_ptr_rep*>(&m_rep);
+      const auto raw_ptr_rep = reinterpret_cast<volatile Raw_ptr_rep*>(&m_rep);
       raw_ptr_rep->m_selector_offset_else_raw = rep_t(0);
     } // if constexpr(S_RAW_OK)
     else // if constexpr(!S_RAW_OK)
@@ -691,7 +703,7 @@ Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_pt
   else // if (pool_id_or_0 != 0): Found in a SHM pool.
   {
     // Operate on bit-field for clarity and probably speed (see class doc header for discussion).
-    const auto offset_ptr_rep = reinterpret_cast<Offset_ptr_rep*>(&m_rep);
+    const auto offset_ptr_rep = reinterpret_cast<volatile Offset_ptr_rep*>(&m_rep);
 
     offset_ptr_rep->m_selector_offset_else_raw = rep_t(1);
     offset_ptr_rep->m_pool_id = pool_id_or_0;
@@ -737,14 +749,14 @@ void* Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::get() const
   // else
 
   // Operate on bit-field for clarity and probably speed (see class doc header for discussion).
-  const auto offset_ptr_rep = reinterpret_cast<const Offset_ptr_rep*>(&m_rep);
+  const auto offset_ptr_rep = reinterpret_cast<const volatile Offset_ptr_rep*>(&m_rep);
 
   if constexpr(S_RAW_OK)
   {
     if (offset_ptr_rep->m_selector_offset_else_raw == rep_t(0))
     {
       auto result_rep = m_rep;
-      const auto raw_ptr_result_rep = reinterpret_cast<Raw_ptr_rep*>(&result_rep);
+      const auto raw_ptr_result_rep = reinterpret_cast<volatile Raw_ptr_rep*>(&result_rep);
       if (raw_ptr_result_rep->m_ext_sign_msb != rep_t(0))
       {
         raw_ptr_result_rep->m_selector_offset_else_raw = rep_t(1); // Abusing this a bit... but it's not a crime.
@@ -770,7 +782,7 @@ bool Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::is_raw() cons
   if constexpr(S_RAW_OK)
   {
     // Suppose MSB = 0; if all other bits = 0 then null; if at least one is 1 then raw.  Otherwise neither.
-    const auto offset_ptr_rep = reinterpret_cast<const Offset_ptr_rep*>(&m_rep);
+    const auto offset_ptr_rep = reinterpret_cast<const volatile Offset_ptr_rep*>(&m_rep);
     return (offset_ptr_rep->m_selector_offset_else_raw == pool_offset_t(0))
              && (m_rep != rep_t(0));
   }
@@ -793,7 +805,7 @@ void Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::increment(dif
   static_assert(std::is_signed_v<diff_t>, "If diff_t is unsigned, we cannot really decrement pointers.");
 
   // Operate on bit-field for clarity and probably speed (see class doc header for discussion).
-  const auto offset_ptr_rep = reinterpret_cast<Offset_ptr_rep*>(&m_rep);
+  const auto offset_ptr_rep = reinterpret_cast<volatile Offset_ptr_rep*>(&m_rep);
 
   if constexpr(S_RAW_OK)
   {
@@ -876,14 +888,14 @@ std::ostream& operator<<(std::ostream& os,
     return os << "null";
   }
   // else
-  const auto offset_ptr_rep = reinterpret_cast<Offset_ptr_rep*>(&val.m_rep);
+  const auto offset_ptr_rep = reinterpret_cast<volatile Offset_ptr_rep*>(&val.m_rep);
 
   if constexpr(CAN_STORE_RAW_PTR)
   {
     if (!offset_ptr_rep->m_selector_offset_else_raw)
     {
       ios_all_saver saver(os); // Revert std::hex/etc. soon.
-      const auto raw_ptr_rep = reinterpret_cast<const Raw_ptr_rep*>(&val.m_rep);
+      const auto raw_ptr_rep = reinterpret_cast<const volatile Raw_ptr_rep*>(&val.m_rep);
       return os << "ext_sign_bit[" << raw_ptr_rep->m_ext_sign_msb << "]... val_bits[0x"
                 << std::hex << raw_ptr_rep->m_val_bits << "]@" << val.get();
       // @todo Slight perf impact: val.get() has some redundancy to above selector bit check.
