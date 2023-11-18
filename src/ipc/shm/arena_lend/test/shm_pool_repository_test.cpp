@@ -80,7 +80,7 @@ TEST(Shm_pool_repository_test, Interface)
   repository.from_address(FAKE_OBJECT_ADDRESS, converted_shm_pool, converted_offset);
   EXPECT_TRUE(converted_shm_pool);
   EXPECT_EQ(converted_shm_pool->get_name(), SHM_POOL_NAME);
-  EXPECT_EQ(converted_offset, FAKE_OBJECT_OFFSET);
+  EXPECT_EQ(converted_offset, static_cast<Shm_pool::size_t>(FAKE_OBJECT_OFFSET));
   // Lookup non-existent name
   EXPECT_EQ(repository.to_address(NON_EXISTENT_SHM_POOL_ID, 0), nullptr);
   // Insert again into repository, which is not allowed
