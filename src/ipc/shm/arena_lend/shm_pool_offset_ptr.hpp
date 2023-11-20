@@ -102,7 +102,8 @@ public:
   Shm_pool_offset_ptr(const Shm_pool_offset_ptr& other) = default;
 
 /* gcc is pretty paranoid about the type-punning when initializing m_data below, but we know what we are doing.
- * The code appears solid, so let's bypass it temporarily. */
+ * The code appears solid, so let's bypass it temporarily. @todo Perhaps we can finagle-in a `union` to avoid
+ * the warning? */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstrict-aliasing"
 
