@@ -239,16 +239,17 @@ bool Test_shm_session_server::set_app_channel_state(const shared_ptr<Server_sess
   return true;
 }
 
-void Test_shm_session_server::set_result(bool result)
+bool Test_shm_session_server::set_result(bool result)
 {
   Lock lock(m_result_mutex);
   if (m_result)
   {
     FLOW_LOG_INFO("Result already set [" << *m_result << "], ignoring new result [" << result << "]");
-    return;
+    return false;
   }
   m_result = result;
   m_result_callback(result);
+  return true;
 }
 
 bool Test_shm_session_server::start()
@@ -340,12 +341,13 @@ bool Test_shm_session_server::handle_accept(const shared_ptr<Server_session>& se
         {
           FLOW_LOG_INFO("Error [" << ec << "] occurred, but it may be expected upon graceful close");
           // If we haven't set a result yet, then let's count this as an error
-          set_result(false);
-
-          auto session_data = find_session_data(session);
-          if (session_data != nullptr)
+          if (set_result(false))
           {
-            session_data->get_shm_session()->set_disconnected();
+            auto session_data = find_session_data(session);
+            if (session_data != nullptr)
+            {
+              session_data->get_shm_session()->set_disconnected();
+            }
           }
         },
         [this, session_wp = weak_ptr<Server_session>(session)](App_channel_base&& app_channel_base,

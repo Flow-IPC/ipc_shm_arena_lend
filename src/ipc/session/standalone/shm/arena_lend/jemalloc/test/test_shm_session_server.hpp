@@ -408,8 +408,9 @@ private:
    * If not already set, sets the test result and executes the callback.
    *
    * @param result Whether the result is success.
+   * @return `true` unless result already set.
    */
-  void set_result(bool result);
+  bool set_result(bool result);
   /**
    * Asynchronously waits to accept an incoming session.
    */
