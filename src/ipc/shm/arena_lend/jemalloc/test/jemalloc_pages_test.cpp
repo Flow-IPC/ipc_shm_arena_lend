@@ -158,7 +158,11 @@ private:
 
 /// Death tests - suffixed with DeathTest per Googletest conventions, aliased to fixture.
 using Jemalloc_pages_DeathTest = Jemalloc_pages_test;
+#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
+TEST_F(Jemalloc_pages_DeathTest, DISABLED_Interface)
+#else
 TEST_F(Jemalloc_pages_DeathTest, Interface)
+#endif
 {
   bool commit;
 

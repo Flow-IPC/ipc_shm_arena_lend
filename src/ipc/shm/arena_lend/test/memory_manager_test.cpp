@@ -33,7 +33,11 @@ namespace ipc::shm::arena_lend::test
 {
 
 /// Class interface death tests.
+#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
+TEST(Memory_manager_DeathTest, DISABLED_Interface)
+#else
 TEST(Memory_manager_DeathTest, Interface)
+#endif
 {
   Test_logger test_logger;
   Memory_manager memory_manager(&test_logger);

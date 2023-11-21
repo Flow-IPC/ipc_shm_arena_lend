@@ -654,7 +654,11 @@ private:
 
 /// Death tests - suffixed with DeathTest per Googletest conventions, aliased to fixture.
 using Jemalloc_shm_pool_collection_DeathTest = Jemalloc_shm_pool_collection_test;
+#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
+TEST_F(Jemalloc_shm_pool_collection_DeathTest, DISABLED_Interface)
+#else
 TEST_F(Jemalloc_shm_pool_collection_DeathTest, Interface)
+#endif
 {
   auto collection = create_collection();
 
