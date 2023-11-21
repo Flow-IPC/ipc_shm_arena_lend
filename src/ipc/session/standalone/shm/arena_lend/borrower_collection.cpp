@@ -78,10 +78,11 @@ shared_ptr<Shm_pool> Borrower_collection::deregister_shm_pool(pool_id_t shm_pool
     return nullptr;
   }
 
+  auto shm_pool = std::move(shm_pool_data.m_shm_pool); // Save before erasure of *&shm_pool_data from map.
   m_shm_pool_data_map.erase(iter);
   FLOW_LOG_TRACE("Deregistered SHM pool [" << shm_pool_id << "] in collection [" << get_id() << "]");
 
-  return shm_pool_data.m_shm_pool;
+  return shm_pool;
 }
 
 const shared_ptr<Shm_pool>& Borrower_collection::find_shm_pool(pool_id_t shm_pool_id) const
