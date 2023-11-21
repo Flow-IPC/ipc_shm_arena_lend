@@ -50,7 +50,11 @@ static constexpr int S_FD = 12;
 } // Anonymous namespace
 
 /// Death tests (@todo - does it work with NDEBUG as with default CMake Release build-type? -ygoldfel)
+#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
+TEST(Shm_pool_DeathTest, DISABLED_Interface)
+#else
 TEST(Shm_pool_DeathTest, Interface)
+#endif
 {
   EXPECT_DEATH(Shm_pool(0, S_NAME, S_ADDRESS, S_SIZE, S_FD), "id != 0");
   EXPECT_DEATH(Shm_pool(S_ID, "", S_ADDRESS, S_SIZE, S_FD), "!name.empty\\(\\)");

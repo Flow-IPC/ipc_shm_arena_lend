@@ -397,7 +397,11 @@ private:
 
 /// Death tests - suffixed with DeathTest per Googletest conventions, which allows aliasing.
 using Owner_shm_pool_collection_DeathTest = Owner_shm_pool_collection_test;
+#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
+TEST_F(Owner_shm_pool_collection_DeathTest, DISABLED_Interface_death)
+#else
 TEST_F(Owner_shm_pool_collection_DeathTest, Interface_death)
+#endif
 {
   auto& collection = get_collection();
 
