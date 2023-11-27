@@ -377,7 +377,7 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_interface)
 /// Class interface tests using a raw pointer.
 TEST_F(Shm_pool_offset_ptr_test, Raw_pointer_interface)
 {
-  uint8_t buffer[S_BUFFER_SIZE];
+  uint8_t buffer[S_BUFFER_SIZE] = {};
 
   Pointer offset_ptr = Pointer(buffer);
   EXPECT_NE(offset_ptr.get(), nullptr);
@@ -573,7 +573,7 @@ TEST_F(Shm_pool_offset_ptr_test, Copy_interface)
   EXPECT_NE(subclass_object, nullptr);
   EXPECT_TRUE(subclass_object.is_offset());
 
-  uint8_t raw_buffer[S_BUFFER_SIZE];
+  uint8_t raw_buffer[S_BUFFER_SIZE] = {};
   Pointer raw_object(raw_buffer);
 
   // Copy to another similar object
