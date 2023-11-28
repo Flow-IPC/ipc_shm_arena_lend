@@ -1851,8 +1851,8 @@ protected:
           EXPECT_NE(object, nullptr);
           auto& client = iter->second->get_client();
 
-          pool_id_t expected_shm_pool_id;
-          void* expected_shm_pool_address;
+          pool_id_t expected_shm_pool_id = {};
+          void* expected_shm_pool_address = {};
           if (!client.get_test_shm_pool_data(expected_shm_pool_id, expected_shm_pool_address))
           {
             ADD_FAILURE() << "Received object but shm pool id and address are not set for client [" <<
@@ -1885,8 +1885,8 @@ protected:
             }
 
             // Compare shared memory pool information
-            pool_id_t cur_shm_pool_id;
-            void* cur_shm_pool_address;
+            pool_id_t cur_shm_pool_id = {};
+            void* cur_shm_pool_address = {};
             if (!cur_pair.second->get_client().get_test_shm_pool_data(cur_shm_pool_id, cur_shm_pool_address))
             {
               ADD_FAILURE() << "Received object but shm pool id and address are not set for client [" <<
@@ -1942,10 +1942,10 @@ private:
 void execute_general_tests(Shm_session_test& test_harness,
                            unique_ptr<Test_shm_session_server>& server)
 {
-  Owner_id object_owner_id;
-  Collection_id object_collection_id;
-  pool_id_t object_shm_pool_id;
-  pool_offset_t object_pool_offset;
+  Owner_id object_owner_id = {};
+  Collection_id object_collection_id = {};
+  pool_id_t object_shm_pool_id = {};
+  pool_offset_t object_pool_offset = {};
   {
     Test_client client(test_harness.get_logger());
     Auto_event_listener event_listener(test_harness, client);
@@ -2012,10 +2012,10 @@ void execute_general_tests(Shm_session_test& test_harness)
 void execute_multisession_tests(Shm_session_test& test_harness,
                                 unique_ptr<Test_shm_session_server>& server)
 {
-  Owner_id object_owner_id;
-  Collection_id object_collection_id = 0;
-  pool_id_t object_shm_pool_id = 0;
-  pool_offset_t object_pool_offset = 0;
+  Owner_id object_owner_id = {};
+  Collection_id object_collection_id = {};
+  pool_id_t object_shm_pool_id = {};
+  pool_offset_t object_pool_offset = {};
   {
     Test_object_client_manager client_manager(test_harness);
 
@@ -2104,10 +2104,10 @@ void execute_multisession_tests(Shm_session_test& test_harness)
 void execute_disconnect_tests(Shm_session_test& test_harness,
                               unique_ptr<Test_shm_session_server>& server)
 {
-  Owner_id object_owner_id;
-  Collection_id object_collection_id;
-  pool_id_t object_shm_pool_id;
-  pool_offset_t object_pool_offset;
+  Owner_id object_owner_id = {};
+  Collection_id object_collection_id = {};
+  pool_id_t object_shm_pool_id = {};
+  pool_offset_t object_pool_offset = {};
   {
     Test_client client(test_harness.get_logger());
     Delayed_object_removal_event_listener event_listener(test_harness, client);
