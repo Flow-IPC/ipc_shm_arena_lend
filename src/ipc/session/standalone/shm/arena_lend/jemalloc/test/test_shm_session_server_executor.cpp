@@ -55,9 +55,9 @@ using Object_type = Test_shm_session_server::Object_type;
 using Operation_mode = Test_shm_session_server::Operation_mode;
 
 // Static constants
-const chrono::duration<size_t> Test_shm_session_server_executor::S_TEST_TIMEOUT = chrono::seconds(30);
+const chrono::duration<size_t> Test_shm_session_server_executor::S_TEST_TIMEOUT = chrono::seconds(60);
 /* ^-- 5 sec is plenty with decent hardware with full optimization, but even 10 is pushing it when built unoptimized.
- * Increasing to 30 to avoid misleading failure. @todo This can all probably be fine-tuned more cleverly with enough
+ * Increasing to 60 to avoid misleading failure. @todo This can all probably be fine-tuned more cleverly with enough
  * effort. */
 const chrono::duration<size_t> Test_shm_session_server_executor::S_PERFORMANCE_TEST_TIMEOUT =
   chrono::seconds(10);
@@ -71,9 +71,20 @@ Object_creation_callback Test_shm_session_server_executor::char_array_creator_fu
        Destructor_callback&& destructor_callback) -> std::pair<Object_type, shared_ptr<void>>
     {
       auto object = shm_arena->construct<Owner_object_wrapper<Simple_object>>(std::move(destructor_callback));
-      // Avoid gcc-9 (at least) warning by copying up-to N-1 chars and forcibly NUL-terminating just in case.
+
+      /* Avoid gcc-9 (at least) warning by copying up-to N-1 chars and forcibly NUL-terminating just in case.
+       * Furthermore some gcc versions/build configs still issue an obscure bounds-checking warning, possibly due to
+       * the shared_ptr dereference confusing the optimizer/bounds-checker; so that's why the #pragma.
+       * (A glance at the gcc bug database shows this particular set or warnings is not the most robust thing ever
+       * and has(d) both reporting bugs and a penchant for paranoia.) */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas" // For older versions, where the following does not exist/cannot be disabled.
+#pragma GCC diagnostic ignored "-Wunknown-warning-option" // (Similarly for clang.)
+#pragma GCC diagnostic ignored "-Warray-bounds"
       std::strncpy(object->m_message, S_MESSAGE.c_str(), sizeof(Simple_object) - 1);
+#pragma GCC diagnostic pop
       object->m_message[sizeof(Simple_object) - 1] = '\0';
+
       return {Object_type::S_ARRAY, object};
     };
 }
@@ -137,8 +148,18 @@ Object_creation_callback Test_shm_session_server_executor::list_creator_functor(
         for (size_t i = 0; i < S_LIST_SIZE; ++i)
         {
           auto& cur_entry = shm_list->emplace_back();
-          // Avoid gcc-9 (at least) warning by copying up-to N-1 chars and forcibly NUL-terminating just in case.
+
+          /* Avoid gcc-9 (at least) warning by copying up-to N-1 chars and forcibly NUL-terminating just in case.
+           * Furthermore some gcc versions/build configs still issue an obscure bounds-checking warning, possibly due to
+           * the shared_ptr dereference confusing the optimizer/bounds-checker; so that's why the #pragma.
+           * (A glance at the gcc bug database shows this particular set or warnings is not the most robust thing ever
+           * and has(d) both reporting bugs and a penchant for paranoia.) */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wpragmas" // For older versions, where the following does not exist/cannot be disabled.
+#pragma GCC diagnostic ignored "-Wunknown-warning-option" // (Similarly for clang.)
+#pragma GCC diagnostic ignored "-Warray-bounds"
           std::strncpy(cur_entry.m_message, S_MESSAGE.c_str(), sizeof(Simple_object) - 1);
+#pragma GCC diagnostic pop
           cur_entry.m_message[sizeof(Simple_object) - 1] = '\0';
         }
       }
