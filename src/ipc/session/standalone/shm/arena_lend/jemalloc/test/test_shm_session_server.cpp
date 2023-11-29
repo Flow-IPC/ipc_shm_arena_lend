@@ -794,7 +794,7 @@ bool Test_shm_session_server::send_object(const shared_ptr<Server_session>& sess
   // Serialize object
   auto serialized_object = shm_session->lend_object(object);
 
-  TestObjectMessage::ObjectType message_object_type;
+  TestObjectMessage::ObjectType message_object_type = {};
   switch (m_test_object_type)
   {
     case Object_type::S_ARRAY:
