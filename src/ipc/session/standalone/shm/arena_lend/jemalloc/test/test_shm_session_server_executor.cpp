@@ -73,14 +73,15 @@ Object_creation_callback Test_shm_session_server_executor::char_array_creator_fu
       auto object = shm_arena->construct<Owner_object_wrapper<Simple_object>>(std::move(destructor_callback));
 
       /* Avoid gcc-9 (at least) warning by copying up-to N-1 chars and forcibly NUL-terminating just in case.
-       * Furthermore some gcc versions/build configs still issue an obscure bounds-checking warning, possibly due to
-       * the shared_ptr dereference confusing the optimizer/bounds-checker; so that's why the #pragma.
+       * ...Yet still some gcc versions/build configs issue obscure bounds-checking warnings, possibly due to
+       * the shared_ptr dereference confusing the optimizer/bounds-checker; so that's why the #pragmas.
        * (A glance at the gcc bug database shows this particular set or warnings is not the most robust thing ever
        * and has(d) both reporting bugs and a penchant for paranoia.) */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpragmas" // For older versions, where the following does not exist/cannot be disabled.
 #pragma GCC diagnostic ignored "-Wunknown-warning-option" // (Similarly for clang.)
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wstringop-overflow" // This one pops up too, if the preceding is pragma-ed out.
       std::strncpy(object->m_message, S_MESSAGE.c_str(), sizeof(Simple_object) - 1);
 #pragma GCC diagnostic pop
       object->m_message[sizeof(Simple_object) - 1] = '\0';
@@ -150,14 +151,15 @@ Object_creation_callback Test_shm_session_server_executor::list_creator_functor(
           auto& cur_entry = shm_list->emplace_back();
 
           /* Avoid gcc-9 (at least) warning by copying up-to N-1 chars and forcibly NUL-terminating just in case.
-           * Furthermore some gcc versions/build configs still issue an obscure bounds-checking warning, possibly due to
-           * the shared_ptr dereference confusing the optimizer/bounds-checker; so that's why the #pragma.
+           * ...Yet still some gcc versions/build configs issue obscure bounds-checking warnings, possibly due to
+           * the shared_ptr dereference confusing the optimizer/bounds-checker; so that's why the #pragmas.
            * (A glance at the gcc bug database shows this particular set or warnings is not the most robust thing ever
            * and has(d) both reporting bugs and a penchant for paranoia.) */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpragmas" // For older versions, where the following does not exist/cannot be disabled.
 #pragma GCC diagnostic ignored "-Wunknown-warning-option" // (Similarly for clang.)
 #pragma GCC diagnostic ignored "-Warray-bounds"
+#pragma GCC diagnostic ignored "-Wstringop-overflow" // This one pops up too, if the preceding is pragma-ed out.
           std::strncpy(cur_entry.m_message, S_MESSAGE.c_str(), sizeof(Simple_object) - 1);
 #pragma GCC diagnostic pop
           cur_entry.m_message[sizeof(Simple_object) - 1] = '\0';
