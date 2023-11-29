@@ -1179,6 +1179,34 @@ TEST(Shm_session_data_test, Lender_object_database)
  * limit is hit, so the settings are capped to mitigate the probability of it occurring, while still having
  * sufficient entropy.
  */
+/* @todo This test sporadically fails (so far only seen in Debug config, sometimes, in open-source CI pipeline).
+ * I (ygoldfel) did not write the underlying code or the test, and it is too sophisticated for me to quickly
+ * understand/analyze, so I have created ticket and contacted the original author, echan. That said the test is
+ * important, so I am leaving it enabled even while it is slightly flaky; at least if something gets definitively
+ * broken in related functionality this test should make it abundantly clear despite the confounding flakiness
+ * (which of course we should eliminate as well).
+ *
+ * This has been seen a couple times:
+ *   [ RUN      ] Shm_session_data_test.Multithread_object_database
+ *   /home/runner/work/ipc/ipc/ipc_shm_arena_lend/src/ipc/session/standalone/shm/arena_lend/test/shm_session_data_test.cpp:1564: Failure
+ *   Value of: was_empty
+ *     Actual: false
+ *   Expected: true
+ *   /home/runner/work/ipc/ipc/ipc_shm_arena_lend/src/ipc/session/standalone/shm/arena_lend/test/shm_session_data_test.cpp:1556: Failure
+ *   Expected equality of these values:
+ *     object
+ *       Which is: (0x7f3b155bf001)
+ *     removed_object
+ *       Which is: (nullptr)
+ * This has been seen even less:
+ *   [ RUN      ] Shm_session_data_test.Multithread_object_database
+ *   /home/runner/work/ipc/ipc/ipc_shm_arena_lend/src/ipc/session/standalone/shm/arena_lend/test/shm_session_data_test.cpp:1717: Failure
+ *   Value of: session_data->deregister_borrower_shm_pool(collection_id, shm_pool_id)
+ *     Actual: false
+ *   Expected: true
+ *
+ * (Apologies; the line number may no longer be exact. The two groups of failures are in
+ * remove_lender_object_functor_helper() and remove_borrower_object_functor_helper() respectively.) */
 TEST(Shm_session_data_test, Multithread_object_database)
 {
   const size_t NUM_COLLECTIONS = 3;
