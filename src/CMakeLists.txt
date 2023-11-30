@@ -29,6 +29,8 @@
 # Other stuff is transitively specified by the latter, even though we do use some of that
 # stuff directly too.  Oh, also, in Linux jemalloc will need -ldl (a system lib).
 
+message(STATUS "Dependents shall need to import/link libs: ipc_shm, jemalloc, (Linux only) dl.")
+
 set(DEP_IPC_SHM_VERSION 1.0)
 if(TARGET ipc_shm)
   set(DEP_LIBS ipc_shm) # In meta-project mode it's loaded by this short name.
@@ -60,7 +62,7 @@ if(NOT JEMALLOC_LIB)
     if(UNIX)
       set(lib_name "lib${lib_name}.a")
     else()
-      message(FATAL_ERROR "Unsupported OS; please modify script to search for static lib Windows-style.")
+      message(FATAL_ERROR "Unsupported OS; please modify script to search for static jemalloc lib Windows-style.")
     endif()
     find_library(JEMALLOC_LIB NAMES ${lib_name})
     if(NOT JEMALLOC_LIB)
@@ -70,16 +72,15 @@ if(NOT JEMALLOC_LIB)
                 "if it is still not found then please supply the full path to the library file (including "
                 "the file itself) as the CMake knob (cache setting) JEMALLOC_LIB.")
     endif()
-    message("CMake uber-searcher find_library() located jemalloc lib (see below); "
-              "though you can override this via cache setting.")
+    message(VERBOSE "CMake uber-searcher find_library() located jemalloc lib (see below); "
+                      "though you can override this via cache setting.")
   endblock()
 endif()
 
-message("jemalloc lib location: [${JEMALLOC_LIB}].")
+message(STATUS "jemalloc lib location: [${JEMALLOC_LIB}].")
 list(APPEND DEP_LIBS ${JEMALLOC_LIB})
 
 if(LINUX)
-  message("Adding system `dl` lib in Linux (needed for jemalloc's dl*() calls at least).")
   list(APPEND DEP_LIBS dl)
 endif()
 
@@ -107,6 +108,9 @@ endif()
 
 # Utility: Find jemalloc-config; invoke it; parse result; set je-prefix.
 function(jemalloc_config_run)
+  message(CHECK_START "(Determining jemalloc API-name prefix if any.)")
+  list(APPEND CMAKE_MESSAGE_INDENT "- ")
+
   if(NOT JEMALLOC_CONFIG_BIN)
     find_program(JEMALLOC_CONFIG_BIN NAMES "jemalloc-config") # In Windows it should find jemalloc-config.exe, etc.
     if(NOT JEMALLOC_CONFIG_BIN)
@@ -118,10 +122,10 @@ function(jemalloc_config_run)
                 "not available, then you can instead manually supply the je-prefix via CMake "
                 "knob (cache setting) JEMALLOC_PREFIX (note: special value \"none\" for a blank prefix).")
     endif()
-    message("CMake uber-searcher find_program() located jemalloc-config binary (see below); "
-              "though you can override this via cache setting.")
+    message(VERBOSE "CMake uber-searcher find_program() located jemalloc-config binary (see below); "
+                      "though you can override this via cache setting.")
   endif()
-  message("jemalloc-config binary path: [${JEMALLOC_CONFIG_BIN}].")
+  message(STATUS "jemalloc-config binary path: [${JEMALLOC_CONFIG_BIN}].")
 
   execute_process(COMMAND ${JEMALLOC_CONFIG_BIN} --config
                   OUTPUT_VARIABLE output
@@ -136,11 +140,17 @@ function(jemalloc_config_run)
   # Have to do this.
   set(JEMALLOC_PREFIX ${JEMALLOC_PREFIX} CACHE STRING ${JEMALLOC_PREFIX_DOC} FORCE)
 
-  message("jemalloc je-prefix auto-determined via jemalloc-config execution (see below); "
-            "though you can override this via cache setting.")
+  message(VERBOSE "jemalloc je-prefix auto-determined via jemalloc-config execution (see below); "
+                    "though you can override this via cache setting.")
+
+  list(POP_BACK CMAKE_MESSAGE_INDENT)
+  message(CHECK_PASS "(Done; found via jemalloc-config execution; prefix is [${JEMALLOC_PREFIX}].)")
 endfunction()
 
 function(post_include_setup)
+  message(CHECK_START "(Library [${PROJ}] + headers/etc.: code-gen/install targets: additional setup.)")
+  list(APPEND CMAKE_MESSAGE_INDENT "- ")
+
   if(NOT JEMALLOC_INCLUDE_PATH)
     find_path(JEMALLOC_INCLUDE_PATH NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
     if(NOT JEMALLOC_INCLUDE_PATH)
@@ -151,10 +161,9 @@ function(post_include_setup)
                 "(the directory containing, but not equal to, jemalloc/) as the CMake knob "
                 "(cache setting) JEMALLOC_INCLUDE_PATH.")
     endif()
-    message("CMake uber-searcher find_path() located jemalloc lib (see below); "
-              "though you can override this via cache setting.")
+    message(VERBOSE "CMake uber-searcher find_path() located jemalloc lib (see below); "
+                      "though you can override this via cache setting.")
   endif()
-  message("jemalloc include path: [${JEMALLOC_INCLUDE_PATH}].")
 
   # Note: PUBLIC in case some of our headers #include jemalloc stuff (which as of this writing is the case).
   target_include_directories(${PROJ} PUBLIC ${JEMALLOC_INCLUDE_PATH})
@@ -166,7 +175,7 @@ function(post_include_setup)
   if(NOT JEMALLOC_PREFIX)
     jemalloc_config_run() # It has to succeed; or script aborts.
   endif()
-  message("jemalloc API-prefix [${JEMALLOC_PREFIX}] shall be supplied to compiler command-lines.")
+  message(STATUS "Shall compile with -DIPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=[${JEMALLOC_PREFIX}].")
 
   # PRIVATE, as we need only apply it to some .cpp files of ours; no exported headers require it as of this writing.
   # Note: that could change (function templates, constexpr functions, explicitly-inlined functions) in which
@@ -179,6 +188,9 @@ function(post_include_setup)
     endif()
     target_compile_definitions(${PROJ} PUBLIC "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=${JEMALLOC_PREFIX}")
   endblock()
+
+  list(POP_BACK CMAKE_MESSAGE_INDENT)
+  message(CHECK_PASS "(Done.)")
 endfunction()
 
 # (See above if wondering why we're not auto-searching for these.  There's a good reason.)
@@ -264,8 +276,8 @@ function(generate_custom_srcs)
         ${IPC_META_ROOT_ipc_session}/src
         ${IPC_META_ROOT_ipc_shm}/src)
 
-    message("We are a subdir of a meta-project.  Manually added the following sibling paths to the capnp "
-            "import paths: [${CAPNPC_IMPORT_DIRS}].")
+    message(VERBOSE "We are a subdir of a meta-project.  Manually added the following sibling paths to the capnp "
+                      "import paths: [${CAPNPC_IMPORT_DIRS}].")
   endif()
 
   capnp_generate_cpp(capnp_generated_srcs capnp_generated_hdrs ${CAPNP_SCHEMAS})
@@ -275,8 +287,9 @@ function(generate_custom_srcs)
   set(SRCS ${SRCS} PARENT_SCOPE)
   set(HDRS ${HDRS} PARENT_SCOPE)
 
-  message("capnp schema files [${CAPNP_SCHEMAS}] shall be exported; plus generated sources [${capnp_generated_srcs}] "
-          "and headers [${capnp_generated_hdrs}] shall be compiled/linked and exported respectively.")
+  message(STATUS "Install target: Exports capnp schemas [${CAPNP_SCHEMAS}].")
+  message(STATUS "Install target: Exports capnp schema-generated headers [${capnp_generated_hdrs}].")
+  message(STATUS "capnp-generated sources: [${capnp_generated_srcs}].")
 endfunction()
 
 include("${FLOW_LIKE_TOOLS}/FlowLikeLib.cmake")

@@ -79,12 +79,20 @@ public:
    * @param size The size of the region to map; this value must be page aligned.
    * @param alignment The alignment that the address of the region should have.
    * @param fd The file descriptor to map the region to.
+   *
+   * @return The address of the pool that was created and subsequently removed or nullptr, if a pool was not
+   *         successfully created.
    */
-  void map_test(void* address, size_t size, size_t alignment, int fd)
+  void* map_test(void* address, size_t size, size_t alignment, int fd)
   {
     bool commit = true;
     void* pool = Jemalloc_pages::map(address, size, alignment, commit, fd);
-    EXPECT_NE(pool, nullptr);
+    if (pool == nullptr)
+    {
+      EXPECT_NE(pool, nullptr);
+      return nullptr;
+    }
+
     EXPECT_EQ((reinterpret_cast<size_t>(pool) & (alignment - 1)), 0UL);
 
     if (commit)
@@ -98,6 +106,8 @@ public:
     }
 
     Jemalloc_pages::unmap(pool, size);
+
+    return pool;
   }
 
   /**
@@ -336,9 +346,11 @@ TEST_F(Jemalloc_pages_test, Interface)
   // Invalid address to map to
   EXPECT_EQ(Jemalloc_pages::map(INVALID_ADDRESS, S_PAGE_SIZE, S_PAGE_SIZE, commit, fd), nullptr);
   // System chosen address
+  void* fixed_address;
+  void* huge_page_fixed_address;
   {
     SCOPED_TRACE("System chosen address, page size with page size alignment");
-    map_test(nullptr, S_PAGE_SIZE, S_PAGE_SIZE, fd);
+    fixed_address = map_test(nullptr, S_PAGE_SIZE, S_PAGE_SIZE, fd);
   }
   {
     SCOPED_TRACE("System chosen address, huge page size with page size alignment");
@@ -346,34 +358,27 @@ TEST_F(Jemalloc_pages_test, Interface)
   }
   {
     SCOPED_TRACE("System chosen address, huge page size with huge page size alignment");
-    map_test(nullptr, S_HUGE_PAGE_SIZE, S_HUGE_PAGE_SIZE, fd);
+    huge_page_fixed_address = map_test(nullptr, S_HUGE_PAGE_SIZE, S_HUGE_PAGE_SIZE, fd);
   }
 
-  /* @todo This test sometimes fails. Empirically: so far I (ygoldfel) have personally never seen it myself,
-   * and as of this writing it only sometimes fails but only in a Debug configuration in the open-source CI
-   * pipeline (also not always there either). I very briefly looked into it; given this is a fixed-address mapping it
-   * should be a matter of a single OS ::mmap() either succeeding or failing, simple as that. So if it can sometimes
-   * fail given this odd fixed-address we pass-in, then this can fail. That said this is echan's feature and
-   * test, so I've filed a ticket and asked him about it, and in the meantime am disabling these. I can see
-   * that in the big picture this particular ability is tangential, in that we avoid needing fixed-address mapping
-   * in the general project. (Nevertheless of course we should unit-test this as robustly as we can, since it is
-   * part of the code, though unused generally).
-   *
-   * The 2nd huge-page check we have not seen fail as of this writing, but at its core it looks like a similar
-   * operation, so disabling it too, until we get clarity on the topic. */
-#if 0
-  void* VALID_FIXED_ADDRESS = reinterpret_cast<void*>(S_PAGE_SIZE * 10000);
-  void* VALID_HUGE_PAGE_FIXED_ADDRESS = reinterpret_cast<void*>(S_HUGE_PAGE_SIZE * 100);
-
+  if (fixed_address != nullptr)
   {
     SCOPED_TRACE("Fixed address, page size with page size alignment");
-    map_test(VALID_FIXED_ADDRESS, S_PAGE_SIZE, S_PAGE_SIZE, fd);
+    map_test(fixed_address, S_PAGE_SIZE, S_PAGE_SIZE, fd);
   }
+  else
+  {
+    ADD_FAILURE() << "Skipped test due to fixed_address being nullptr";
+  }
+  if (huge_page_fixed_address != nullptr)
   {
     SCOPED_TRACE("Fixed huge page address, page size with huge page size alignment");
-    map_test(VALID_HUGE_PAGE_FIXED_ADDRESS, S_PAGE_SIZE, S_HUGE_PAGE_SIZE, fd);
+    map_test(huge_page_fixed_address, S_PAGE_SIZE, S_HUGE_PAGE_SIZE, fd);
   }
-#endif
+  else
+  {
+    ADD_FAILURE() << "Skipped test due to huge_page_fixed_address being nullptr";
+  }
 
   // Check commit flag after mapping
   {

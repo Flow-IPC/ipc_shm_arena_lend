@@ -39,16 +39,15 @@ function(handle_binary name_sh)
 
   common_set_target_properties(${name})
 
-  target_compile_options(${name} PRIVATE ${WARN_FLAGS})
-
   # Link good ol' libipc_shm_arena_lend.
   target_link_libraries(${name} PRIVATE ${PROJ})
 
   install(TARGETS ${name}
           RUNTIME DESTINATION bin)
 
-  message("Recommended: [cd ${CMAKE_INSTALL_PREFIX}/bin && "
-          "./${name}].  Run srv program first in 1 terminal, then cli in another, as same user, from that dir.")
+  message(STATUS "Recommended: [cd ${CMAKE_INSTALL_PREFIX}/bin && "
+                   "./${name}].")
+  message(STATUS "Run srv program first in 1 terminal, then cli in another, as same user, from that dir.")
 endfunction()
 
 handle_binary(srv)
