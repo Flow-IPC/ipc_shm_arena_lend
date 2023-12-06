@@ -32,7 +32,7 @@
 #include <boost/interprocess/permissions.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
 #include <boost/interprocess/mapped_region.hpp>
-#include <atomic>
+#include <boost/interprocess/sync/scoped_lock.hpp>
 
 namespace ipc::shm::arena_lend::detail
 {
@@ -42,13 +42,15 @@ namespace ipc::shm::arena_lend::detail
 std::once_flag Shm_pool_offset_ptr_data_base::s_pool_id_shm_region_init_flag;
 bipc::shared_memory_object Shm_pool_offset_ptr_data_base::s_pool_id_shm_obj_or_none;
 bipc::mapped_region Shm_pool_offset_ptr_data_base::s_pool_id_shm_region_or_none;
+// XXX
+boost::movelib::unique_ptr<boost::interprocess::named_mutex>
+  Shm_pool_offset_ptr_data_base::s_pool_id_mutex_or_none;
 
 // Implementations.
 
 Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate_pool_id() // Static.
 {
   using std::call_once;
-  using std::atomic;
   using Shm_obj = decltype(s_pool_id_shm_obj_or_none);
   using Shm_region = decltype(s_pool_id_shm_region_or_none);
 
@@ -72,7 +74,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
     using flow::log::Config;
     using flow::log::Sev;
     using bipc::permissions;
-    using std::atomic;
+    //XXX using std::atomic;
 
     Config std_log_config(Sev::S_WARNING); // Errors only.  (Only errors would appear anyway as of now but still.)
     std_log_config.init_component_to_union_idx_mapping<Log_component>(1000, 999);
@@ -91,14 +93,20 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
        * First the SHM object (pool): Either open it or create it (whoever gets to the latter first -- atomically). */
 
       auto little_pool_name = build_conventional_non_session_based_shared_name(Shared_name::S_RESOURCE_TYPE_ID_SHM);
-      little_pool_name /= "shm";
-      little_pool_name /= "arenaLend";
-      little_pool_name /= "nextPoolId";
+      auto mutex_name = build_conventional_non_session_based_shared_name(Shared_name::S_RESOURCE_TYPE_ID_MUTEX);
+      const auto suffix = Shared_name::ct("shm") / "arenaLend" / "nextPoolId";
+      little_pool_name /= suffix;
+      mutex_name /= suffix;
 
       permissions perms;
       perms.set_unrestricted(); // We have no choice given need to do cross-app writing.  @todo Provide configure knobs?
       s_pool_id_shm_obj_or_none // Currently default-cted.
         = Shm_obj(util::OPEN_OR_CREATE, little_pool_name.native_str(), bipc::read_write, perms);
+      // It threw if failed.
+
+      s_pool_id_mutex_or_none
+        = boost::movelib::make_unique<boost::interprocess::named_mutex>
+            (util::OPEN_OR_CREATE, mutex_name.native_str(), perms);
       // It threw if failed.
 
       // Set size; or no-op depending on who wins race to this call.
@@ -108,7 +116,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       // Next get local vaddr area of the same small size.
       s_pool_id_shm_region_or_none = Shm_region(s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t));
       // It threw if failed.
-      static_assert(sizeof(atomic<pool_id_t>) == sizeof(pool_id_t), "Basic assumptions about atomic<> violated.");
+      //XXXstatic_assert(sizeof(atomic<pool_id_t>) == sizeof(pool_id_t), "Basic assumptions about atomic<> violated.");
     });
 
     if (err_code) // It logged details already.
@@ -149,18 +157,31 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
    * to synchronize access to an initialized? flag and a regular pool_id_t without any atomic<>.  We could also avoid
    * any caveat (however minor) with the below do/while() loop.  However it would
    * be slower and more complex with more entropy/possibility of failure (with a mutex involved and all).  So ideally
-   * keep it like this. */
+   * keep it like this. XXX*/
   pool_id_t id;
-  do
+//XXX  do
   {
+    boost::interprocess::scoped_lock<boost::interprocess::named_mutex> sh_lock(*s_pool_id_mutex_or_none);
+    
     // Get the next ID; and zero the MSB (reserved for the selector), leaving the proper-width next pool ID.
-    id = ((++(*(static_cast<pool_id_t*>(s_pool_id_shm_region_or_none.get_address())))) << 1 >> 1);
+    //id = ((++(*(static_cast<atomic<pool_id_t>*>(s_pool_id_shm_region_or_none.get_address())))) << 1 >> 1);
+    auto& id_ref = *(static_cast<pool_id_t*>(s_pool_id_shm_region_or_none.get_address()));
+    ++id_ref;
+    id = (++id_ref) << 1 >> 1;
 
     std::cout << "XXX001: from mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "]\n"; 
     std::cout << "XXX001: generated [" << id << "]\n"; 
+
+    if (id == 0)
+    {
+      id = (++id_ref) << 1 >> 1;
+      assert((id == 1) && "(X00...0 + 1) must be (X00...1).");
+
+      std::cout << "!!!XXX001: generated [" << id << "]\n"; 
+    }
   }
-  while (id == 0); // Formally it needs to be a loop; competitors could keep lapping us.  :-)
-  /* Overwhelmingly likely the while() will only iterate once.  Certainly the first time we'll yield 1, avoiding 0
+  //while (id == 0); // Formally it needs to be a loop; competitors could keep lapping us.  :-)
+  /* XXX Overwhelmingly likely the while() will only iterate once.  Certainly the first time we'll yield 1, avoiding 0
    * as required (it is a reserved value for important reasons explained elsewhere).  However, as also explained
    * in this method's doc header, we do technically allow for wrapping around back to 0 (note that this would occur
    * before the full 32-bit atomic<> fully wraps around, meaning when it goes from 00...0 to 01...1 to 10...0; and
@@ -169,7 +190,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
    * Technically it's not quite atomic, if that actually happens (possibly another process could go 0 -> 1 or even
    * higher before our do/while() wraps comes back around for another try); but so what?  An ID value might go unused;
    * it's fine (if a bit aesthetically displeasing). */
-  
+
   return id;
 } // Shm_pool_offset_ptr_data_base::generate_pool_id()
 

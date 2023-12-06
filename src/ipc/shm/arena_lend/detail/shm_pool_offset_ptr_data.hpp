@@ -26,7 +26,7 @@
 
 #include "ipc/common.hpp"
 #include <flow/util/util.hpp>
-#include <mutex>
+#include <boost/interprocess/sync/named_mutex.hpp>
 
 /**
  * Segregated private stuff for ipc::shm::arena_lend.
@@ -318,6 +318,9 @@ private:
    * storing (only) an `atomic<rep_t>` used to generate unique pool IDs.  Default-cted until initialization.
    */
   static bipc::mapped_region s_pool_id_shm_region_or_none;
+
+  // XXX
+  static boost::movelib::unique_ptr<boost::interprocess::named_mutex> s_pool_id_mutex_or_none;
 }; // class Shm_pool_offset_ptr_data_base
 
 /**
