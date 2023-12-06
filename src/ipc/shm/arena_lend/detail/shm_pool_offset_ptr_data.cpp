@@ -119,6 +119,9 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       // @todo We could be nicer about errors -- some error reporting to higher level.  May or may not be worth it.
     }
     // else
+
+    // XXX
+    std::cout << "XXX000: opened mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "]\n"; 
   }); // call_once(init)
   /* We possibly zero-initialized s_pool_id_shm_region_or_none memory area (or no-oped due to its not needing it,
    * with a competing truncate() winning; or didn't even enter the lambda given to call_once(), as we've already
@@ -152,6 +155,9 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
   {
     // Get the next ID; and zero the MSB (reserved for the selector), leaving the proper-width next pool ID.
     id = ((++(*(static_cast<atomic<pool_id_t>*>(s_pool_id_shm_region_or_none.get_address())))) << 1 >> 1);
+
+    std::cout << "XXX001: from mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "]\n"; 
+    std::cout << "XXX001: generated [" << id << "]\n"; 
   }
   while (id == 0); // Formally it needs to be a loop; competitors could keep lapping us.  :-)
   /* Overwhelmingly likely the while() will only iterate once.  Certainly the first time we'll yield 1, avoiding 0
@@ -163,7 +169,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
    * Technically it's not quite atomic, if that actually happens (possibly another process could go 0 -> 1 or even
    * higher before our do/while() wraps comes back around for another try); but so what?  An ID value might go unused;
    * it's fine (if a bit aesthetically displeasing). */
-
+  
   return id;
 } // Shm_pool_offset_ptr_data_base::generate_pool_id()
 
