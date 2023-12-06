@@ -187,6 +187,9 @@ function(post_include_setup)
       set(pfx "")
     endif()
     target_compile_definitions(${PROJ} PUBLIC "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=${JEMALLOC_PREFIX}")
+
+    # XXX
+    target_compile_definitions(${PROJ} PUBLIC "SHM_POOL_REPOSITORY_DEBUG")
   endblock()
 
   list(POP_BACK CMAKE_MESSAGE_INDENT)
