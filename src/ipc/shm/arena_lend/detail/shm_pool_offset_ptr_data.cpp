@@ -154,7 +154,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
   do
   {
     // Get the next ID; and zero the MSB (reserved for the selector), leaving the proper-width next pool ID.
-    id = ((++(*(static_cast<atomic<pool_id_t>*>(s_pool_id_shm_region_or_none.get_address())))) << 1 >> 1);
+    id = ((++(*(static_cast<pool_id_t*>(s_pool_id_shm_region_or_none.get_address())))) << 1 >> 1);
 
     std::cout << "XXX001: from mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "]\n"; 
     std::cout << "XXX001: generated [" << id << "]\n"; 
