@@ -26,7 +26,7 @@
 
 #include "ipc/common.hpp"
 #include <flow/util/util.hpp>
-#include <mutex>
+#include <boost/interprocess/sync/named_mutex.hpp>
 
 /**
  * Segregated private stuff for ipc::shm::arena_lend.
@@ -310,14 +310,42 @@ private:
   /// Used with `std::call_once()` to ensure #s_pool_id_shm_region_or_none is initialized no more than once.
   static std::once_flag s_pool_id_shm_region_init_flag;
 
-  /// The SHM-object (pool) mapped by #s_pool_id_shm_region_or_none.  Default-cted until initialization.
+  /**
+   * The SHM-object (pool) mapped by #s_pool_id_shm_region_or_none.  Default-cted until initialization.
+   *
+   * Stored so that the pool does not disappear (if all handles close, then the pool is removed by system).
+   */
   static bipc::shared_memory_object s_pool_id_shm_obj_or_none;
 
   /**
    * Initialized no more than once (in this process) by generate_pool_id(), a handle to tiny SHM region
-   * storing (only) an `atomic<rep_t>` used to generate unique pool IDs.  Default-cted until initialization.
+   * storing (only) a `pool_id_t` used to generate unique pool IDs.  Default-cted until initialization.
+   *
+   * The pointee pool has the same name across the entire system.
+   *
+   * Stored for performance, so that generate_pool_id() need not map this each time but only once.
    */
   static bipc::mapped_region s_pool_id_shm_region_or_none;
+
+  /**
+   * Initialized no more than once (in this process) by generate_pool_id(), a handle to a named-mutex
+   * protecting the state of the pool possibly-pointed-to by #s_pool_id_shm_region_or_none.  More formally
+   * the state of that pool (when this mutex is unlocked) is one of:
+   *
+   *   - It does not exist.
+   *   - It exists; is sized for the stored `pool_id_t`; and the bits therein contain an ID value, such that
+   *     `++`ing yields a valid (non-zero) ID.
+   *
+   * Therefore one must lock this before opening or creating the pool; and if creation was indeed necessary,
+   * then before unlocking one must size it; and most importantly initialize it to a pre-valid ID (perhaps 0 or
+   * 1).  Not doing the latter breaks the invariant: after pool creation the contents of the pool = incoherent;
+   * a `++` on this zero-looking-value can and does cause undefined behavior.
+   *
+   * The pointee mutex has the same name across the entire system.
+   *
+   * Stored for performance, so that generate_pool_id() need not open this each time but only once.
+   */
+  static std::optional<boost::interprocess::named_mutex> s_pool_id_mutex_or_none;
 }; // class Shm_pool_offset_ptr_data_base
 
 /**
