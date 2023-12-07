@@ -222,22 +222,11 @@ bool Shm_pool_repository<Shm_pool_holder_param>::insert(const std::shared_ptr<Sh
 {
   Lock lock(m_shm_pool_maps_mutex);
 
-  std::cout << "XXX0: (type holder/tracker [" << typeid(Shm_pool_holder_param).name() << "])\n";
-  std::cout << "XXX0: (name/id [" << shm_pool->get_name() << '/' << shm_pool->get_id() << "])\n";
-
   auto id_map_result = m_shm_pool_id_map.emplace(shm_pool->get_id(), Shm_pool_holder_param(shm_pool));
   if (!id_map_result.second)
   {
-  // XXX
-#ifdef SHM_POOL_REPOSITORY_DEBUG
-    std::cout << "XXX1 - Could not insert [" << shm_pool->get_address() << ", " << shm_pool->get_id() << "]\n";
-#endif // #ifdef SHM_POOL_REPOSITORY_DEBUG
     return false;
   }
-  // XXX
-#ifdef SHM_POOL_REPOSITORY_DEBUG
-  std::cout << "XXX1 - Inserted [" << shm_pool->get_address() << ", " << shm_pool->get_id() << "]\n";
-#endif // #ifdef SHM_POOL_REPOSITORY_DEBUG
 
   auto address_map_result = m_shm_pool_address_map.emplace(shm_pool->get_address(), shm_pool);
   if (!address_map_result.second)
