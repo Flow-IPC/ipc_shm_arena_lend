@@ -59,10 +59,12 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
    * We need unique (across all processes) 31-bit IDs.  For this we use a tiny SHM region, which is not managed
    * (no memory allocation) but rather stores only the next ID. */
 
+  pool_id_t id = 0;
+
   /* For performance open the SHM region once and leave it open.  However this needs to happen no more than once,
    * for which we use call_once() which will likely use a mutex; we don't anticipate pool creation to be so frequent
    * as to introduce serious lock contention, especially since the critical section here is tiny. */
-  call_once(s_pool_id_shm_region_init_flag, []()
+  call_once(s_pool_id_shm_region_init_flag, [&]()
   {
     /* We don't really need to log, normally, but if something goes wrong, it'd be good to at least log to standard
      * error (even if it gets interleaves with something) -- we're gonna abort() thereafter.  So set up a
@@ -100,24 +102,79 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
 
       permissions perms;
       perms.set_unrestricted(); // We have no choice given need to do cross-app writing.  @todo Provide configure knobs?
-      s_pool_id_shm_obj_or_none // Currently default-cted.
-        = Shm_obj(util::OPEN_OR_CREATE, little_pool_name.native_str(), bipc::read_write, perms);
-      // It threw if failed.
 
       s_pool_id_mutex_or_none
         = boost::movelib::make_unique<boost::interprocess::named_mutex>
             (util::OPEN_OR_CREATE, mutex_name.native_str(), perms);
       // It threw if failed.
 
-      // Set size; or no-op depending on who wins race to this call.
-      s_pool_id_shm_obj_or_none.truncate(sizeof(pool_id_t));
-      // It threw if failed.  Otherwise: it either zeroed the pool_id_t; or it did nothing; and now it is accessible.
+      {
+        boost::interprocess::scoped_lock<boost::interprocess::named_mutex> sh_lock(*s_pool_id_mutex_or_none);      
 
-      // Next get local vaddr area of the same small size.
+        try
+        {
+          s_pool_id_shm_obj_or_none // Currently default-cted.
+            = Shm_obj(util::OPEN_ONLY, little_pool_name.native_str(), bipc::read_write);
+
+          // Didn't throw?  Then it already existed and therefore initialized by someone else.
+        }
+        catch (const boost::interprocess::interprocess_exception& exc) // Threw?  Then:
+        {
+          // XXX
+          FLOW_LOG_WARNING("XXXX coool! Exception [" << exc.what() << "]!");
+          
+          /* Probably it failed due to non-existing; that would be normal if we win the race to here.
+           * Otherwise rethrow and let the error handling below deal with it (catastrophic.) */
+          if (exc.get_error_code() != boost::interprocess::not_found_error)
+          {
+            throw;
+          }
+          // else: Indeed, not found.  Must create.
+
+          // XXX
+          FLOW_LOG_WARNING("XXXX coool! Exception ENOENT.");
+
+          s_pool_id_shm_obj_or_none // Currently default-cted.
+            = Shm_obj(util::CREATE_ONLY, little_pool_name.native_str(), bipc::read_write, perms);
+          // It threw if failed.
+
+          /* We were the ones to create it; so we must initialize it for everyone. Mutex is still locked;
+           * it protects both the existence-in-final-form-or-not of the SHM-pool across the system;
+           * and the value stored inside it. */
+
+          // Set size.
+          s_pool_id_shm_obj_or_none.truncate(sizeof(pool_id_t));
+          // It threw if failed.
+
+          // Next get local vaddr area of the same small size.
+          s_pool_id_shm_region_or_none = Shm_region(s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t));
+          // It threw if failed.
+
+          // Lastly start the ID in this deterministic initial state.  Only ++ from now on.
+          *(static_cast<pool_id_t*>(s_pool_id_shm_region_or_none.get_address())) = id = 1;
+
+          FLOW_LOG_WARNING("XXXX Created mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "].");
+          std::cout << "XXX000: CREATED mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "]\n";       
+
+          return; // id != 0 => we return from method next.
+
+          /* Alternatively we could have set it to 0 and not returned yet, letting the general case below
+           * ++ it (maybe to 1, or maybe higher if another guy is racing us).  (Though then we would avoid
+           * mapping s_pool_id_shm_region_or_none again.)  This way is just more performant a little bit. */
+        } // catch () // From Shm_obj() ctor.
+      } // Lock *s_pool_if_mutex_or_none
+
+      // Got here: opened it fine, and it's in solid shape, but we do still need to map it to access it.
       s_pool_id_shm_region_or_none = Shm_region(s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t));
-      // It threw if failed.
-      //XXXstatic_assert(sizeof(atomic<pool_id_t>) == sizeof(pool_id_t), "Basic assumptions about atomic<> violated.");
-    });
+      // It threw if failed.      
+
+      std::cout << "XXX000: FIRST-opened mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "]\n";       
+    }); // op_with_possible_bipc_exception()
+    if (id != 0)
+    {
+      return;
+    }
+    // else
 
     if (err_code) // It logged details already.
     {
@@ -127,10 +184,13 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       // @todo We could be nicer about errors -- some error reporting to higher level.  May or may not be worth it.
     }
     // else
-
-    // XXX
-    std::cout << "XXX000: opened mini-pool [" << s_pool_id_shm_region_or_none.get_address() << "]\n"; 
   }); // call_once(init)
+  if (id != 0)
+  {
+    return id;
+  }
+  // else
+  
   /* We possibly zero-initialized s_pool_id_shm_region_or_none memory area (or no-oped due to its not needing it,
    * with a competing truncate() winning; or didn't even enter the lambda given to call_once(), as we've already
    * initialized in this process); and regardless can now read/write it. */
@@ -158,7 +218,6 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
    * any caveat (however minor) with the below do/while() loop.  However it would
    * be slower and more complex with more entropy/possibility of failure (with a mutex involved and all).  So ideally
    * keep it like this. XXX*/
-  pool_id_t id;
 //XXX  do
   {
     boost::interprocess::scoped_lock<boost::interprocess::named_mutex> sh_lock(*s_pool_id_mutex_or_none);
