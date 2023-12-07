@@ -186,7 +186,7 @@ function(post_include_setup)
     if(pfx STREQUAL ${NONE}) # The special value is b/c an actual empty value is already taken for other purposes.
       set(pfx "")
     endif()
-    target_compile_definitions(${PROJ} PUBLIC "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=${JEMALLOC_PREFIX}")
+    target_compile_definitions(${PROJ} PUBLIC "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=${pfx}")
   endblock()
 
   list(POP_BACK CMAKE_MESSAGE_INDENT)
