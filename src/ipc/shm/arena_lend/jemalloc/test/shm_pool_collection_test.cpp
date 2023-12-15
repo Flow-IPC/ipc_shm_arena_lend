@@ -2002,8 +2002,7 @@ TEST_F(Jemalloc_shm_pool_collection_test, Multithread_load)
   }
 
   // Ensure the shared memory pools are empty when they get destroyed
-  static_cast<flow::log::Simple_ostream_logger&>(logger).m_config->configure_default_verbosity(
-    flow::log::Sev::S_TRACE, false);
+  logger.get_config().configure_default_verbosity(flow::log::Sev::S_TRACE, false);
   EXPECT_FALSE(check_output([&]() { collection = nullptr; },
                             cout,
                             "deregister_shm_pool.*remaining size: [1-9]",
