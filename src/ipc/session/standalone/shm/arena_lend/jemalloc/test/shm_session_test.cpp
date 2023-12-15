@@ -2484,10 +2484,10 @@ TEST_F(Shm_session_test, Disconnected_in_process)
 TEST_F(Shm_session_test, Disconnected_external_process)
 {
   // Configure logger for log output checks
-  auto* so_logger = static_cast<flow::log::Simple_ostream_logger*>(get_logger());
+  auto* so_logger = static_cast<Test_logger*>(get_logger());
   if (so_logger != nullptr)
   {
-    so_logger->m_config->configure_default_verbosity(flow::log::Sev::S_TRACE, false);
+    so_logger->get_config().configure_default_verbosity(flow::log::Sev::S_TRACE, false);
   }
 
   Test_shm_session_server_launcher launcher(get_logger());
