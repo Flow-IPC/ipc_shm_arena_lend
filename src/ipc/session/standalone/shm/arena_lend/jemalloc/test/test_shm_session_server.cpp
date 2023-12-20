@@ -428,7 +428,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
   {
     // Lend same arena as previously registered
     bool return_value = true;
-    std::cout << "XXXXXX check_output 1>\n";
     if (!check_output([&]() { return_value = shm_session->lend_arena(m_shm_arena); },
                       std::cerr,
                       S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE))
@@ -437,7 +436,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
                        S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE << "] when relending arena");
       return false;
     }
-    std::cout << "XXXXXX check_output 1<\n";
     if (return_value)
     {
       FLOW_LOG_WARNING("Unexpected success in relending collection [" << m_shm_arena->get_id() << "]");
@@ -446,7 +444,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
     FLOW_LOG_INFO("Expected failure in relending collection [" << m_shm_arena->get_id() << "]");
 
     // Lend an additional arena, but the borrower should already have the id registered, so we expect failure
-    std::cout << "XXXXXX check_output 2>\n";
     if (!check_output([&]() { return_value = shm_session->lend_arena(m_error_handling_shm_arena); },
                       std::cerr,
                       S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE))
@@ -455,7 +452,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
                        S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE << "] when lending arena");
       return false;
     }
-    std::cout << "XXXXXX check_output 2<\n";    
     if (return_value)
     {
       FLOW_LOG_WARNING("Unexpected success in lending collection [" << get_error_handling_collection_id() << "]");
@@ -464,7 +460,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
     FLOW_LOG_INFO("Expected failure in lending arena [" << get_error_handling_collection_id() << "]");
 
     // Lend same shared memory pool as previously registered
-    std::cout << "XXXXXX check_output 3>\n";
     if (!check_output([&]() { return_value = shm_session->lend_shm_pool(m_shm_arena->get_id(), m_test_shm_pool); },
                       std::cerr,
                       S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE))
@@ -473,7 +468,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
                        S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE << "] when relending shared memory pool");
       return false;
     }
-    std::cout << "XXXXXX check_output 3<\n";
     if (return_value)
     {
       FLOW_LOG_WARNING("Unexpected success in relending shared memory pool [" << m_test_shm_pool->get_id() << "]");
@@ -489,7 +483,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
       return false;
     }
     Blob blob;
-    std::cout << "XXXXXX check_output 4>\n";
     if (!check_output([&]() { blob = shm_session->lend_object(test_object); },
                       std::cerr,
                       S_ERROR_HANDLING_UNREGISTERED_COLLECTION_MESSAGE_PHRASE))
@@ -498,7 +491,6 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
                        S_ERROR_HANDLING_UNREGISTERED_COLLECTION_MESSAGE_PHRASE << "] when lending object");
       return false;
     }
-    std::cout << "XXXXXX check_output 4<\n";
     if (!blob.empty())
     {
       FLOW_LOG_WARNING("Unexpected success in lending object in an unregistered collection");
@@ -684,7 +676,6 @@ bool Test_shm_session_server::process_request(const shared_ptr<Server_session>& 
         {
           const auto& shm_session = session_data->get_shm_session();
           bool return_value = true;
-          std::cout << "XXXXXX check_output 5>\n";
           if (!check_output([&]()
                             {
                               return_value = shm_session->lend_shm_pool(m_shm_arena->get_id(),
@@ -697,7 +688,6 @@ bool Test_shm_session_server::process_request(const shared_ptr<Server_session>& 
                              S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE << "]");
             return false;
           }
-          std::cout << "XXXXXX check_output 5<\n";
           if (!return_value)
           {
             FLOW_LOG_INFO("Expected failure lending error handling SHM pool [" <<
@@ -866,7 +856,6 @@ bool Test_shm_session_server::send_cleanup(const shared_ptr<Server_session>& ses
       // Attempt to remove just removed shared memory pool
       const auto& shm_session = session_data->get_shm_session();
       bool return_value = true;
-      std::cout << "XXXXXX check_output 6>\n";
       if (!check_output([&]()
                         {
                           return_value = shm_session->remove_lender_shm_pool(m_shm_arena->get_id(), m_test_shm_pool);
@@ -879,7 +868,6 @@ bool Test_shm_session_server::send_cleanup(const shared_ptr<Server_session>& ses
                          "] when removing unregistered shared memory pool");
         return false;
       }
-      std::cout << "XXXXXX check_output 6<\n";
       if (return_value)
       {
         FLOW_LOG_WARNING("Unexpected success in removing unregistered shared memory pool [" <<
@@ -991,7 +979,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
     bool return_value = true;
     // Configure log severity override for log output checks
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    std::cout << "XXXXXX check_output 7>\n";
     if (!check_output([&]() { return_value = shm_session->lend_arena(test_arena); },
                       std::cout,
                       S_SESSION_DISCONNECTION_PHRASE))
@@ -999,7 +986,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
       FLOW_LOG_WARNING("Did not get expected message output when attempting to lend arena");
       result = false;
     }
-    std::cout << "XXXXXX check_output 7<\n";
     // Reset log severity override
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
 
@@ -1023,7 +1009,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
     void* local_pool_address;
     // Configure log severity override for log output checks
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    std::cout << "XXXXXX check_output 8>\n";
     if (!check_output([&]()
                       {
                         local_pool_address =
@@ -1035,7 +1020,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
       FLOW_LOG_WARNING("Did not get expected message output when attempting to lend pool");
       result = false;
     }
-    std::cout << "XXXXXX check_output 8<\n";
     // Reset log severity override
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
 
@@ -1061,7 +1045,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
     Blob blob;
     // Configure log severity override for log output checks
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    std::cout << "XXXXXX check_output 9>\n";
     if (!check_output([&]() { blob = shm_session->lend_object(test_object); },
                       std::cout,
                       S_SESSION_DISCONNECTION_PHRASE))
@@ -1069,7 +1052,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
       FLOW_LOG_WARNING("Did not get expected message output when attempting to lend object");
       result = false;
     }
-    std::cout << "XXXXXX check_output 9<\n";
     // Reset log severity override
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
 
@@ -1091,7 +1073,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
     bool return_value = true;
     // Configure logger for log output checks
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    std::cout << "XXXXXX check_output 10>\n";
     if (!check_output([&]() { return_value = m_shm_arena->remove_shm_pool(pool_address, size, committed, arena_id); },
                       std::cout,
                       S_SESSION_DISCONNECTION_PHRASE))
@@ -1099,7 +1080,6 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
       FLOW_LOG_WARNING("Did not get expected message output when attempting to remove pool");
       result = false;
     }
-    std::cout << "XXXXXX check_output 11<\n";
     // Reset log severity override
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
 
