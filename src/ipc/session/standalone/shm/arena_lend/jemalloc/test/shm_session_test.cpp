@@ -2141,6 +2141,7 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
 
     // The shared memory pool backing the object should not be removed as the object still exists
     bool return_value;
+    std::cout << "XXXXXX check_output X1>\n";
     EXPECT_TRUE(
       check_output([&]()
                    {
@@ -2148,6 +2149,7 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
                    },
                    std::cerr,
                    "Could not deregister non-empty SHM pool"));
+    std::cout << "XXXXXX check_output X1<\n";
     EXPECT_FALSE(return_value);
 
     // For external server, the server already exited, so we don't perform this check as the object's memory will
@@ -2178,9 +2180,11 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
     object.reset();
     // Configure logger for log output checks
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
+    std::cout << "XXXXXX check_output X2>\n";
     EXPECT_TRUE(check_output([&]() { event_listener.release_object(); },
                              std::cout,
                              Test_shm_session_server::S_SESSION_DISCONNECTION_PHRASE));
+    std::cout << "XXXXXX check_output X2<\n";
     // Reset log severity override
     *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
 
