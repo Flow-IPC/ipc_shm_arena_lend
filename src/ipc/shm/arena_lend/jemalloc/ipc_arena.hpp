@@ -73,13 +73,13 @@ public:
    * this Ipc_arena; or its counterpart in shm::classic, classic::Pool_arena) exists, certain important
    * APIs do take `Shm_arena`s like us and formally require it to contain `Handle`, which must be *a* `shared_ptr`
    * type (`std::`, `bipc::`, or in theory some other impl), and be the type returned by `Shm_arena::construct<>()`
-   * as well as `Shm_session::borrow()`.  A key such API is transport::struc::shm::Builder.
+   * as well as `Shm_session::borrow_object()`.  A key such API is transport::struc::shm::Builder.
    *
    * ### Rationale ###
    * One benefit of requiring `Handle` is the ability for a SHM-provider (like shm::arena_lend::jemalloc) to
    * choose the particular `shared_ptr` impl desired. (This could even be a template parameter knob.) A
-   * squishier alleged benefit is the stylistic attention it calls to construct() or session `borrow()` returning
-   * a cross-process SHM handle, as opposed to a normal heap-deleting ref-counting pointer.
+   * squishier alleged benefit is the stylistic attention it calls to construct() or session `borrow_object()`
+   * returning a cross-process SHM handle, as opposed to a normal heap-deleting ref-counting pointer.
    */
   template <typename Pointed_type>
   using Handle = std::shared_ptr<Pointed_type>;
