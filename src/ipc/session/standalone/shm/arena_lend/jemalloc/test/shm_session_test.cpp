@@ -300,7 +300,7 @@ public:
     flow::log::Log_context(logger, Log_component::S_TEST),
     m_client_id(client_id),
     m_started(false),
-    m_task_loop(get_logger(), (Test_shm_session_server::S_CLIENT_APP_NAME + "_loop_" + to_string(client_id))),
+    m_task_loop(get_logger(), Test_shm_session_server::S_CLIENT_APP_NAME + "_loop_" + to_string(client_id)),
     m_event_listener(nullptr),
     m_session(get_logger(),
               Test_shm_session_server::get_client_app(),

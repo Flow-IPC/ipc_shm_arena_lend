@@ -363,12 +363,12 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
      * failing which we handle properly.  So eat it until *setup_done is true.
      *
      * Come to think of it, I (ygoldfel) decided to more-or-less just eat it after *setup_done is true too.
-     * Basically, once in PEER state, we would just do (if !Base::hosed() { Base::hose(err_code; }.  Until then,
+     * Basically, once in PEER state, we would just do `if !Base::hosed() { Base::hose(err_code; }`.  Until then,
      * though (but after *setup_done) what to do depends on whether this is Server_session or Client_session.
      * Like for Server_session we could probably do something like on_master_channel_error(); for
      * Client_session similarly.  Thing is, it's painful to set up that plumbing just for this unlikely
      * corner case.  (That might be because of how I've set up this non-virtual hierarchy.  Could probably be
-     * rejiggered to very ver slick.  @todo maybe.)  So what to do?  For now I feel this:
+     * rejiggered to by very slick.  @todo maybe.)  So what to do?  For now I feel this:
      *   - If this added socket-stream-based channel dies, so would m_master_channel (also socket-stream-based).
      *   - So it would hose the session anyway, maybe even significantly sooner if it's due to zombification
      *     (it has keep-alive/idle-timer in both directions, unlike at this time this new channel).
@@ -378,8 +378,7 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
      * @todo Do set up the plumbing, and don't eat the error.  Consider also @todo above about perhaps
      * rejiggering the Session_impl hierarchy to make that plumbing easy-peasy to set up.  If we develop
      * more Session_impl guys -- for other SHM-providers perhaps -- this would rise in priority.  For now this
-     * seems reasonable.
-     * */
+     * seems reasonable. */
     Base::async_worker()->post([this, setup_done = std::move(setup_done), err_code]()
     {
       if (*setup_done)
