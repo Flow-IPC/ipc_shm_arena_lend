@@ -104,6 +104,13 @@ public:
                                const Client_app& cli_app_ref, const Server_app& srv_app_ref,
                                Task_err&& on_err_func);
 
+  /**
+   * Destructor.
+   * Internally: at least does what it must according to session::Client_session_impl::dtor_async_worker_stop()
+   * doc header contract.  See inside for comment more resembling English hopefully.
+   */
+  ~Client_session_impl();
+
   // Methods.
 
   /**
@@ -218,6 +225,14 @@ CLASS_JEM_CLI_SESSION_IMPL::Client_session_impl(flow::log::Logger* logger_ptr,
 {
   m_async_cleanup_worker.start();
   m_async_cleanup_worker.post([this]() { cleanup(); });
+}
+
+TEMPLATE_JEM_CLI_SESSION_IMPL
+CLASS_JEM_CLI_SESSION_IMPL::~Client_session_impl()
+{
+  // See explanation in ~Server_session_impl().  Same deal here.
+  Base::Base::dtor_async_worker_stop();
+  // Thread W has been joined.
 }
 
 TEMPLATE_JEM_CLI_SESSION_IMPL
