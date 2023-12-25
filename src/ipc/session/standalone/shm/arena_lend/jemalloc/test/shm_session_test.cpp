@@ -309,11 +309,14 @@ public:
               {
                 if (ec)
                 {
-                  FLOW_LOG_INFO("Session ended with error [" << ec << "]");
-                  if (m_shm_session != nullptr)
-                  {
-                    m_shm_session->set_disconnected();
-                  }
+                  m_task_loop.post([this, ec]()
+                                   {
+                                     FLOW_LOG_INFO("Session ended with error [" << ec << "]");
+                                     if (m_shm_session != nullptr)
+                                     {
+                                       m_shm_session->set_disconnected();
+                                     }
+                                   });
                 }
               },
               [&](Shm_channel_base&& channel, Client_session_mdt_reader&& mdt_reader)
@@ -327,6 +330,21 @@ public:
               }),
     m_operation_mode(operation_mode)
   {
+  }
+
+  /// Destructor.
+  ~Test_client()
+  {
+    m_task_loop.stop();
+    /* Thread joined. Now nothing we'd post()ed onto m_task_loop will execute past this line. If allowed to
+     * execute we'd introduce a race between destruction of *this members and post()ed code touching those members. For
+     * example the error handler given to m_session in ctor above will, from m_task_loop thread, touch
+     * m_shm_session: a race between that and m_shm_session being destroyed.
+     *
+     * TSAN caught this. I (ygoldfel) added that line as a result. @todo It may or may not be the most graceful
+     * way of handling it; sometimes properly ordering data members for destruction in the right order = better.
+     * Not being the original author of the test I went with smallest safe change I could carry out to eliminate
+     * the race. */
   }
 
   unsigned int get_client_id() const
