@@ -1589,7 +1589,19 @@ protected:
   private:
     /// The event listener registered in the client.
     const unique_ptr<Basic_event_listener> m_event_listener;
-    /// The client application.
+    /**
+     * The client application.
+     *
+     * I (ygoldfel, not original test author) placed this member after m_event_listener; otherwise TSAN
+     * detected a race between some deinit code in F(), where F was m_client->m_task_loop.post(F)ed; F() was
+     * touching event listener stuff (`m_event_listener->notify_completion(result);`) that was being destroyed
+     * around the same time from main thread. Anyway m_client shutting down its thread first (by being listed
+     * second here) avoids that chaos, if only because the thread that would be touching dying stuff simply
+     * no longer exists, by the time that stuff begins to die. Other than in that regard (where it appears to
+     * be purely positive, it should be not-worse). I only pontificate this text to make clear it's possible
+     * I am missing some key subtlety (but do feel I understand enough to make this fix reasonably
+     * confidently still).
+     */
     const unique_ptr<Test_client> m_client;
   }; // class Client_data
 
