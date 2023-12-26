@@ -1561,8 +1561,8 @@ protected:
      * @param event_listener The event listener that is registered to the client.
      */
     Client_data(unique_ptr<Test_client>&& client, unique_ptr<Basic_event_listener>&& event_listener) :
-      m_client(std::move(client)),
-      m_event_listener(std::move(event_listener))
+      m_event_listener(std::move(event_listener)),
+      m_client(std::move(client))
     {
     }
 
@@ -1587,10 +1587,10 @@ protected:
     }
 
   private:
-    /// The client application.
-    const unique_ptr<Test_client> m_client;
     /// The event listener registered in the client.
     const unique_ptr<Basic_event_listener> m_event_listener;
+    /// The client application.
+    const unique_ptr<Test_client> m_client;
   }; // class Client_data
 
   /// Alias for the map of client id -> Client_data
