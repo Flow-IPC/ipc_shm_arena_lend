@@ -87,6 +87,20 @@ Shm_session::~Shm_session()
 {
   FLOW_LOG_TRACE("Destructing [" << this << "]");
 
+  /* For each of these single-thread event loops:
+   *   - If a task is concurrently executing right now, wait until it (and only it) finishes. For example
+   *     it could be processing a pool-removal message.
+   *     - If none is concurrently executing then nothing to do; continue immediately.
+   *   - Stop/join the thread.
+   * Otherwise such code in such threads can access stuff we access/modify below.
+   *
+   * Is the stopping, in and of itself, dangerous somehow? Well, if something was concurrently happening already,
+   * then we cannot stop it now; we are then acting as-if we (dtor) were called a tiny bit later by waiting for
+   * it to compelte. If something was about to happen, but we prevented it, then it is ~no different from the
+   * precipitating event occurring a tiny bit later -- when there is no Shm_session through which to speak anymore. */
+  m_parallel_task_loop.stop();
+  m_serial_task_loop.stop();
+
   // Removed registration of expected channel messages
   deregister_expected_messages();
 
