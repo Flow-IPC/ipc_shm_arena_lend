@@ -2559,6 +2559,14 @@ TEST_F(Shm_session_test, Error_handling)
     // Start client and execute test
     client.start();
     wait_for_server_completion();
+
+    client.stop(); // Stop background processing before destroying event_listener, then client.
+    /* Without the previous line TSAN detected `client` was invoking stuff in its m_task_loop thread including
+     * set_result() which was accessing its m_event_listener -- while here that same guy `event_listener` was
+     * being destroyed (before `client` dtor). I (ygoldfel, not original test author) chose client.stop() simply
+     * as a way to ensure that doesn't happen. There's still arguably the issue of what should have the longer
+     * lifetime; or maybe there should be a reset_event_listener(); or... it's just test code, so it's not a major
+     * problem. Anyway at the moment we're fine. */
   }
 }
 
