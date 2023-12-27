@@ -1096,7 +1096,7 @@ public:
    *
    * @return See above.
    */
-  const shared_ptr<void>& get_object() const
+  shared_ptr<void> get_object() const
   {
     Lock lock(m_object_mutex);
     return m_object;
