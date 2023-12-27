@@ -185,6 +185,9 @@ Test_shm_session_server::Test_shm_session_server(flow::log::Logger* logger,
 
 Test_shm_session_server::~Test_shm_session_server()
 {
+  m_task_loop.stop();
+  // Thread joined, so any post()ed stuff doesn't try to touch items while dtor destroys them before m_task_loop.
+
   boost::system::error_code ec;
   uintmax_t result = fs::remove_all(S_KERNEL_PERSISTENT_RUN_DIR, ec);
   if (ec)
