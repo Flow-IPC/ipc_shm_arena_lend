@@ -75,6 +75,13 @@ public:
   /// Inherit ctor.
   using Base::Base;
 
+  /**
+   * Destructor.
+   * Internally: at least does what it must according to session::Server_session_impl::dtor_async_worker_stop()
+   * doc header contract.  See inside for comment more resembling English hopefully.
+   */
+  ~Server_session_impl();
+
   // Methods.
 
   /**
@@ -162,6 +169,21 @@ private:
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define CLASS_JEM_SRV_SESSION_IMPL \
   Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>
+
+TEMPLATE_JEM_SRV_SESSION_IMPL
+CLASS_JEM_SRV_SESSION_IMPL::~Server_session_impl()
+{
+  /* Since we are subclass of Base::Base (session::Server_session_impl), and we do post our own tasks onto thread W
+   * (otherwise maintained by Base::Base), this protected guy's doc header says we must call it.  So formally speaking
+   * that's why we do it.  More in English, though: if a subclass of session::Server_session_impl (us, or perhaps
+   * Base) has queued a task F on thread W (async_worker()), and this dtor is called, and F() touches some part of
+   * *this or (Base&)(*this), then there can be undefined-behavior and/or concurrent-access trouble.  Once
+   * Base::Base::~Base() is reached, we're safe, as it stop()s thread W in civilized fashion first-thing, synchronously,
+   * before letting its own destruction continue.  So this causes the stop()page to occur somewhat earlier, so that
+   * we too can feel peace: */
+  Base::Base::dtor_async_worker_stop();
+  // Thread W has been joined.
+}
 
 TEMPLATE_JEM_SRV_SESSION_IMPL
 template<typename Session_server_impl_t,

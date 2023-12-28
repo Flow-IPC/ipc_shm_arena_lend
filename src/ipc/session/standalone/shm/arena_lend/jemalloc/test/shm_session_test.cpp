@@ -300,7 +300,7 @@ public:
     flow::log::Log_context(logger, Log_component::S_TEST),
     m_client_id(client_id),
     m_started(false),
-    m_task_loop(get_logger(), (Test_shm_session_server::S_CLIENT_APP_NAME + "_loop_" + to_string(client_id))),
+    m_task_loop(get_logger(), Test_shm_session_server::S_CLIENT_APP_NAME + "_loop_" + to_string(client_id)),
     m_event_listener(nullptr),
     m_session(get_logger(),
               Test_shm_session_server::get_client_app(),
@@ -309,11 +309,14 @@ public:
               {
                 if (ec)
                 {
-                  FLOW_LOG_INFO("Session ended with error [" << ec << "]");
-                  if (m_shm_session != nullptr)
-                  {
-                    m_shm_session->set_disconnected();
-                  }
+                  m_task_loop.post([this, ec]()
+                                   {
+                                     FLOW_LOG_INFO("Session ended with error [" << ec << "]");
+                                     if (m_shm_session != nullptr)
+                                     {
+                                       m_shm_session->set_disconnected();
+                                     }
+                                   });
                 }
               },
               [&](Shm_channel_base&& channel, Client_session_mdt_reader&& mdt_reader)
@@ -327,6 +330,21 @@ public:
               }),
     m_operation_mode(operation_mode)
   {
+  }
+
+  /// Destructor.
+  ~Test_client()
+  {
+    m_task_loop.stop();
+    /* Thread joined. Now nothing we'd post()ed onto m_task_loop will execute past this line. If allowed to
+     * execute we'd introduce a race between destruction of *this members and post()ed code touching those members. For
+     * example the error handler given to m_session in ctor above will, from m_task_loop thread, touch
+     * m_shm_session: a race between that and m_shm_session being destroyed.
+     *
+     * TSAN caught this. I (ygoldfel) added that line as a result. @todo It may or may not be the most graceful
+     * way of handling it; sometimes properly ordering data members for destruction in the right order = better.
+     * Not being the original author of the test I went with smallest safe change I could carry out to eliminate
+     * the race. */
   }
 
   unsigned int get_client_id() const
@@ -1078,7 +1096,7 @@ public:
    *
    * @return See above.
    */
-  const shared_ptr<void>& get_object() const
+  shared_ptr<void> get_object() const
   {
     Lock lock(m_object_mutex);
     return m_object;
@@ -1543,8 +1561,8 @@ protected:
      * @param event_listener The event listener that is registered to the client.
      */
     Client_data(unique_ptr<Test_client>&& client, unique_ptr<Basic_event_listener>&& event_listener) :
-      m_client(std::move(client)),
-      m_event_listener(std::move(event_listener))
+      m_event_listener(std::move(event_listener)),
+      m_client(std::move(client))
     {
     }
 
@@ -1569,10 +1587,22 @@ protected:
     }
 
   private:
-    /// The client application.
-    const unique_ptr<Test_client> m_client;
     /// The event listener registered in the client.
     const unique_ptr<Basic_event_listener> m_event_listener;
+    /**
+     * The client application.
+     *
+     * I (ygoldfel, not original test author) placed this member after m_event_listener; otherwise TSAN
+     * detected a race between some deinit code in F(), where F was m_client->m_task_loop.post(F)ed; F() was
+     * touching event listener stuff (`m_event_listener->notify_completion(result);`) that was being destroyed
+     * around the same time from main thread. Anyway m_client shutting down its thread first (by being listed
+     * second here) avoids that chaos, if only because the thread that would be touching dying stuff simply
+     * no longer exists, by the time that stuff begins to die. Other than in that regard (where it appears to
+     * be purely positive, it should be not-worse). I only pontificate this text to make clear it's possible
+     * I am missing some key subtlety (but do feel I understand enough to make this fix reasonably
+     * confidently still).
+     */
+    const unique_ptr<Test_client> m_client;
   }; // class Client_data
 
   /// Alias for the map of client id -> Client_data
@@ -2529,6 +2559,14 @@ TEST_F(Shm_session_test, Error_handling)
     // Start client and execute test
     client.start();
     wait_for_server_completion();
+
+    client.stop(); // Stop background processing before destroying event_listener, then client.
+    /* Without the previous line TSAN detected `client` was invoking stuff in its m_task_loop thread including
+     * set_result() which was accessing its m_event_listener -- while here that same guy `event_listener` was
+     * being destroyed (before `client` dtor). I (ygoldfel, not original test author) chose client.stop() simply
+     * as a way to ensure that doesn't happen. There's still arguably the issue of what should have the longer
+     * lifetime; or maybe there should be a reset_event_listener(); or... it's just test code, so it's not a major
+     * problem. Anyway at the moment we're fine. */
   }
 }
 

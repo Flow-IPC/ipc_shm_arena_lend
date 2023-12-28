@@ -104,6 +104,13 @@ public:
                                const Client_app& cli_app_ref, const Server_app& srv_app_ref,
                                Task_err&& on_err_func);
 
+  /**
+   * Destructor.
+   * Internally: at least does what it must according to session::Client_session_impl::dtor_async_worker_stop()
+   * doc header contract.  See inside for comment more resembling English hopefully.
+   */
+  ~Client_session_impl();
+
   // Methods.
 
   /**
@@ -218,6 +225,14 @@ CLASS_JEM_CLI_SESSION_IMPL::Client_session_impl(flow::log::Logger* logger_ptr,
 {
   m_async_cleanup_worker.start();
   m_async_cleanup_worker.post([this]() { cleanup(); });
+}
+
+TEMPLATE_JEM_CLI_SESSION_IMPL
+CLASS_JEM_CLI_SESSION_IMPL::~Client_session_impl()
+{
+  // See explanation in ~Server_session_impl().  Same deal here.
+  Base::Base::dtor_async_worker_stop();
+  // Thread W has been joined.
 }
 
 TEMPLATE_JEM_CLI_SESSION_IMPL
@@ -394,7 +409,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
         // else
 
         /* So just init_shm() left.
-         * It might failed; if so, then that's that (nothing else to undo); or conversely, if it succeeds,
+         * It might have failed; if so, then that's that (nothing else to undo); or conversely, if it succeeds,
          * on this side there's nothing further to do either.  So just report the result of init_shm(). */
         err_code = Base::init_shm(std::move(local_hndl_or_null),
                                   Shared_name::ct(to_string(util::Process_credentials::own_process_id())));
