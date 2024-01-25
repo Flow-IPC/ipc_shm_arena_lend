@@ -66,9 +66,29 @@ namespace
 
 using pool_id_t = Shm_pool::pool_id_t;
 using pool_offset_t = Shm_pool::size_t;
+using Mutex = std::mutex;
+using Lock = std::lock_guard<Mutex>;
 
 // The size of the shared memory pools.
 static const size_t S_SHM_POOL_SIZE = 4096;
+
+/* This is quick-and-somewhat-dirty; really we should also handle other APIs; probably discard() and possibly seed();
+ * but this is sufficient for our needs at this time; and this is test code. */
+class Random_engine_mt : public std::default_random_engine
+{
+public:
+  using Base = std::default_random_engine;
+  using Base::Base;
+
+  result_type operator()()
+  {
+    Lock lock(m_mutex);
+    return Base::operator()();
+  }
+
+private:
+  Mutex m_mutex;
+};
 
 /**
  * Creates, tracks and removes objects within a collection.
@@ -89,7 +109,7 @@ public:
    */
   Collection(flow::log::Logger* logger,
              const shared_ptr<T>& shm_pool_collection,
-             std::default_random_engine& random_generator) :
+             Random_engine_mt& random_generator) :
     flow::log::Log_context(logger, Log_component::S_SESSION),
     m_shm_pool_collection(shm_pool_collection),
     m_random_generator(random_generator)
@@ -270,9 +290,6 @@ public:
   virtual ~Collection() = default;
 
 private:
-  using Mutex = std::mutex;
-  using Lock = std::lock_guard<Mutex>;
-
   /**
    * Object tracking container per shared memory pool.
    */
@@ -435,7 +452,7 @@ private:
   /// Synchronizes access to m_object_map and m_random_generator.
   mutable Mutex m_mutex;
   /// Generates random numbers for deciding which objects and pools to remove and select.
-  std::default_random_engine& m_random_generator;
+  Random_engine_mt& m_random_generator;
   /// Maps shared memory pool to an Object_list structure.
   std::unordered_map<shared_ptr<Shm_pool>, Object_lists> m_object_map;
 }; // class Collection
@@ -462,7 +479,7 @@ public:
    */
   Collection_tracker(flow::log::Logger* logger,
                      size_t num_collections,
-                     std::default_random_engine& random_generator) :
+                     Random_engine_mt& random_generator) :
     m_random_generator(random_generator)
   {
     assert(num_collections > 0);
@@ -657,7 +674,7 @@ public:
 
 protected:
   /// Generates random numbers for deciding which collections, objects and pools to remove and select.
-  std::default_random_engine& m_random_generator;
+  Random_engine_mt& m_random_generator;
   /// Maps collection id to a Collection.
   unordered_map<size_t, std::unique_ptr<Collection_type>> m_collection_map;
 }; // class Collection_tracker
@@ -1262,7 +1279,7 @@ TEST(Shm_session_data_test, Multithread_object_database)
      */
     Lender_collection(flow::log::Logger* logger,
                       const shared_ptr<Test_shm_pool_collection>& shm_pool_collection,
-                      std::default_random_engine& random_generator) :
+                      Random_engine_mt& random_generator) :
       Collection<Test_shm_pool_collection>(logger, shm_pool_collection, random_generator)
     {
     }
@@ -1330,7 +1347,7 @@ TEST(Shm_session_data_test, Multithread_object_database)
      */
     Lender_collection_tracker(flow::log::Logger* logger,
                               size_t num_collections,
-                              std::default_random_engine& random_generator) :
+                              Random_engine_mt& random_generator) :
       Collection_tracker<Test_shm_pool_collection, Lender_collection>(logger, num_collections, random_generator)
     {
     }
@@ -1350,7 +1367,7 @@ TEST(Shm_session_data_test, Multithread_object_database)
      */
     Borrower_collection_tracker(flow::log::Logger* logger,
                                 size_t num_collections,
-                                std::default_random_engine& random_generator) :
+                                Random_engine_mt& random_generator) :
       Collection_tracker<Borrower_shm_pool_collection, Collection<Borrower_shm_pool_collection>>(
         logger, num_collections, random_generator),
       m_shm_pool_collection(logger)
@@ -1435,7 +1452,7 @@ TEST(Shm_session_data_test, Multithread_object_database)
   ////////// Initialization
   // In case of issues, change this log level to S_TRACE from S_INFO
   Test_logger logger(flow::log::Sev::S_INFO);
-  std::default_random_engine random_generator;
+  Random_engine_mt random_generator;
   auto lender_tracker = std::make_unique<Lender_collection_tracker>(&logger, NUM_COLLECTIONS, random_generator);
   Borrower_collection_tracker borrower_tracker(&logger, NUM_COLLECTIONS, random_generator);
   auto session_data = std::make_unique<Shm_session_data>(&logger);
