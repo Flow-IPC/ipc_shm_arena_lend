@@ -217,6 +217,11 @@ public:
         shm_pool->get_id() << "]";
       return false;
     }
+    else
+    {
+      FLOW_LOG_TRACE("Registered object [" << object.get() << "] in SHM pool [" << shm_pool->get_id() << ", " <<
+                     shm_pool->get_name() << "]");
+    }
 
     return true;
   }
@@ -348,9 +353,11 @@ private:
       auto result_pair = iter->second.m_unregistered_objects.emplace(object);
       if (!result_pair.second)
       {
-        ADD_FAILURE() << "Could not add object [" << object << "] into unregistered list";
+        ADD_FAILURE() << "Could not add object [" << shared_ptr<void>(object) << "] into unregistered list";
         return nullptr;
       }
+      FLOW_LOG_TRACE("Added unregistered object [" << shared_ptr<void>(object) << "] to SHM pool [" <<
+                     shm_pool->get_id() << ", " << shm_pool->get_name() << "]");
     }
 
     return object;
@@ -384,6 +391,7 @@ private:
     auto& object_list = object_lists.m_registered_objects;
     if (object_list.empty())
     {
+      // Empty registered object list means we just newly created this with an unregistered object
       EXPECT_FALSE(object_lists.m_unregistered_objects.empty());
       FLOW_LOG_TRACE("Registered object list is empty, so there's no object to remove");
       return nullptr;
@@ -402,8 +410,15 @@ private:
         // When there are no more objects in a SHM pool, we'll remove it
         if (object_list.empty() && object_lists.m_unregistered_objects.empty())
         {
+          FLOW_LOG_TRACE("Removed object [" << object << "]" << " and now empty SHM pool [" <<
+                         shm_pool->get_id() << ", " << shm_pool->get_name() << "]");
           m_object_map.erase(object_map_iter);
           removed_shm_pool = true;
+        }
+        else
+        {
+          FLOW_LOG_TRACE("Removed object [" << object << "] from SHM pool [" << shm_pool->get_id() << ", " <<
+                         shm_pool->get_name() << "], objects remaining [" << object_list.size() << "]");
         }
 
         return object;
@@ -1216,7 +1231,7 @@ TEST(Shm_session_data_test, Lender_object_database)
  * gcc over clang or vice versa. I am now disabling this test, but there's a pretty good chance we'll nip this in
  * the bug in the near future (and re-enable it).
  */
-TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
+TEST(Shm_session_data_test, Multithread_object_database)
 {
   const size_t NUM_COLLECTIONS = 3;
   const size_t INITIAL_SHM_POOLS = 5;
@@ -1224,6 +1239,14 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
   const size_t NUM_THREADS = 5;
   // The number of random actions each thread executes
   const size_t ITERATIONS = 100;
+
+  using Mutex = std::mutex;
+  using Lock = std::lock_guard<Mutex>;
+
+  // We need to synchronize object removals as they may trigger a SHM pool removal that can't be out of order as
+  // all objects are required to be removed beforehand.
+  Mutex lender_object_deregistration_mutex;
+  Mutex borrower_object_deregistration_mutex;
 
   /**
    * Creates, tracks and removes objects within a lender collection.
@@ -1252,7 +1275,7 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
      * @see Collection::deregister_random_object()
      */
     shared_ptr<void> deregister_random_object(const shared_ptr<Shm_pool>& shm_pool,
-                                                      bool& removed_shm_pool) override
+                                              bool& removed_shm_pool) override
     {
       shared_ptr<void> object = Collection::deregister_random_object(shm_pool, removed_shm_pool);
       deregister_random_object_helper(shm_pool, object, removed_shm_pool);
@@ -1265,7 +1288,7 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
      * @see Collection::deregister_random_object_in_random_pool()
      */
     shared_ptr<void> deregister_random_object_in_random_pool(shared_ptr<Shm_pool>& shm_pool,
-                                                                     bool& removed_shm_pool) override
+                                                             bool& removed_shm_pool) override
     {
       shared_ptr<void> object = Collection::deregister_random_object_in_random_pool(shm_pool, removed_shm_pool);
       deregister_random_object_helper(shm_pool, object, removed_shm_pool);
@@ -1410,7 +1433,7 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
   }; // class Borrower_collection_tracker
 
   ////////// Initialization
-  // In case of issues, changed this log level to S_TRACE from S_INFO
+  // In case of issues, change this log level to S_TRACE from S_INFO
   Test_logger logger(flow::log::Sev::S_INFO);
   std::default_random_engine random_generator;
   auto lender_tracker = std::make_unique<Lender_collection_tracker>(&logger, NUM_COLLECTIONS, random_generator);
@@ -1512,9 +1535,9 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
       pool_offset_t registered_pool_offset;
       // Order matters here due to potential race condition
       EXPECT_TRUE(session_data->register_lender_object(collection->get_id(),
-                                                  object,
-                                                  registered_shm_pool_id,
-                                                  registered_pool_offset));
+                                                       object,
+                                                       registered_shm_pool_id,
+                                                       registered_pool_offset));
       EXPECT_EQ(registered_shm_pool_id, shm_pool->get_id());
       EXPECT_TRUE(lender_tracker->register_object(collection, shm_pool, object));
     };
@@ -1618,6 +1641,8 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
   auto remove_lender_object_in_random_pool_functor =
     [&](const shared_ptr<Test_shm_pool_collection>& collection) -> bool
     {
+      Lock lock(lender_object_deregistration_mutex);
+
       shared_ptr<Shm_pool> shm_pool;
       bool removed_shm_pool;
       shared_ptr<void> object = lender_tracker->deregister_random_object_in_random_pool(collection,
@@ -1641,6 +1666,8 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
   auto remove_lender_object_functor = [&](const shared_ptr<Test_shm_pool_collection>& collection,
                                           const shared_ptr<Shm_pool>& shm_pool) -> bool
     {
+      Lock lock(lender_object_deregistration_mutex);
+
       bool removed_shm_pool;
       shared_ptr<void> object = lender_tracker->deregister_random_object(collection, shm_pool, removed_shm_pool);
       return remove_lender_object_functor_helper(collection, shm_pool, object, removed_shm_pool);
@@ -1772,6 +1799,8 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
   auto remove_borrower_object_in_random_pool_functor =
     [&](const shared_ptr<Borrower_shm_pool_collection>& collection) -> bool
     {
+      Lock lock(borrower_object_deregistration_mutex);
+
       shared_ptr<Shm_pool> shm_pool;
       bool removed_shm_pool;
       shared_ptr<void> object = borrower_tracker.deregister_random_object_in_random_pool(collection,
@@ -1800,6 +1829,8 @@ TEST(Shm_session_data_test, DISABLED_Multithread_object_database)
   auto remove_borrower_object_functor = [&](const shared_ptr<Borrower_shm_pool_collection>& collection,
                                             const shared_ptr<Shm_pool>& shm_pool) -> bool
     {
+      Lock lock(borrower_object_deregistration_mutex);
+
       bool removed_shm_pool;
       shared_ptr<void> object = borrower_tracker.deregister_random_object(collection, shm_pool, removed_shm_pool);
       if (object == nullptr)
