@@ -28,6 +28,7 @@
 #include "ipc/session/detail/shm/arena_lend/jemalloc/session_impl.hpp"
 #include "ipc/session/detail/server_session_impl.hpp"
 #include "ipc/session/error.hpp"
+#include <boost/move/make_unique.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {
