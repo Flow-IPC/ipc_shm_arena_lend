@@ -34,7 +34,6 @@ namespace fs = boost::filesystem;
 
 using std::atomic;
 using std::make_shared;
-using std::make_unique;
 using std::ostream;
 using std::shared_ptr;
 using std::static_pointer_cast;
@@ -283,7 +282,7 @@ bool Test_shm_session_server::start()
   }
 
   m_allowed_client_apps = form_allowed_client_apps(m_client_process_id);
-  m_session_server = make_unique<Session_server>(get_logger(), get_server_app(), m_allowed_client_apps);
+  m_session_server = std::make_unique<Session_server>(get_logger(), get_server_app(), m_allowed_client_apps);
 
   if ((m_operation_mode == Operation_mode::S_ALLOCATION_PERFORMANCE) && (m_performance_expected_clients == 0))
   {
