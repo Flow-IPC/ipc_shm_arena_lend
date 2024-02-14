@@ -30,6 +30,7 @@
 #include "ipc/session/detail/session_server_impl.hpp"
 #include "ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.hpp"
 #include "ipc/shm/classic/pool_arena.hpp"
+#include <boost/move/make_unique.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {

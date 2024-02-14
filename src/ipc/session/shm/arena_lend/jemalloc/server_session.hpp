@@ -30,6 +30,7 @@
 #include "ipc/session/detail/shm/arena_lend/jemalloc/server_session_impl.hpp"
 #include "ipc/session/shm/arena_lend/jemalloc/session.hpp"
 #include "ipc/session/server_session.hpp"
+#include <boost/move/make_unique.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {
