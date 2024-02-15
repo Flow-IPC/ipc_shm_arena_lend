@@ -54,6 +54,7 @@ The basic prerequisites for *building* the above:
   - Linux;
   - a C++ compiler with C++ 17 support;
   - Boost headers (plus certain libraries) install;
+  - {fmt} install;
   - dependency headers and library (from within this overall project) install(s); in this case those of:
     `flow`, `ipc_core`, `ipc_transport_structured`, `ipc_session`, `ipc_shm`;
   - CMake;
@@ -62,7 +63,8 @@ The basic prerequisites for *building* the above:
 
 The basic prerequisites for *using* the above:
 
-  - Linux, C++ compiler, Boost, above-listed dependency lib(s), capnp, jemalloc (but CMake is not required); plus:
+  - Linux, C++ compiler, Boost, {fmt}, above-listed dependency lib(s), capnp, jemalloc (but CMake is not required);
+    plus:
   - your source code `#include`ing any exported `ipc/` headers must be itself built in C++ 17 mode;
   - any executable using the `ipc_*` libraries must be linked with certain Boost and ubiquitous
     system libraries.
@@ -76,9 +78,10 @@ To build `ipc_shm_arena_lend`:
      [boost.org](https://boost.org).  If you do have one, try using that one (our build will complain if insufficient).
      (From this point on, that's the recommended tactic to use when deciding on the version number for any given
      prerequisite.  E.g., same deal with CMake in step 2.)
-  2. Ensure a CMake install is available (available at [CMake web site](https://cmake.org/download/) if needed).
-  3. Ensure a capnp install is available (available at [Cap'n Proto web site](https://capnproto.org/) if needed).
-  4. Ensure a jemalloc install is available (available at [jemalloc web site](https://jemalloc.net/) if needed).
+  2. Ensure a {fmt} install is available (available at [{fmt} web site](https://fmt.dev/) if needed).
+  3. Ensure a CMake install is available (available at [CMake web site](https://cmake.org/download/) if needed).
+  4. Ensure a capnp install is available (available at [Cap'n Proto web site](https://capnproto.org/) if needed).
+  5. Ensure a jemalloc install is available (available at [jemalloc web site](https://jemalloc.net/) if needed).
      - If you are already using jemalloc in your under-development executable(s), great.  We will work
        whether you're using it to replace default `malloc()`/`free()` and (orthogonally) `new`/`delete`; or
        not.
@@ -101,7 +104,7 @@ To build `ipc_shm_arena_lend`:
      - Flow-IPC will automatically build in the way compatible with the way you've built jemalloc.
        (Our CMake script(s) will, internally, use `jemalloc_config` program to determine the chosen API-name
        prefix.)
-  5. Use CMake `cmake` (command-line tool) or `ccmake` (interactive text-UI tool) to configure and generate
+  6. Use CMake `cmake` (command-line tool) or `ccmake` (interactive text-UI tool) to configure and generate
      a build system (namely a GNU-make `Makefile` and friends).  Details on using CMake are outside our scope here;
      but the basics are as follows.  CMake is very flexible and powerful; we've tried not to mess with that principle
      in our build script(s).
@@ -148,6 +151,7 @@ To use `ipc_shm_arena_lend`:
         `libipc_core.a`, and `libflow.a`.
       - Link against Boost libraries mentioned in a `flow/.../CMakeLists.txt` line (search `flow` dependency for it):
         `set(BOOST_LIBS ...)`.
+      - Link against the {fmt} library, `libfmt`.
       - Link against the system pthreads library, `librt`, and `libdl`.
   - Read the documentation to learn how to use Flow-IPC's (and/or Flow's) various features.
     (See Documentation below.)
