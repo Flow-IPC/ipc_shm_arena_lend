@@ -31,7 +31,8 @@ message(CHECK_START "(Project [${PROJ}] root CMake script executing.)")
 list(APPEND CMAKE_MESSAGE_INDENT "- ")
 
 set(PROJ_CAMEL "IpcShmArenaLend")
-set(PROJ_VERSION "1.0")
+# TODO: Get it from nearest `VERSION` file perhaps.
+set(PROJ_VERSION "1.0.0")
 set(PROJ_HUMAN "Flow-IPC (SHM-jemalloc)")
 
 set(OS_SUPPORT_MSG "Only Linux is supported for now.  For ipc_shm_arena_lend: There is much low-level code; "
