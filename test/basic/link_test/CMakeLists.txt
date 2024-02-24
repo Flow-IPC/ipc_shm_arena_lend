@@ -27,7 +27,7 @@
 find_package(CapnProto CONFIG REQUIRED)
 
 if(TARGET ipc_transport_structured)
-  set(CAPNPC_IMPORT_DIRS ${IPC_META_ROOT_ipc_transport_structured}/src)
+  set(CAPNPC_IMPORT_DIRS ${FLOW_LIKE_META_ROOT_ipc_transport_structured}/src)
 endif()
 capnp_generate_cpp(capnp_generated_srcs capnp_generated_hdrs_ignored "schema.capnp")
 
