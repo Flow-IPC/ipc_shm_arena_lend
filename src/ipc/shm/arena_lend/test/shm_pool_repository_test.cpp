@@ -103,7 +103,8 @@ TEST(Shm_pool_repository_test, Interface)
 
   // Reinsert with different address
   EXPECT_TRUE(
-    repository.insert(make_shared<Shm_pool>(SHM_POOL_ID, SHM_POOL_NAME, SHM_POOL_ADDRESS_2, SHM_POOL_SIZE, SHM_POOL_FD)));
+    repository.insert(make_shared<Shm_pool>(SHM_POOL_ID, SHM_POOL_NAME, SHM_POOL_ADDRESS_2,
+                                            SHM_POOL_SIZE, SHM_POOL_FD)));
   // Duplicate address with different name should work now
   EXPECT_TRUE(repository.insert(duplicate_address_shm_pool));
   // Ensure conversion succeeds for different name
