@@ -148,7 +148,7 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *   - Accordingly the client side awaits the message (along session master channel) containing the socket,
  *     acks it, and creates the #Shm_session.
  *
- * To summarize, then, this is the flow for Client_session_impl::async_connect().
+ * To summarize, then, this is the flow for Client_session_impl::async_connect()XXXsearch-more.
  *   -# Vanilla async_connect() gets it to PEER state.  Cancel PEER state immediately in our substituted
  *      on-connect-done handler.
  *   -# Await the `Native_handle` to arrive on the session master channel (which was just used for vanilla

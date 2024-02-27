@@ -550,21 +550,20 @@ private:
   void run()
   {
     // Connect client to server
-    if (!m_session.async_connect(
-          [&](const ipc::Error_code& ec)
-          {
-            if (ec)
-            {
-              ADD_FAILURE() << "Error occurred when connecting, error [" << ec << "]";
-              fail_test();
-              return;
-            }
-            m_task_loop.post([this]() { handle_connect(); });
-          }))
+    ipc::Error_code ec;
+    if (!m_session.sync_connect(&ec))
     {
       ADD_FAILURE() << "Could not connect";
       fail_test();
+      return;
     }
+    if (ec)
+    {
+      ADD_FAILURE() << "Error occurred when connecting, error [" << ec << "]";
+      fail_test();
+      return;
+    }
+    m_task_loop.post([this]() { handle_connect(); });
 
     // Wait for completion
     auto future = m_promise.get_future();
