@@ -87,7 +87,7 @@ class Session_server;
  * `Shm_session` and `Arena` objects and register the latter with the former to enable lending objects
  *
  * So all we have to do is provide a modified `async_connect()` which does the above.  How?  Answer:
- *   - execute vanilla Client_session_impl::async_connect(); once that triggers the on-done handler:
+ *   - execute vanilla session::Client_session_impl::async_connect(); once that triggers the on-done handler:
  *   - set up `Shm_session` and `Arena` (though for the former there's a prerequisite async step to establish an
  *     interal-use IPC channel);
  *   - invoke the user's original on-done handler.

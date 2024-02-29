@@ -114,22 +114,16 @@ public:
   // Methods.
 
   /**
-   * See Client_session_mv counterpart.  While the formal contract here is unchanged from vanilla
-   * Client_session_impl, internally: this one, before `on_done_func()` can be invoked successfully,
-   * also creates the SHM arena accessible in PEER state via session_shm(), as well as opening the `Shm_session`
-   * capable of reading the opposing session-server's objects from its `.session_shm()` (symmetrical to ours)
-   * and `.app_shm()`.  (We do not, and cannot, by nature of arena-lending SHM providers, set up an `.app_shm()`
-   * of our own.)
+   * See Client_session_mv counterpart.
    *
-   * @param on_done_func
+   * @param err_code
    *        See Client_session_mv counterpart.
    * @return See Client_session_mv counterpart.
    */
-  template<typename Task_err>
-  bool async_connect(Task_err&& on_done_func);
+  bool sync_connect(Error_code* err_code);
 
   /**
-   * See Client_session_mv counterpart.  See notes in similar place on simple async_connect() overload.
+   * See Client_session_mv counterpart.
    *
    * @param mdt
    *        See Client_session_mv counterpart.
@@ -139,16 +133,15 @@ public:
    *        See Client_session_mv counterpart.
    * @param init_channels_by_srv_req
    *        See Client_session_mv counterpart.
-   * @param on_done_func
+   * @param err_code
    *        See Client_session_mv counterpart.
    * @return See Client_session_mv counterpart.
    */
-  template<typename Task_err>
-  bool async_connect(const typename Base::Base::Base::Mdt_builder_ptr& mdt,
-                     typename Base::Base::Base::Channels* init_channels_by_cli_req_pre_sized,
-                     typename Base::Base::Base::Mdt_reader_ptr* mdt_from_srv_or_null,
-                     typename Base::Base::Base::Channels* init_channels_by_srv_req,
-                     Task_err&& on_done_func);
+  bool sync_connect(const typename Base::Base::Base::Mdt_builder_ptr& mdt,
+                    typename Base::Base::Base::Channels* init_channels_by_cli_req_pre_sized,
+                    typename Base::Base::Base::Mdt_reader_ptr* mdt_from_srv_or_null,
+                    typename Base::Base::Base::Channels* init_channels_by_srv_req,
+                    Error_code* err_code);
 
   // The LOG_*() macros don't see Log_context::get_log*() from base otherwise....
   using flow::log::Log_context::get_logger;
@@ -156,6 +149,28 @@ public:
 
 private:
   // Methods.
+
+  /**
+   * See session::Client_session_impl counterpart.
+   *
+   * @param mdt
+   *        See session::Client_session_impl counterpart.
+   * @param init_channels_by_cli_req_pre_sized
+   *        See session::Client_session_impl counterpart.
+   * @param mdt_from_srv_or_null
+   *        See session::Client_session_impl counterpart.
+   * @param init_channels_by_srv_req
+   *        See session::Client_session_impl counterpart.
+   * @param on_done_func
+   *        See session::Client_session_impl counterpart.
+   * @return See session::Client_session_impl counterpart.
+   */
+  template<typename Task_err>
+  bool async_connect(const typename Base::Base::Base::Mdt_builder_ptr& mdt,
+                     typename Base::Base::Base::Channels* init_channels_by_cli_req_pre_sized,
+                     typename Base::Base::Base::Mdt_reader_ptr* mdt_from_srv_or_null,
+                     typename Base::Base::Base::Channels* init_channels_by_srv_req,
+                     Task_err&& on_done_func);
 
   /// Invoked on #m_async_cleanup_worker, performs a round of the SHM-pool cleanup algorithm and schedules same.
   void cleanup();
@@ -236,10 +251,26 @@ CLASS_JEM_CLI_SESSION_IMPL::~Client_session_impl()
 }
 
 TEMPLATE_JEM_CLI_SESSION_IMPL
-template<typename Task_err>
-bool CLASS_JEM_CLI_SESSION_IMPL::async_connect(Task_err&& on_done_func)
+bool CLASS_JEM_CLI_SESSION_IMPL::sync_connect(Error_code* err_code)
 {
-  return async_connect(Base::Base::mdt_builder(), nullptr, nullptr, nullptr, std::move(on_done_func));
+  return sync_connect(Base::Base::mdt_builder(), nullptr, nullptr, nullptr, err_code);
+}
+
+TEMPLATE_JEM_CLI_SESSION_IMPL
+bool CLASS_JEM_CLI_SESSION_IMPL::sync_connect(const typename Base::Base::Base::Mdt_builder_ptr& mdt,
+                                              typename Base::Base::Base::Channels* init_channels_by_cli_req_pre_sized,
+                                              typename Base::Base::Base::Mdt_reader_ptr* mdt_from_srv_or_null,
+                                              typename Base::Base::Base::Channels* init_channels_by_srv_req,
+                                              Error_code* err_code)
+{
+  using flow::async::Task_asio_err;
+
+  Function<bool (Task_asio_err&&)> async_connect_impl_func = [&](Task_asio_err&& on_done_func) -> bool
+  {
+    return async_connect(mdt, init_channels_by_cli_req_pre_sized, mdt_from_srv_or_null, init_channels_by_srv_req,
+                         std::move(on_done_func));
+  };
+  return Base::Base::sync_connect_impl(err_code, &async_connect_impl_func);
 }
 
 TEMPLATE_JEM_CLI_SESSION_IMPL

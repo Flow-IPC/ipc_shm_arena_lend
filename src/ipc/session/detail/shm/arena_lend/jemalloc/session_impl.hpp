@@ -50,7 +50,7 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * a session); jemalloc::Session_server tracks these `Arena`s and coordinates with jemalloc::Server_session.
  * So all the in-common stuff is here in this internally-used super-class of the 2 `*_impl`.  The setup
  * procedure is asymmetrical, and the two sides of that asymmetry are in those 2 `*_impl`s -- including
- * the differing APIs (e.g., Client_session_impl::async_connect()).
+ * the differing APIs (e.g., Client_session_impl::sync_connect()).
  *
  * @tparam Session_impl_t
  *         Our base that our sub-class wants to build on-top-of.  E.g., `Server_session_impl<...>`.
