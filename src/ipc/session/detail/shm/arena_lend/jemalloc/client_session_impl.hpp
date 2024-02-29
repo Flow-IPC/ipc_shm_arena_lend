@@ -113,8 +113,30 @@ public:
 
   // Methods.
 
-  // XXX
+  /**
+   * See Client_session_mv counterpart.
+   *
+   * @param err_code
+   *        See Client_session_mv counterpart.
+   * @return See Client_session_mv counterpart.
+   */
   bool sync_connect(Error_code* err_code);
+
+  /**
+   * See Client_session_mv counterpart.
+   *
+   * @param mdt
+   *        See Client_session_mv counterpart.
+   * @param init_channels_by_cli_req_pre_sized
+   *        See Client_session_mv counterpart.
+   * @param mdt_from_srv_or_null
+   *        See Client_session_mv counterpart.
+   * @param init_channels_by_srv_req
+   *        See Client_session_mv counterpart.
+   * @param err_code
+   *        See Client_session_mv counterpart.
+   * @return See Client_session_mv counterpart.
+   */
   bool sync_connect(const typename Base::Base::Base::Mdt_builder_ptr& mdt,
                     typename Base::Base::Base::Channels* init_channels_by_cli_req_pre_sized,
                     typename Base::Base::Base::Mdt_reader_ptr* mdt_from_srv_or_null,
@@ -128,20 +150,20 @@ public:
 private:
   // Methods.
 
-  /**XXX
-   * See Client_session_mv counterpart.  See notes in similar place on simple async_connect() overload.
+  /**
+   * See session::Client_session_impl counterpart.
    *
    * @param mdt
-   *        See Client_session_mv counterpart.
+   *        See session::Client_session_impl counterpart.
    * @param init_channels_by_cli_req_pre_sized
-   *        See Client_session_mv counterpart.
+   *        See session::Client_session_impl counterpart.
    * @param mdt_from_srv_or_null
-   *        See Client_session_mv counterpart.
+   *        See session::Client_session_impl counterpart.
    * @param init_channels_by_srv_req
-   *        See Client_session_mv counterpart.
+   *        See session::Client_session_impl counterpart.
    * @param on_done_func
-   *        See Client_session_mv counterpart.
-   * @return See Client_session_mv counterpart.
+   *        See session::Client_session_impl counterpart.
+   * @return See session::Client_session_impl counterpart.
    */
   template<typename Task_err>
   bool async_connect(const typename Base::Base::Base::Mdt_builder_ptr& mdt,

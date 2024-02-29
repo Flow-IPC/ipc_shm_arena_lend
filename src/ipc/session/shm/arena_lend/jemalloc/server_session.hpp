@@ -119,7 +119,7 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * As with the vanilla session setup, remember that while in PEER state the APIs are identical/symmetrical,
  * the roles of the server and client vary quite sharply internally -- especially before PEER state.
  * The general outline is: Session_server listens for socket connections; a given
- * `Client_session::async_connect()` connects; at this stage Session_server constructs a not-yet-user-emitted
+ * `Client_session::sync_connect()` connects; at this stage Session_server constructs a not-yet-user-emitted
  * #Server_session and invokes its `async_accept_log_in()`.  Now the #Client_session and #Server_session
  * have established a channel (internal-use session master channel) and undergo the log-in exchange.
  * #Client_session sends log-in request.  #Server_session verifies that, then replies with log-in response
@@ -148,9 +148,9 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *   - Accordingly the client side awaits the message (along session master channel) containing the socket,
  *     acks it, and creates the #Shm_session.
  *
- * To summarize, then, this is the flow for Client_session_impl::async_connect()XXXsearch-more.
- *   -# Vanilla async_connect() gets it to PEER state.  Cancel PEER state immediately in our substituted
- *      on-connect-done handler.
+ * To summarize, then, this is the flow for Client_session_impl::async_connect().
+ *   -# Vanilla session::Client_session_impl::async_connect() gets it to PEER state.  Cancel PEER state immediately
+ *      in our substituted on-connect-done handler.
  *   -# Await the `Native_handle` to arrive on the session master channel (which was just used for vanilla
  *      session opening procedure and is now not being used).  Upon receipt send ack message and using the
  *      received handle:
