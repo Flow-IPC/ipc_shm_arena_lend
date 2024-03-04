@@ -87,7 +87,7 @@ Shm_session::~Shm_session()
 {
   FLOW_LOG_TRACE("Destructing [" << this << "]");
 
-  /* For each of these single-thread event loops:
+  /* For each thread in each of these 2 event loops (1 single-thread, 1 multi-thread):
    *   - If a task is concurrently executing right now, wait until it (and only it) finishes. For example
    *     it could be processing a pool-removal message.
    *     - If none is concurrently executing then nothing to do; continue immediately.
