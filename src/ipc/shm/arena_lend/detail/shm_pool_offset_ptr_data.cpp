@@ -135,7 +135,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       s_pool_id_mutex_or_none.emplace(util::OPEN_OR_CREATE, mutex_name.native_str(), perms);
       // It threw if failed.
 
-      // Okay, no we can lock it as noted above; and we will reuse this handle to it from now on in this process.
+      // Okay, now we can lock it as noted above; and we will reuse this handle to it from now on in this process.
 
       {
         Sh_lock sh_lock(*s_pool_id_mutex_or_none);
