@@ -74,11 +74,16 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
     using flow::log::Simple_ostream_logger;
     using flow::log::Config;
     using flow::log::Sev;
+    using flow::Flow_log_component;
     using bipc::permissions;
     using bipc::interprocess_exception;
 
     Config std_log_config(Sev::S_WARNING); // Errors only.  (Only errors would appear anyway as of now but still.)
-    std_log_config.init_component_to_union_idx_mapping<Log_component>(1000, 999);
+    std_log_config.init_component_to_union_idx_mapping<Flow_log_component>
+      (1000, Config::standard_component_payload_enum_sparse_length<Flow_log_component>());
+    std_log_config.init_component_names<Flow_log_component>(flow::S_FLOW_LOG_COMPONENT_NAME_MAP, false, "flow-");
+    std_log_config.init_component_to_union_idx_mapping<Log_component>
+      (2000, Config::standard_component_payload_enum_sparse_length<Log_component>());
     std_log_config.init_component_names<Log_component>(S_IPC_LOG_COMPONENT_NAME_MAP, false, "ipc-");
 
     Simple_ostream_logger std_logger(&std_log_config); // Go to default (cout, cerr).  Only cerr in practice.
@@ -135,7 +140,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       s_pool_id_mutex_or_none.emplace(util::OPEN_OR_CREATE, mutex_name.native_str(), perms);
       // It threw if failed.
 
-      // Okay, no we can lock it as noted above; and we will reuse this handle to it from now on in this process.
+      // Okay, now we can lock it as noted above; and we will reuse this handle to it from now on in this process.
 
       {
         Sh_lock sh_lock(*s_pool_id_mutex_or_none);
