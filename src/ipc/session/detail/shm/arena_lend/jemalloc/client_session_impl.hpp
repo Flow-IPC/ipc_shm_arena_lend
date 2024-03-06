@@ -53,7 +53,9 @@ namespace ipc::session::shm::arena_lend::jemalloc
 template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 class Client_session_impl :
   public Session_impl<session::Client_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
-                                                   session::schema::ShmType::JEMALLOC>>
+                                                   schema::ShmType::JEMALLOC,
+                                                   // Session_base::Graceful_finisher doc header explains why true here:
+                                                   true>>
 {
 public:
   // Types.
@@ -61,7 +63,7 @@ public:
   /// Short-hand for our non-`virtual` base.
   using Base = Session_impl
                  <session::Client_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
-                                               session::schema::ShmType::JEMALLOC>>;
+                                               schema::ShmType::JEMALLOC, true>>;
 
   // Constructors/destructor.
 
