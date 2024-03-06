@@ -54,7 +54,9 @@ class Server_session_impl :
   public Session_impl
            <session::Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
                                          session::schema::ShmType::JEMALLOC,
-                                         transport::struc::shm::Builder_base::S_MAX_SERIALIZATION_SEGMENT_SZ>>
+                                         transport::struc::shm::Builder_base::S_MAX_SERIALIZATION_SEGMENT_SZ,
+                                         // Session_base::Graceful_finisher doc header explains why true here:
+                                         true>>
 {
 public:
   // Types.
@@ -63,7 +65,8 @@ public:
   using Base = Session_impl
                  <session::Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
                                                session::schema::ShmType::JEMALLOC,
-                                               transport::struc::shm::Builder_base::S_MAX_SERIALIZATION_SEGMENT_SZ>>;
+                                               transport::struc::shm::Builder_base::S_MAX_SERIALIZATION_SEGMENT_SZ,
+                                               true>>;
 
   /// See shm::arena_lend::jemalloc::Server_session_mv counterpart for public description.
   using Arena = typename Base::Arena;
