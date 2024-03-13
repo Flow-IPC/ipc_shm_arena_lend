@@ -49,7 +49,7 @@ int main(int argc, char const * const * argv)
   FLOW_LOG_SET_CONTEXT(&(*std_logger), Flow_log_component::S_UNCAT);
 
   ipc::session::shm::arena_lend::Borrower_shm_pool_collection_repository_singleton::get_instance()
-    .set_logger(&log_logger);
+    .set_logger(&(*log_logger));
 
   try
   {
