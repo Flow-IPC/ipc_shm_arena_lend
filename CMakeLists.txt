@@ -34,7 +34,7 @@ set(PROJ_CAMEL "IpcShmArenaLend")
 set(PROJ_HUMAN "Flow-IPC (SHM-jemalloc)")
 
 set(OS_SUPPORT_MSG "Only Linux is supported for now.  For ipc_shm_arena_lend: There is much low-level code; "
-                     "much testing and possibly significant coding is needed for macOS/BSD support; "
+                     "much testing and possibly significant coding is needed for macOS/etc. support; "
                      "probably more so for Windows.")
 # Subtext: This thing is doing hairy jemalloc things at least.  Who knows what's needed?  That's not to say it's
 # incredibly hard either.

@@ -103,7 +103,8 @@ namespace ipc::shm::arena_lend::jemalloc
 #endif // #if 0
 
 #ifndef FLOW_OS_LINUX
-#  error "We are doing things here which, even if they built OK in non-Linux OS, we'd need to carefully test first."
+static_assert(false, "We are doing things here which, even if they built OK in non-Linux OS, "
+                       "we'd need to carefully test first.");
 #endif
 // Now we assume Linux which might matter at least for the next few lines.
 
