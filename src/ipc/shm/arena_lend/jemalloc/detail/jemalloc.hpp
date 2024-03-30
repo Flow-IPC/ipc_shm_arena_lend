@@ -33,7 +33,8 @@
 // Macros.
 
 #ifndef IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX
-#  error "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX macro must be defined, if even to a blank value.  Build script error?"
+static_assert(false, "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX macro must be defined, if even to a blank value.  "
+                       "Build script error?");
 #endif
 
 /**
