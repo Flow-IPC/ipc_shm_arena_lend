@@ -54,6 +54,14 @@ set(DEP_LIBS_PKG_ARG_LISTS "IpcShm ${DEP_IPC_SHM_VERSION} CONFIG")
 # (TODO: but look into the jemalloc/jemalloc-cmake GitHub repo -- what's that all about?)
 # Hence we must ensure 2 things more manually: the lib location and the include-path.
 
+# Try pkg-config if available
+pkg_check_modules(JEMALLOC REQUIRED jemalloc)
+if(JEMALLOC_FOUND)
+  set(JEMALLOC_LIB "${JEMALLOC_LIBRARIES}")
+  set(JEMALLOC_INCLUDE_PATH "${JEMALLOC_INCLUDEDIR}")
+  unset(JEMALLOC_PREFIX CACHE)
+endif()
+
 # Firstly: Finding the (static) library.  This approach is recommended by FlowLikeLib.cmake docs.
 if(NOT JEMALLOC_LIB)
   block()
