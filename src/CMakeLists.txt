@@ -131,9 +131,10 @@ function(jemalloc_config_run)
                   OUTPUT_VARIABLE output
                   OUTPUT_STRIP_TRAILING_WHITESPACE
                   COMMAND_ERROR_IS_FATAL ANY)
-  string(REGEX REPLACE ".*--with-jemalloc-prefix=([^ ]*).*" "\\1" JEMALLOC_PREFIX ${output})
-  if(${JEMALLOC_PREFIX} STREQUAL "")
-    set(${JEMALLOC_PREFIX} "${NONE}")
+  string(REGEX MATCH "--with-jemalloc-prefix=[^ ]*" JEMALLOC_PREFIX "${output}")
+  string(REPLACE "--with-jemalloc-prefix=" "" JEMALLOC_PREFIX "${JEMALLOC_PREFIX}")
+  if("${JEMALLOC_PREFIX}" STREQUAL "")
+    set(JEMALLOC_PREFIX "${NONE}")
   endif()
 
   # "Fun" quirk of CMake: a cache setting can't be straightforwardly modified from within a function.
