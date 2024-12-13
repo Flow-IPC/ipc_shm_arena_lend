@@ -131,11 +131,14 @@ public:
    * #borrow_object. The serialization contents include information on how to deserialize the object and not
    * contents of the object itself.
    *
+   * @warning Be ready for this method returning empty blob. Assuming you provided proper inputs, this indicates session
+   *          is hosed; in particular no further lending/borrowing is likely to work. Most likely the opposing process
+   *          is down or chose to close the session.
+   *
    * @param object The object to be lent.
    *
    * @return If successful, the serialized handle of the object, which should be transmitted by the caller (lender)
-   *         and deserialized by the borrower. If unsuccessful, an empty blob. This would only fail if the object
-   *         was previously registered.
+   *         and deserialized by the borrower. If unsuccessful, an empty blob.
    */
   template <typename T>
   Blob lend_object(const std::shared_ptr<T>& object);
@@ -145,11 +148,14 @@ public:
    * The caller must have prior knowledge of what type the serialized object is. When the object is released (i.e.,
    * shared pointer handle count drops to zero), the object will be deregistered and communicated back to the lender.
    *
+   * @warning Be ready for this method returning null. Assuming you provided proper inputs, this indicates the session
+   *          is hosed; in particular no further lending/borrowing is likely to work. Most likely the opposing process
+   *          is down or chose to close the session.
+   *
    * @tparam T The object type that is being borrowed.
    * @param serialized_object A serialized handle of an object, which was previously serialized via #lend_object.
    *
-   * @return If successful, the (deserialized) object. If unsuccessful, a null object. Failure would only occur if
-   *         the size of the serialized object is insufficient or the (deserialized) object was previously registered.
+   * @return If successful, the (deserialized) object. If unsuccessful, a null object.
    */
   template <typename T>
   std::shared_ptr<T> borrow_object(const Blob& serialized_object);

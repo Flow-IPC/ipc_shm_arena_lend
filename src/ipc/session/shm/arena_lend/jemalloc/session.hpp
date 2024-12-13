@@ -213,6 +213,14 @@ public:
    * However, if your code specifically counts on `*this` being a shm::arena_lend::jemalloc::Server_session, then
    * it is not wrong to rely on this knowledge.
    *
+   * ### Possibility of error ###
+   * This method returns an `.empty()` blob in the event of error.  Assuming you used it with proper inputs, this
+   * indicates the session is hosed -- most likely the opposing process is down -- and therefore your code should
+   * be ready for this absolutely possible eventuality.  The session-hosed condition *will* shortly be indicated via
+   * session on-error handler as well.  Informally we suggest handling the first sign of the session going down (whether
+   * this returning empty, borrow_object() returning null, or the session on-error handler firing) uniformly by
+   * abandoning the entire session ASAP.
+   *
    * @tparam T
    *         See #Arena.
    * @param handle
@@ -220,7 +228,7 @@ public:
    *        unspecified custom deleter logic attached.  The #Arena instance can be session_shm(),
    *        Server_session_mv::app_shm(), or a non ipc::session-managed custom #Arena, as long as it has been
    *        registered via `shm_session()->lend_arena()`.
-   * @return See above.  Never `.empty()`.
+   * @return See above.  On success, non-empty; otherwise an `.empty()` blob.
    */
   template<typename T>
   Blob lend_object(const typename Arena::template Handle<T>& handle);
@@ -229,11 +237,15 @@ public:
    * Completes the cross-process operation begun by oppsing Session_mv::lend_object() that returned `serialization`;
    * to be invoked in the intended new owner process which is operating `*this`.
    *
+   * ### Possibility of error ###
+   * Indicated by this returning null, the remarks in the lend_object() doc header "Possibility of error" section
+   * apply here equally.  Reminder: be ready for this to return null; it can absolutely happen.
+   *
    * @tparam T
    *         See lend_object().
    * @param serialization
    *        Value, not `.empty()`, returned by opposing lend_object() and transmitted bit-for-bit to this process.
-   * @return See above.  Never null.
+   * @return See above.  On success, non-null pointer; otherwise a null pointer.
    */
   template<typename T>
   typename Arena::template Handle<T> borrow_object(const Blob& serialization);

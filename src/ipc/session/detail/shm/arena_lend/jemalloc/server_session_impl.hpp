@@ -230,7 +230,7 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
     /* Do our extra stuff on top of the base vanilla Server_session_impl.  That is Base::session_shm() must
      * work (return non-null), as must app_shm() (ditto, cached in this->m_app_shm); plus lend_object()ing
      * objects constructed from either must work, and borrow_object()ing from anything the opposing process
-     * transmits must work.  The lend/borrow stuff will work if and only if session_shm() and app_shm() have
+     * transmits must work.  The lend/borrow stuff will work only if session_shm() and app_shm() have
      * been registered with the lend/borrow engine, namely shm_session().
      * Incidentally Base::shm_session() must also be available (return non-null), in case the user wants to
      * access that guy directly.
