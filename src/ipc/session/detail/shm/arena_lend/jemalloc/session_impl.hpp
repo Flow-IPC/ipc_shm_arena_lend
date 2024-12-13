@@ -417,8 +417,10 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
      * which means, similarly to the above incoming-direction handler do the following.
      *
      * Same comment and @todo(s) apply as in the handler above.  This is a little different, as it's a send error,
-     * which wouldn't be reported as a channel error; but still we figure it something went this wrong with this
-     * channel, the session master channel will be hosed too.  And even that caveat (again) only matters
+     * which wouldn't be reported as a channel error; but still we figure if something went this wrong with this
+     * channel, the session master channel will be hosed too.  Plus, any attempt to m_shm_session->lend_arena()
+     * (by us below) or ->lend_object() or ->borrow_object() (when transmitting SHM-allocated objects process-to-process
+     * in the session) will fail (returning special failure values).  And even those caveats (again) only matter
      * after *setup_done; before *setup_done we will absolutely catch the problem before exiting the present method. */
     Base::async_worker()->post([this, setup_done = std::move(setup_done), err_code]()
     {
@@ -426,7 +428,8 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
       {
         FLOW_LOG_WARNING("Session [" << * this << "]: Internal-use (for SHM) channel reported outgoing-direction "
                          "error [" << err_code << "] [" << err_code.message() << "].  This occured after SHM-setup; "
-                         "almost certainly the session master channel will catch a problem or has caught it; "
+                         "almost certainly the session master channel and/or attempts to lend/borrow "
+                         "will catch a problem or have caught it; "
                          "session will be hosed, or session opening will fail, depending on the situation.");
       }
       else
@@ -559,12 +562,7 @@ template<typename T>
 typename CLASS_JEM_SESSION_IMPL::Blob
   CLASS_JEM_SESSION_IMPL::lend_object(const typename Arena::template Handle<T>& handle)
 {
-  auto blob = shm_session()->template lend_object<T>(handle);
-
-  // @todo Maybe we should just return empty Blob?  For now doing this: SHM-classic will assert() too.  Reconsider both.
-  assert((!blob.empty()) && "Most likely `handle` did not come validly from one of `*this`-owned `Arena`s.");
-
-  return blob;
+  return shm_session()->template lend_object<T>(handle);
 }
 
 TEMPLATE_JEM_SESSION_IMPL
@@ -572,12 +570,7 @@ template<typename T>
 typename CLASS_JEM_SESSION_IMPL::Arena::template Handle<T>
   CLASS_JEM_SESSION_IMPL::borrow_object(const Blob& serialization)
 {
-  const auto obj = shm_session()->template borrow_object<T>(serialization);
-
-  // @todo Maybe we should just return nullptr?  For now doing this: SHM-classic will assert() too.  Reconsider both.
-  assert(obj && "Most likely `serialization` is invalid.");
-
-  return obj;
+  return shm_session()->template borrow_object<T>(serialization);
 }
 
 TEMPLATE_JEM_SESSION_IMPL

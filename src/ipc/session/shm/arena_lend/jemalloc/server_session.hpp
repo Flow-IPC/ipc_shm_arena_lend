@@ -70,6 +70,10 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * arena-sharing SHM-provider by definition both sides allocate and thus write to the same SHM pool(s).
  * However this comes at the expense of safety.  Further discussion is up to ipc::shm docs.)
  *
+ * @note Be ready for Session_mv::lend_object() to return an empty blob and Session_mv::borrow_object() to return
+ *       a null pointer, both indicating an error: the session is hosed (opposing process likely down).  See their
+ *       doc headers for a bit more info on this.
+ *
  * By using `shm::stl::Arena_activator<Arena>` (alias shm::arena_lend::jemalloc::Ipc_arena_activator) and
  * #Allocator (alias shm::arena_lend::jemalloc::Ipc_arena_allocator)
  * it is possible to construct and transmit not just POD (Plain Old Datatype) objects but combinations of those
