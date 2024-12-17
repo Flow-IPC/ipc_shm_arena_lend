@@ -54,6 +54,14 @@ set(DEP_LIBS_PKG_ARG_LISTS "IpcShm ${DEP_IPC_SHM_VERSION} CONFIG")
 # (TODO: but look into the jemalloc/jemalloc-cmake GitHub repo -- what's that all about?)
 # Hence we must ensure 2 things more manually: the lib location and the include-path.
 
+# Try pkg-config if available
+pkg_check_modules(JEMALLOC REQUIRED jemalloc)
+if(JEMALLOC_FOUND)
+  set(JEMALLOC_LIB "${JEMALLOC_LIBRARIES}")
+  set(JEMALLOC_INCLUDE_PATH "${JEMALLOC_INCLUDEDIR}")
+  unset(JEMALLOC_PREFIX CACHE)
+endif()
+
 # Firstly: Finding the (static) library.  This approach is recommended by FlowLikeLib.cmake docs.
 if(NOT JEMALLOC_LIB)
   block()
@@ -131,9 +139,10 @@ function(jemalloc_config_run)
                   OUTPUT_VARIABLE output
                   OUTPUT_STRIP_TRAILING_WHITESPACE
                   COMMAND_ERROR_IS_FATAL ANY)
-  string(REGEX REPLACE ".*--with-jemalloc-prefix=([^ ]*).*" "\\1" JEMALLOC_PREFIX ${output})
-  if(${JEMALLOC_PREFIX} STREQUAL "")
-    set(${JEMALLOC_PREFIX} "${NONE}")
+  string(REGEX MATCH "--with-jemalloc-prefix=[^ ]*" JEMALLOC_PREFIX "${output}")
+  string(REPLACE "--with-jemalloc-prefix=" "" JEMALLOC_PREFIX "${JEMALLOC_PREFIX}")
+  if("${JEMALLOC_PREFIX}" STREQUAL "")
+    set(JEMALLOC_PREFIX "${NONE}")
   endif()
 
   # "Fun" quirk of CMake: a cache setting can't be straightforwardly modified from within a function.
