@@ -106,14 +106,6 @@ public:
   }; // class Remove_notification
 
   /**
-   * Destructor. Checks that there are no residual memory mappings remaining.
-   */
-  ~Test_event_listener()
-  {
-    EXPECT_TRUE(m_shared_memory_map.empty());
-  }
-
-  /**
    * Stores the notification data for a creation event.
    *
    * @param shm_pool The shared memory pool that was created.

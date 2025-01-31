@@ -906,20 +906,10 @@ TEST_F(Jemalloc_shm_pool_collection_test, Interface)
     }
 
     // Destroy arenas
-    EXPECT_TRUE(check_output([&]()
-                             {
-                               collection = nullptr;
-                             },
-                             cout,
-                             form_arena_destruction_output_checks(collection)));
-
-    if (event_listener.get_num_shared_memory_objects() > 0UL)
-    {
-      EXPECT_EQ(event_listener.get_num_shared_memory_objects(), 0UL);
-      ostringstream os;
-      event_listener.print_shared_memory_objects(os);
-      FLOW_LOG_WARNING(os.str());
-    }
+    auto checks = form_arena_destruction_output_checks(collection);
+    auto output = collect_output([&]() { collection = nullptr; });
+    EXPECT_TRUE(check_output(output, checks));
+    EXPECT_TRUE(check_empty_collection_in_output(output));
   }
 
   {
