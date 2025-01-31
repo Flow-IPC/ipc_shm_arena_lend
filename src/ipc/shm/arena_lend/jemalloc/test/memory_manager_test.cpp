@@ -26,6 +26,7 @@
 #include "ipc/shm/arena_lend/jemalloc/memory_manager.hpp"
 #include "ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp"
 #include "ipc/shm/arena_lend/jemalloc/test/test_jemalloc_pages.hpp"
+#include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/test/test_logger.hpp"
 #include <bitset>
 #include <sys/mman.h>
@@ -884,7 +885,11 @@ TEST(Jemalloc_memory_manager_test, Interface)
     // Clean up arenas
     for (const auto& iter : arena_ids)
     {
-      EXPECT_NO_THROW(memory_manager.destroy_arena(iter));
+      using ipc::shm::arena_lend::test::check_empty_collection_in_output;
+      EXPECT_TRUE(check_empty_collection_in_output(ipc::test::collect_output([&memory_manager, &iter]()
+                                                                             {
+                                                                               memory_manager.destroy_arena(iter);
+                                                                             })));
       // Illegal arena indices, which does not crash today, but check if there's change in behavior
       EXPECT_THROW(memory_manager.destroy_arena(iter), std::system_error);
     }

@@ -338,15 +338,16 @@ void* Shm_pool_collection::create_shm_pool(void* address,
   return pool_address;
 }
 
-bool Shm_pool_collection::optional_remove_shm_pool(void* address,
-                                                   size_t size,
-                                                   bool committed,
-                                                   Arena_id arena_id)
+bool Shm_pool_collection::optional_remove_shm_pool([[maybe_unused]] void* address,
+                                                   [[maybe_unused]] size_t size,
+                                                   [[maybe_unused]] bool committed,
+                                                   [[maybe_unused]] Arena_id arena_id)
 {
   assert(m_started);
   // @todo - MGCOGS-385 - Create decision algorithm
-  // Always remove for now
-  return remove_shm_pool(address, size, committed, arena_id);
+  // Always retain for now
+  return false;
+  // return remove_shm_pool(address, size, committed, arena_id);
 }
 
 bool Shm_pool_collection::remove_shm_pool(void* address,

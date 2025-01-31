@@ -78,23 +78,37 @@ bool remove_shm_objects_filesystem(const std::string& prefix);
  * @return Whether all shared memory objects were successfully removed.
  */
 bool remove_test_shm_objects_filesystem();
+
+/**
+ * Checks that the output indicates that the collection contained only empty shared memory pools, if any.
+ * In particular, there is an output expectation that all shared memory pools will be output at destruction with
+ * a regular expression format of: ".*, size: SIZE,.*, remaining size: REMAINING_SIZE].*". The value SIZE is
+ * compared to REMAINING_SIZE. If there are no pools, then "Empty SHM pool map" is expected.
+ *
+ * @param output The captured output after collection destruction.
+ *
+ * @return Whether the captured output indicated that the collection contained only empty shared memory pools, if any.
+ */
+bool check_empty_collection_in_output(const std::string& output);
+
 /**
  * Sets the shared memory pool collection to nullptr, which should be the last handle to the shared pointer. This
  * should cause the destructor to display the remaining pools, which we verify to have a particular output indicating
  * empty. The log level of the message is at TRACE, so the logger must be at that severity level of lower.
  *
- * @tparam The shared memory pool collection pointer type.
+ * @tparam Owner_shm_pool_collection_pointer_type The owner shared memory pool collection pointer type.
  * @param shm_pool_collection The shared memory pool collection. The passed in parameter should be the last
  *                            reference to the shared pointer.
  * @param os The stream to check output on.
  *
  * @return Whether the collection was detected to be the last reference and empty.
  */
-template <typename Shm_pool_collection_pointer_type>
-bool ensure_empty_collection_at_destruction(Shm_pool_collection_pointer_type& shm_pool_collection,
+template <typename Owner_shm_pool_collection_pointer_type>
+bool ensure_empty_collection_at_destruction(Owner_shm_pool_collection_pointer_type& shm_pool_collection,
                                             std::ostream& os = std::cout)
 {
-  return ipc::test::check_output([&]() { shm_pool_collection = nullptr; }, os, "Empty SHM pool map");
+  std::string output = ipc::test::collect_output([&shm_pool_collection]() { shm_pool_collection = nullptr; }, os);
+  return check_empty_collection_in_output(output);
 }
 
 } // namespace ipc::shm::arena_lend::test

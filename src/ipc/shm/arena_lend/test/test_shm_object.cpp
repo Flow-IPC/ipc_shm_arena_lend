@@ -29,6 +29,7 @@
 #include <flow/log/log.hpp>
 
 using std::string;
+using std::string_view;
 using std::size_t;
 using std::stringstream;
 using std::to_string;
@@ -109,6 +110,92 @@ bool remove_test_shm_objects_filesystem()
   prefix += "_";
 
   return remove_shm_objects_filesystem(prefix);
+}
+
+bool check_empty_collection_in_output(const string& output)
+{
+  string_view output_view(output);
+
+  // Parse each shared memory pool's size and remaining size
+  constexpr string_view SHM_POOL_LOG_TOKEN = ":print_shm_pool_map";
+  constexpr string_view EMPTY_MAP_TOKEN = "Empty SHM pool map";
+  constexpr string_view SIZE_START_TOKEN = ", size: ";
+  constexpr string_view SIZE_END_TOKEN = ",";
+  constexpr string_view REMAINING_START_TOKEN = ", remaining size: ";
+  constexpr string_view REMAINING_END_TOKEN = "]";
+
+  size_t search_index = 0;
+  while ((search_index = output.find(SHM_POOL_LOG_TOKEN, search_index)) != output.npos)
+  {
+    search_index += SHM_POOL_LOG_TOKEN.size();
+
+    size_t cur_line_end = output.find("\n", search_index);
+    if (cur_line_end == output.npos)
+    {
+      // Did not parse successfully, so assume fail
+      // std::cerr << "Did not find new line token\n";
+      return false;
+    }
+    auto cur_line_size = cur_line_end - search_index;
+    auto cur_line = output_view.substr(search_index, cur_line_size);
+
+    // If we find this token we're done; otherwise, match size of pool with remaining size
+    if (cur_line.find(EMPTY_MAP_TOKEN, 0) == cur_line.npos)
+    {
+      auto cur_size_start = cur_line.find(SIZE_START_TOKEN, 0);
+      if (cur_size_start == cur_line.npos)
+      {
+        // Did not parse successfully, so assume fail
+        // std::cerr << "Did not find token: [" << SIZE_START_TOKEN << "]\n";
+        return false;
+      }
+      // Advance to the end of the token
+      cur_size_start += SIZE_START_TOKEN.size();
+
+      auto cur_size_end = cur_line.find(SIZE_END_TOKEN, cur_size_start);
+      if (cur_size_end == cur_line.npos)
+      {
+        // Did not parse successfully, so assume fail
+        // std::cerr << "Did not find token: [" << SIZE_END_TOKEN << "]\n";
+        return false;
+      }
+
+      auto cur_remaining_start = cur_line.find(REMAINING_START_TOKEN, (cur_size_end + SIZE_END_TOKEN.size()));
+      if (cur_remaining_start == cur_line.npos)
+      {
+        // Did not parse successfully, so assume fail
+        // std::cerr << "Did not find token: [" << REMAINING_START_TOKEN << "]\n";
+        return false;
+      }
+      // Advance to the end of the token
+      cur_remaining_start += REMAINING_START_TOKEN.size();
+
+      auto cur_remaining_end = cur_line.find(REMAINING_END_TOKEN, cur_remaining_start);
+      if (cur_remaining_end == cur_line.npos)
+      {
+        // Did not parse successfully, so assume fail
+        // std::cerr << "Did not find token: [" << REMAINING_END_TOKEN << "]\n";
+        return false;
+      }
+
+      std::string_view size_value = cur_line.substr(cur_size_start, (cur_size_end - cur_size_start));
+      std::string_view remaining_value = cur_line.substr(cur_remaining_start,
+                                                         (cur_remaining_end - cur_remaining_start));
+      if (size_value != remaining_value)
+      {
+        // Values don't match, so fail
+        /*
+        std::cerr << "Size [" << size_value << ", " << cur_size_start << ", " << cur_size_end << "], "
+          "remaining size [" << remaining_value << ", " << cur_remaining_start << ", " << cur_remaining_end << "]\n";
+        */
+        return false;
+      }
+    }
+
+    search_index += cur_line_size;
+  }
+
+  return true;
 }
 
 } // namespace ipc::shm::arena_lend::test
