@@ -28,6 +28,7 @@
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/test/test_common_util.hpp"
+#include <flow/test/test_common_util.hpp>
 #include <boost/filesystem.hpp>
 
 namespace fs = boost::filesystem;
@@ -46,7 +47,7 @@ using namespace ipc::shm::arena_lend::test;
 using ipc::Error_code;
 using ipc::shm::arena_lend::Shm_pool;
 using ipc::util::Process_credentials;
-using ipc::test::check_output;
+using flow::test::check_output;
 using ipc::test::get_process_creds;
 
 namespace ipc::session::shm::arena_lend::jemalloc::test
@@ -171,7 +172,7 @@ Test_shm_session_server::Test_shm_session_server(flow::log::Logger* logger,
   m_performance_expected_clients(performance_expected_clients)
 {
   Error_code ec;
-  if (!ipc::test::create_directory_if_not_exists(S_KERNEL_PERSISTENT_RUN_DIR, ec))
+  if (!flow::test::create_directory_if_not_exists(S_KERNEL_PERSISTENT_RUN_DIR, ec))
   {
     FLOW_LOG_WARNING("Could not create kernel persistent directory [" << S_KERNEL_PERSISTENT_RUN_DIR << "]");
     return;

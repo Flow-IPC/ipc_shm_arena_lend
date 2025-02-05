@@ -27,7 +27,7 @@
 #include <string>
 #include <iostream>
 #include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
-#include "ipc/test/test_common_util.hpp"
+#include <flow/test/test_common_util.hpp>
 
 namespace ipc::shm::arena_lend::test
 {
@@ -107,7 +107,7 @@ template <typename Owner_shm_pool_collection_pointer_type>
 bool ensure_empty_collection_at_destruction(Owner_shm_pool_collection_pointer_type& shm_pool_collection,
                                             std::ostream& os = std::cout)
 {
-  std::string output = ipc::test::collect_output([&shm_pool_collection]() { shm_pool_collection = nullptr; }, os);
+  std::string output = flow::test::collect_output([&shm_pool_collection]() { shm_pool_collection = nullptr; }, os);
   return check_empty_collection_in_output(output);
 }
 

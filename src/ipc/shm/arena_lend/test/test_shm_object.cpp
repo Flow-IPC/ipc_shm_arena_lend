@@ -26,6 +26,7 @@
 #include "ipc/test/test_logger.hpp"
 #include <sstream>
 #include <boost/filesystem.hpp>
+#include <flow/test/test_common_util.hpp>
 #include <flow/log/log.hpp>
 
 using std::string;
@@ -56,7 +57,7 @@ string generate_shm_object_name(const string& prefix)
 
 Owner_shm_pool_collection::Shm_object_name_generator create_shm_object_name_generator(const string& use_case_id)
 {
-  string actual_use_case_id = (use_case_id.empty() ? ipc::test::get_test_suite_name() : use_case_id);
+  string actual_use_case_id = (use_case_id.empty() ? flow::test::get_test_suite_name() : use_case_id);
   return [actual_use_case_id = std::move(actual_use_case_id)](auto&&)
          {
            return generate_shm_object_name(S_SHM_OBJECT_NAME_PREFIX + actual_use_case_id);
@@ -106,7 +107,7 @@ bool remove_shm_objects_filesystem(const string& prefix)
 bool remove_test_shm_objects_filesystem()
 {
   string prefix = S_SHM_OBJECT_NAME_PREFIX;
-  prefix += ipc::test::get_test_suite_name();
+  prefix += flow::test::get_test_suite_name();
   prefix += "_";
 
   return remove_shm_objects_filesystem(prefix);

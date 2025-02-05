@@ -26,7 +26,7 @@
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/stl/stateless_allocator.hpp"
 #include "ipc/test/test_logger.hpp"
-#include "ipc/test/test_common_util.hpp"
+#include <flow/test/test_common_util.hpp>
 #include <future>
 
 namespace chrono = std::chrono;
@@ -176,7 +176,7 @@ Object_creation_callback Test_shm_session_server_executor::many_objects_creator_
   using Timer = flow::perf::Checkpointing_timer;
   using flow::perf::Clock_type;
   using flow::perf::Clock_types_subset;
-  using ipc::test::to_underlying;
+  using flow::test::to_underlying;
 
   return
     [](const shared_ptr<Ipc_arena>& shm_arena,

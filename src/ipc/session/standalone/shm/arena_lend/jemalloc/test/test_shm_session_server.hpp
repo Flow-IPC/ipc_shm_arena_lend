@@ -30,7 +30,7 @@
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.hpp"
 #include "ipc/session/session_server.hpp"
-#include "ipc/test/test_file_util.hpp"
+#include <flow/test/test_file_util.hpp>
 #include <boost/filesystem.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc::test
