@@ -31,13 +31,15 @@
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
 #include "ipc/test/test_common_util.hpp"
 #include "ipc/test/test_logger.hpp"
+#include <flow/test/test_common_util.hpp>
 
 using std::make_shared;
 using std::shared_ptr;
 using std::string;
 using std::size_t;
 
-using namespace ipc::test;
+using ipc::test::Test_logger;
+using flow::test::get_test_suite_name;
 
 namespace ipc::shm::arena_lend::test
 {

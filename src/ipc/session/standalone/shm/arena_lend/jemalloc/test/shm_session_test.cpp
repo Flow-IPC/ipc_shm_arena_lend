@@ -42,6 +42,7 @@
 #include "ipc/shm/stl/stateless_allocator.hpp"
 #include "ipc/test/test_common_util.hpp"
 #include "ipc/test/test_logger.hpp"
+#include <flow/test/test_common_util.hpp>
 
 namespace chrono = std::chrono;
 
@@ -79,9 +80,9 @@ using ipc::shm::arena_lend::Shm_pool;
 using ipc::shm::arena_lend::jemalloc::Ipc_arena;
 using ipc::shm::arena_lend::jemalloc::Memory_manager;
 
-using ipc::test::check_output;
+using flow::test::check_output;
 using ipc::test::Test_logger;
-using ipc::test::to_underlying;
+using flow::test::to_underlying;
 using ipc::session::schema::MqType;
 
 using Mutex = std::mutex;

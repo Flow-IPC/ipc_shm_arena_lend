@@ -29,7 +29,7 @@
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/test/test_logger.hpp"
 
-using namespace ipc::test;
+using ipc::test::Test_logger;
 
 using std::make_shared;
 using std::make_unique;

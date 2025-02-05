@@ -26,6 +26,7 @@
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_shm_session_server.hpp"
 #include "ipc/test/test_common_util.hpp"
 #include <ipc/common.hpp>
+#include <flow/test/test_common_util.hpp>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-result"
 #pragma GCC diagnostic ignored "-Wnarrowing"
@@ -35,7 +36,7 @@
 
 using std::ostream;
 using std::string;
-using ipc::test::to_underlying;
+using flow::test::to_underlying;
 
 namespace ipc::session::shm::arena_lend::jemalloc::test
 {

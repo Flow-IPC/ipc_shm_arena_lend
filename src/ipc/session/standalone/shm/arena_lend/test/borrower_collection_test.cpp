@@ -27,7 +27,6 @@
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
 #include "ipc/test/test_logger.hpp"
 
-using namespace ipc::test;
 using std::shared_ptr;
 using std::size_t;
 using std::string;
@@ -64,7 +63,7 @@ TEST(Borrower_collection_test, Interface)
   // The offset of an object that will not be registered\; used for negative testing
   const size_t UNREGISTERED_OBJECT_OFFSET = 40;
 
-  Test_logger logger;
+  ipc::test::Test_logger logger;
   shared_ptr<Borrower_shm_pool_collection> borrower_shm_pool_collection =
     std::make_shared<Borrower_shm_pool_collection>(&logger, Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID);
   Borrower_collection collection(&logger, borrower_shm_pool_collection);

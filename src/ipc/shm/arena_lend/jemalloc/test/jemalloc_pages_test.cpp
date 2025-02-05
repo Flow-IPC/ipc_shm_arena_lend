@@ -27,14 +27,15 @@
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/test/test_logger.hpp"
-#include "ipc/test/test_common_util.hpp"
+#include <flow/test/test_common_util.hpp>
 #include <sys/time.h>
 #include <sys/resource.h>
 
+using ipc::test::Test_logger;
 using std::size_t;
 using std::string;
 
-using namespace ipc::test;
+using namespace flow::test;
 using namespace ipc::shm::arena_lend::test;
 
 namespace ipc::shm::arena_lend::jemalloc::test

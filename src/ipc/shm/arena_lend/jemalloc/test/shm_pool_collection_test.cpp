@@ -31,14 +31,16 @@
 #include "ipc/shm/arena_lend/test/test_event_listener.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
-#include "ipc/test/test_common_util.hpp"
+#include <flow/test/test_common_util.hpp>
 #include "ipc/test/test_logger.hpp"
+#include <flow/test/test_common_util.hpp>
 #include <iostream>
 #include <sys/mman.h>
 #include <deque>
 #include <optional>
 #include <random>
 
+using ipc::test::Test_logger;
 using std::array;
 using std::cerr;
 using std::cout;
@@ -58,7 +60,7 @@ using std::unique_ptr;
 using std::vector;
 
 using namespace ipc::shm::arena_lend::test;
-using namespace ipc::test;
+using namespace flow::test;
 
 namespace ipc::shm::arena_lend::jemalloc::test
 {

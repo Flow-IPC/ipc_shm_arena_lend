@@ -31,7 +31,8 @@
 #include "ipc/test/test_logger.hpp"
 #include <unordered_set>
 
-using namespace ipc::test;
+using ipc::test::create_fake_shared_object;
+using ipc::test::Test_logger;
 using std::make_shared;
 using std::shared_ptr;
 using std::size_t;

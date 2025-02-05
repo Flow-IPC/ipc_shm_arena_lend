@@ -41,6 +41,7 @@
 #include <unordered_set>
 #include <random>
 
+using ipc::test::Test_logger;
 using std::cerr;
 using std::make_shared;
 using std::make_unique;
@@ -51,7 +52,7 @@ using std::unique_ptr;
 using std::vector;
 using ipc::util::Permissions;
 
-using namespace ipc::test;
+using namespace flow::test;
 
 namespace ipc::shm::arena_lend::test
 {

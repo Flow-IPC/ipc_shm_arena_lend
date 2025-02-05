@@ -27,8 +27,8 @@
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 #include "ipc/shm/arena_lend/test/test_borrower.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
-#include "ipc/test/test_common_util.hpp"
 #include "ipc/test/test_logger.hpp"
+#include <flow/test/test_common_util.hpp>
 #include <sstream>
 
 using std::make_shared;
@@ -36,7 +36,8 @@ using std::shared_ptr;
 using std::string;
 using std::size_t;
 using std::cout;
-using namespace ipc::test;
+using ipc::test::Test_logger;
+using flow::test::check_output;
 
 namespace ipc::shm::arena_lend::test
 {
