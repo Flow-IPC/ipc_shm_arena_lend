@@ -142,7 +142,7 @@ public:
    * @see construct_in_arena(Arena_id, Args&&...)
    */
   template <typename T, typename... Args>
-  std::shared_ptr<T> construct(bool use_cache, Args&&... args)
+  std::shared_ptr<T> construct_maybe_thread_cached(bool use_cache, Args&&... args)
   {
     assert(m_started);
 
