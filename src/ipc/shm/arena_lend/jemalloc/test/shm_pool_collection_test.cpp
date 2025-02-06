@@ -181,15 +181,15 @@ public:
   }; // class Thread_cache_holder
 
   /**
-   * Creates an instance of this class along with its arenas. We require this, because the construct() interface
-   * requires the use of shared pointers.
+   * Creates an instance of this class along with its arenas. We require this, because the
+   * construct_maybe_thread_cached() interface requires the use of shared pointers.
    *
    * @param logger Used for logging purposes.
    * @param memory_manager The memory allocator.
    *
    * @return Upon success, a shared pointer to an instance of this class; otherwise, an empty shared pointer.
    *
-   * @see Shm_pool_collection::construct()
+   * @see Shm_pool_collection::construct_maybe_thread_cached()
    */
   static shared_ptr<Test_shm_pool_collection> create(
     flow::log::Logger* logger,
@@ -669,7 +669,7 @@ TEST_F(Jemalloc_shm_pool_collection_DeathTest, Interface)
     // Not started yet
     EXPECT_DEATH(collection->allocate(100), "m_started");
     EXPECT_DEATH(collection->allocate(100, 0UL), "m_started");
-    EXPECT_DEATH(collection->construct<int>(false, 100), "m_started");
+    EXPECT_DEATH(collection->construct_maybe_thread_cached<int>(false, 100), "m_started");
     EXPECT_DEATH(collection->construct_in_arena<int>(0UL, false, 100), "m_started");
     EXPECT_DEATH(collection->construct_in_arena<int>(0UL, true, 100), "m_started");
     EXPECT_DEATH(collection->deallocate(reinterpret_cast<void*>(0x1)), "m_started");
@@ -855,9 +855,9 @@ TEST_F(Jemalloc_shm_pool_collection_test, Interface)
                                  {
                                    if (use_default)
                                    {
-                                     foo = collection->construct<Foo>(use_cache,
-                                                                      constructor_counter,
-                                                                      destructor_counter);
+                                     foo = collection->construct_maybe_thread_cached<Foo>(use_cache,
+                                                                                          constructor_counter,
+                                                                                          destructor_counter);
                                    }
                                    else
                                    {
@@ -940,7 +940,7 @@ TEST_F(Jemalloc_shm_pool_collection_test, Interface)
         if (objects.size() == 0)
         {
           // Construct using first arena
-          cur_object = collection->construct<int>(use_cache, ARBITRARY_VALUE);
+          cur_object = collection->construct_maybe_thread_cached<int>(use_cache, ARBITRARY_VALUE);
         }
         else
         {

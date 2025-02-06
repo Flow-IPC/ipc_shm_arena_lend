@@ -164,27 +164,22 @@ public:
    * @param args The arguments passed to the constructor of T.
    *
    * @return A shared pointer to an object created in shared memory.
-   *
-   * @see construct(Arena_id, Args&&...)
    */
   template <typename T, typename... Args>
   inline Handle<T> construct(Args&&... args);
   /**
    * Performs an allocation backed by shared memory, uses the allocation to construct an object and returns a shared
    * pointer to this object. When the shared pointer has no more references, it will be destructed by this pool
-   * collection instance.
+   * collection instance. Thread cache will be used.
    *
    * @tparam T The object type to be created.
    * @tparam Args The parameter types that are passed to the constructor of T.
-   * @param use_cache Whether thread caching should be used.
    * @param args The arguments passed to the constructor of T.
    *
    * @return A shared pointer to an object created in shared memory.
-   *
-   * @see construct(Arena_id, Args&&...)
    */
   template <typename T, typename... Args>
-  inline Handle<T> construct(bool use_cache, Args&&... args);
+  inline Handle<T> construct_thread_cached(Args&&... args);
   /**
    * Adds a listener to get updates on shared memory pools. The pointer must remain valid until after it is removed.
    * The #ipc::shm::arena_lend::Owner_shm_pool_listener::notify_initial_shm_pools method will be called synchronously
@@ -352,6 +347,19 @@ private:
   /// Exclusive lock for the mutex.
   using Lock = flow::util::Lock_guard<Mutex>;
 
+  /**
+   * Impl for construct() and construct_thread_cached().
+   *
+   * @tparam T See construct().
+   * @tparam Args See construct().
+   * @param args See construct().
+   * @param use_cache Whether thread caching should be used.
+   *
+   * @return See construct().
+   */
+  template <typename T, typename... Args>
+  inline Handle<T> construct_impl(bool use_cache, Args&&... args);
+
   /// The listener for superclass events.
   Event_listener_impl m_event_listener;
   /// Protects access to #m_shm_pools and #m_listeners.
@@ -376,11 +384,17 @@ Shm_pool_collection::Arena_id Ipc_arena::get_arena_id() const
 template <typename T, typename... Args>
 Ipc_arena::Handle<T> Ipc_arena::construct(Args&&... args)
 {
-  return construct<T>(false, std::forward<Args>(args)...);
+  return construct_impl<T>(false, std::forward<Args>(args)...);
 }
 
 template <typename T, typename... Args>
-Ipc_arena::Handle<T> Ipc_arena::construct(bool use_cache, Args&&... args)
+Ipc_arena::Handle<T> Ipc_arena::construct_thread_cached(Args&&... args)
+{
+  return construct_impl<T>(true, std::forward<Args>(args)...);
+}
+
+template <typename T, typename... Args>
+Ipc_arena::Handle<T> Ipc_arena::construct_impl(bool use_cache, Args&&... args)
 {
   // Use the first (and only) arena
   auto arena_id = get_arena_id();
