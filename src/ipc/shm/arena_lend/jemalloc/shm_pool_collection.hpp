@@ -139,7 +139,7 @@ public:
    *
    * @return A shared pointer to an object created in shared memory.
    *
-   * @see construct(Arena_id, Args&&...)
+   * @see construct_in_arena(Arena_id, Args&&...)
    */
   template <typename T, typename... Args>
   std::shared_ptr<T> construct(bool use_cache, Args&&... args)
