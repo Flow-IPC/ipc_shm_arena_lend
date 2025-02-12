@@ -232,7 +232,8 @@ function(jemalloc_config_run)
   #       --with-jemalloc-prefix=
   #     Means: again, empty prefix.  Certainly this form is possible (we have seen it, namely when jemalloc's
   #     `configure` was invoked with no --with-jemalloc-prefix= arg).
-  string(REGEX MATCH "--with-jemalloc-prefix=[^ ]*" FLOW_IPC_JEMALLOC_PREFIX ${output})
+  set(pfx_cli_frag "--with-jemalloc-prefix=")
+  string(REGEX MATCH "${pfx_cli_frag}[^ ]*" FLOW_IPC_JEMALLOC_PREFIX ${output})
   # Now FLOW_IPC_JEMALLOC_PREFIX is one of:
   #   - "--with-jemalloc-prefix="
   #     Means FLOW_IPC_JEMALLOC_PREFIX should be "".  Hence should erase "--with-jemalloc-prefix=" from start.
@@ -243,7 +244,8 @@ function(jemalloc_config_run)
   #     Means (same as 1st situation).  Hence should do nothing.
   # Therefore erasing "--with-jemalloc-prefix=" from start, if it is there (else doing nothing) = a correct way
   # to get what we want.
-  string(REGEX REPLACE "^--with-jemalloc-prefix=" "" FLOW_IPC_JEMALLOC_PREFIX "${FLOW_IPC_JEMALLOC_PREFIX}")
+  string(REGEX REPLACE "^${pfx_cli_frag}" "" FLOW_IPC_JEMALLOC_PREFIX "${FLOW_IPC_JEMALLOC_PREFIX}")
+  unset(pfx_cli_frag)
 
   # Lastly follow the convention for this cache setting.
   if("${FLOW_IPC_JEMALLOC_PREFIX}" STREQUAL "")
