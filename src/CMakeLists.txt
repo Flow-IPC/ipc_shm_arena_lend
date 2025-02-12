@@ -140,7 +140,8 @@ if(NOT JEMALLOC_LIBRARIES)
                   "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
                   "(cache setting) JEMALLOC_INCLUDEDIR.")
       else()
-        message(VERBOSE "CMake uber-searcher find_library() located jemalloc lib (see below); "
+        # XXX VERBOSE
+        message(STATUS "CMake uber-searcher find_library() located jemalloc lib (see below); "
                           "though you can override this via cache setting.  XXX [${JEMALLOC_INCLUDEDIR}]")
 
         # Something XXX
