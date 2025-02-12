@@ -141,8 +141,9 @@ if(NOT JEMALLOC_LIBRARIES)
                   "(cache setting) JEMALLOC_INCLUDEDIR.")
       else()
         message(VERBOSE "CMake uber-searcher find_library() located jemalloc lib (see below); "
-                          "though you can override this via cache setting.")
+                          "though you can override this via cache setting.  XXX [${JEMALLOC_INCLUDEDIR}]")
 
+        # Something XXX
         unset(JEMALLOC_INCLUDEDIR) # XXX
         unset(JEMALLOC_INCLUDEDIR CACHE) # XXX
         find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
