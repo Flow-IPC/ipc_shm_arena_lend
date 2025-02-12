@@ -68,7 +68,7 @@ endif()
 # Can now just check JEMALLOC_LIBRARIES alone for settedness.
 
 if(NOT JEMALLOC_LIBRARIES)
-  find_package(PkgConfig REQUIRED)
+  find_package(PkgConfig) # Add REQUIRED if we get rid of the fall-back (see below if not JEMALLOC_FOUND).
   pkg_check_modules(JEMALLOC REQUIRED jemalloc)
   if(JEMALLOC_FOUND)
     if((NOT JEMALLOC_LIBRARIES) OR (NOT JEMALLOC_INCLUDEDIR))
@@ -84,13 +84,79 @@ if(NOT JEMALLOC_LIBRARIES)
     message(VERBOSE "CMake pkg-config searcher located jemalloc lib + include-dir (see below); "
                       "though you can override this via cache settings.")
   else()
-    message(FATAL_ERROR
-              "CMake pkg-config searcher could not find jemalloc: JEMALLOC_FOUND not set.  "
-              "Do not fret: Please build a jemalloc if not yet done and try again; "
-              "if it is still not found then please supply the full path to the library file (including "
-              "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
-              "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
-              "(cache setting) JEMALLOC_INCLUDEDIR.")
+    # Commenting this out for now:
+    #   message(FATAL_ERROR
+    #             "CMake pkg-config searcher could not find jemalloc: JEMALLOC_FOUND not set.  "
+    #             "Do not fret: Please build a jemalloc if not yet done and try again; "
+    #             "if it is still not found then please supply the full path to the library file (including "
+    #             "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+    #             "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+    #             "(cache setting) JEMALLOC_INCLUDEDIR.")
+
+    # Here we should be just failing: either via message(FATAL_ERROR) (commented-out) or just by using `REQUIRED`
+    # in the pkg_check_modules() call above.  Instead we do what FlowLikeLib.cmake doc header specifically recommends
+    # against: we use an extra fallback (in the form of find_library() and find_path()).  Why the exception?  Answer:
+    # We know of a case where much of jemalloc is installed (the lib, headers) but ancillary items are not,
+    # namely (as relevant here) the .pc file and (as relevant when determining FLOW_IPC_JEMALLOC_PREFIX below)
+    # the jemalloc-config binary.  That case is when using the current (as of 2/2025) jemalloc Conan recipe;
+    # its package() routine seems to clearly just install the lib and headers but not those other items.  Possibly
+    # we lack the Conan knowledge to wrangle it properly; or more likely in this case perhaps the recipe should be
+    # improved; but either way: in the official GitHub pipeline (elsewhere .github/.../main.yml) we use Conan
+    # to install jemalloc -- and then pkg_check_modules() fails above.  (find_program() for jemalloc-config also would
+    # fail; which would cause that code below to fail; which is while a conanfile.py as of this writing specifies
+    # FLOW_IPC_JEMALLOC_PREFIX manually to work-around it.)
+    #
+    # Perhaps the "right" approach would be to improve the Conan recipe; the problem is there, so why are we
+    # compensating for it here, when Conan is only one scenario, and pkg_check_modules() works great in others?
+    # So, arguably, leaving this here is a kludge due to lacking time and arguably know-how to wrangle Conan
+    # into submission.  Also there is some Conan-jemalloc-related work in progress elsewhere that might make such
+    # fixes moot and add to the confusion.  So, all that taken into account, we felt it would be harmless (if a bit
+    # ugly) to support a gimped jemalloc install by falling back to find_library() and find_path() after all.
+    #
+    # TODO: Get rid of this, once the jemalloc-Conan situation is stabilized and perhaps fixed.
+
+    message(WARNING
+              "CMake pkg-config searcher could not find jemalloc.  This is known to occur in some jemalloc installs "
+              "including as of this writing when installed via official jemalloc Conan recipe: jemalloc.pc is not "
+              "installed (nor is jemalloc-config executable which may be relevant later in the absence of "
+              "cache-setting FLOW_IPC_JEMALLOC_PREFIX).  Falling back to CMake uber-searchers find_library() and "
+              "find_path().")
+
+    block()
+      set(lib_name "jemalloc")
+      # Search for static lib specifically.  TODO: Is this needed really?  Being paranoid here?
+      if(UNIX)
+        set(lib_name "lib${lib_name}.a")
+      else()
+        message(FATAL_ERROR "Unsupported OS; please modify script to search for static jemalloc lib Windows-style.")
+      endif()
+      find_library(JEMALLOC_LIBRARIES NAMES ${lib_name})
+      if(NOT JEMALLOC_LIBRARIES)
+        message(FATAL_ERROR
+                  "Could not find jemalloc library ([${lib_name}]) location via CMake uber-searcher "
+                  "find_library().  Do not fret: Please build a jemalloc if not yet done and try again; "
+                  "if it is still not found then please supply the full path to the library file (including "
+                  "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+                  "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+                  "(cache setting) JEMALLOC_INCLUDEDIR.")
+      else()
+        message(VERBOSE "CMake uber-searcher find_library() located jemalloc lib (see below); "
+                          "though you can override this via cache setting.")
+
+        find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
+        if(NOT JEMALLOC_INCLUDEDIR)
+          message(FATAL_ERROR
+                    "Could not find jemalloc #include root location via CMake uber-searcher "
+                    "find_path().  Do not fret: Please build a jemalloc if not yet done and try again; "
+                    "if it is still not found then please supply the full path to the library file (including "
+                    "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+                    "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+                    "(cache setting) JEMALLOC_INCLUDEDIR.")
+        endif()
+        message(VERBOSE "CMake uber-searcher find_path() located jemalloc lib (see below); "
+                          "though you can override this via cache setting.")
+      endif()
+    endblock()
   endif()
 endif() # Else if (JEMALLOC_LIBRARIES): Cool, both that and JEMALLOC_INCLUDEDIR are set by user.
 
