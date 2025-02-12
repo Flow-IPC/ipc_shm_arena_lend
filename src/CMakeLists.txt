@@ -143,14 +143,27 @@ if(NOT JEMALLOC_LIBRARIES)
         message(VERBOSE "CMake uber-searcher find_library() located jemalloc lib (see below); "
                           "though you can override this via cache setting.")
 
-        # XXX
+        unset(JEMALLOC_INCLUDEDIR) # XXX
+        unset(JEMALLOC_INCLUDEDIR CACHE) # XXX
+        find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
+        if(NOT JEMALLOC_INCLUDEDIR)
+          message(FATAL_ERROR
+                    "Could not find jemalloc #include root location via CMake uber-searcher "
+                    "find_path().  Do not fret: Please build a jemalloc if not yet done and try again; "
+                    "if it is still not found then please supply the full path to the library file (including "
+                    "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+                    "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+                    "(cache setting) JEMALLOC_INCLUDEDIR.")
+        endif()
+        message(VERBOSE "CMake uber-searcher find_path() located jemalloc lib (see below); "
+                          "though you can override this via cache setting.")
       endif()
     endblock()
   endif()
 endif() # Else if (JEMALLOC_LIBRARIES): Cool, both that and JEMALLOC_INCLUDEDIR are set by user.
 
 message(STATUS "jemalloc lib location: [${JEMALLOC_LIBRARIES}].")
-message(STATUS "jemalloc header location: [${JEMALLOC_INCLUDEDIR}].") # XXX
+message(STATUS "jemalloc header location: [${JEMALLOC_INCLUDEDIR}].")
 # (^-- Don't forget to target_include_directories() it later.)  Can/must add this now per FlowLikeLib.cmake doc cmnt.
 list(APPEND DEP_LIBS ${JEMALLOC_LIBRARIES})
 
@@ -247,19 +260,7 @@ function(post_include_setup)
   list(APPEND CMAKE_MESSAGE_INDENT "- ")
 
   if(NOT JEMALLOC_INCLUDEDIR)
-    # XXX message(FATAL_ERROR "Something went wrong -- we should have determined JEMALLOC_INCLUDEDIR earlier.  Bug?")
-    find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
-    if(NOT JEMALLOC_INCLUDEDIR)
-      message(FATAL_ERROR
-                "Could not find jemalloc #include root location via CMake uber-searcher "
-                "find_path().  Do not fret: Please build a jemalloc if not yet done and try again; "
-                "if it is still not found then please supply the full path to the library file (including "
-                "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
-                "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
-                "(cache setting) JEMALLOC_INCLUDEDIR.")
-    endif()
-    message(VERBOSE "CMake uber-searcher find_path() located jemalloc include-dir [${JEMALLOC_INCLUDEDIR}]; "
-                      "though you can override this via cache setting.")
+    message(FATAL_ERROR "Something went wrong -- we should have determined JEMALLOC_INCLUDEDIR earlier.  Bug?")
   endif()
 
   # Note: PUBLIC in case some of our headers #include jemalloc stuff (which as of this writing is the case).
