@@ -140,13 +140,17 @@ if(NOT JEMALLOC_LIBRARIES)
                   "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
                   "(cache setting) JEMALLOC_INCLUDEDIR.")
       else()
-        # XXX VERBOSE
-        message(STATUS "CMake uber-searcher find_library() located jemalloc lib (see below); "
-                          "though you can override this via cache setting.  XXX [${JEMALLOC_INCLUDEDIR}]")
+        message(VERBOSE "CMake uber-searcher find_library() located jemalloc lib (see below); "
+                          "though you can override this via cache setting.")
 
-        # Something XXX
-        unset(JEMALLOC_INCLUDEDIR) # XXX
-        unset(JEMALLOC_INCLUDEDIR CACHE) # XXX
+        # Without these 2 lines find_path() fails; with both it succeeds.  I (ygoldfel) don't know
+        # *exactly* why it fails, but printing JEMALLOC_INCLUDEDIR at this stage showed an empty value.  So somehow
+        # find_path() thinks JEMALLOC_INCLUDEDIR has already been computed and to not look "again," was my hunch.
+        # So I added these 2 lines (1 of them might be enough but just to be safe...) -- because debugging this
+        # subtlety didn't seem worthwhile -- and that solved it; so that's that.  TODO: Revisit.
+        unset(JEMALLOC_INCLUDEDIR)
+        unset(JEMALLOC_INCLUDEDIR CACHE)
+
         find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
         if(NOT JEMALLOC_INCLUDEDIR)
           message(FATAL_ERROR
