@@ -68,8 +68,8 @@ endif()
 # Can now just check JEMALLOC_LIBRARIES alone for settedness.
 
 if(NOT JEMALLOC_LIBRARIES)
-  find_package(PkgConfig) # Add REQUIRED if we get rid of the fall-back (see below if not JEMALLOC_FOUND).
-  pkg_check_modules(JEMALLOC REQUIRED jemalloc)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(JEMALLOC jemalloc) # Add REQUIRED if we get rid of the fall-back (see below if not JEMALLOC_FOUND).
   if(JEMALLOC_FOUND)
     if((NOT JEMALLOC_LIBRARIES) OR (NOT JEMALLOC_INCLUDEDIR))
       message(FATAL_ERROR
