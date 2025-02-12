@@ -103,7 +103,7 @@ if(NOT JEMALLOC_LIBRARIES)
     # we lack the Conan knowledge to wrangle it properly; or more likely in this case perhaps the recipe should be
     # improved; but either way: in the official GitHub pipeline (elsewhere .github/.../main.yml) we use Conan
     # to install jemalloc -- and then pkg_check_modules() fails above.  (find_program() for jemalloc-config also would
-    # fail; which would cause that code below to fail; which is while a conanfile.py as of this writing specifies
+    # fail; which would cause that code below to fail; which is why a conanfile.py as of this writing specifies
     # FLOW_IPC_JEMALLOC_PREFIX manually to work-around it.)
     #
     # Perhaps the "right" approach would be to improve the Conan recipe; the problem is there, so why are we
@@ -412,3 +412,9 @@ post_include_setup()
 # I (ygoldfel) tried pretty hard to work around it, but it was just unwieldy for such a silly thing; so I decided
 # the default docstrings for these ("Path to a library.", etc.) were not too bad, as long as we provide clear
 # error messages and otherwise document all this elsewhere.  TODO: Revisit.  Maybe a later CMake fixed it.
+#
+# Update: Turns out find_path() and find_library() both have optional DOC arg which is perfect for this.
+# So if it were about find_*() only then mystery solved.  However we also have pkg_check_modules() in the mix.  So:
+# All that's left is to find out how this might interact with pkg_check_modules() as pertains to JEMALLOC_LIBRARIES
+# and JEMALLOC_INCLUDEDIR vars it might set: 1, are they cache variables when set by that guy?  2, can the docstring
+# be set somehow with thus guy too (if applicable)?
