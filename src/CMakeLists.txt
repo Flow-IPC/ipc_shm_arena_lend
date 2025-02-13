@@ -50,8 +50,11 @@ set(DEP_LIBS_PKG_ARG_LISTS "IpcShm ${DEP_IPC_SHM_VERSION} CONFIG")
 
 # However the jemalloc dependency requires some extra care.  Note we follow the approach recommended
 # in FlowLikeLib.cmake doc comment.  jemalloc does not export a thing so we can use find_package(), so
-# we have to follow the alternate technique of manually determining the lib-absolute-path (and shove it
-# into DEP_LIBS) and include-path (and load it via target_include_directories() call).  Let's:
+# we have to follow the alternate technique of manually determining the lib-absolute-path* (and shove it
+# into DEP_LIBS) and include-path (and load it via target_include_directories() call).  Let's do it.
+#
+# (*) Actually it can be anything that target_link_libraries() accepts: lib absolute path, bare lib name,
+#     or even link flag arg(s) like `-L... -l...`), other more obscure possibilities.
 #
 # What we want in the end: JEMALLOC_LIBRARIES (name borrowed from a thing below; you'll see) (static lib location)
 # and JEMALLOC_INCLUDEDIR (ditto) (the include-path).  We'll use the following order (which comports with
@@ -59,6 +62,9 @@ set(DEP_LIBS_PKG_ARG_LISTS "IpcShm ${DEP_IPC_SHM_VERSION} CONFIG")
 #   - If both are user-set already, use those values.  (Corner case: If only one is set but not the other, then that's
 #     confusing and an error.)  Else:
 #   - jemalloc build *does* produce a jemalloc.pc (pkg-config), so we can use pkg_check_modules().
+
+set(JEMALLOC_LIBRARIES_DOC "jemalloc lib spec: full path of .a; or plain lib name; or lib-linking flag arg(s).")
+set(JEMALLOC_INCLUDEDIR_DOC "Path of dir that contains jemalloc public headers dir jemalloc/ (sans the latter itself).")
 
 # First eliminate corner case.
 if((JEMALLOC_LIBRARIES AND (NOT JEMALLOC_INCLUDEDIR)) OR
@@ -69,7 +75,7 @@ endif()
 
 if(NOT JEMALLOC_LIBRARIES)
   find_package(PkgConfig REQUIRED)
-  pkg_check_modules(JEMALLOC jemalloc) # Add REQUIRED if we get rid of the fall-back (see below if not JEMALLOC_FOUND).
+  pkg_check_modules(JEMALLOC jemalloc)
   if(JEMALLOC_FOUND)
     if((NOT JEMALLOC_LIBRARIES) OR (NOT JEMALLOC_INCLUDEDIR))
       message(FATAL_ERROR
@@ -83,6 +89,11 @@ if(NOT JEMALLOC_LIBRARIES)
     endif()
     message(VERBOSE "CMake pkg-config searcher located jemalloc lib + include-dir (see below); "
                       "though you can override this via cache settings.")
+
+    # pkg_check_modules() does not set results as cache variables, so let's promote them accordingly, so this need
+    # not be recomputed on subsequent invocations; so it's documented in ccmake UI and CMakeCache.txt... it's good.
+    set(JEMALLOC_LIBRARIES "${JEMALLOC_LIBRARIES}" CACHE STRING ${JEMALLOC_LIBRARIES_DOC})
+    set(JEMALLOC_INCLUDEDIR "${JEMALLOC_INCLUDEDIR}" CACHE STRING ${JEMALLOC_INCLUDEDIR_DOC})
   else()
     # Commenting this out for now:
     #   message(FATAL_ERROR
@@ -130,7 +141,7 @@ if(NOT JEMALLOC_LIBRARIES)
       else()
         message(FATAL_ERROR "Unsupported OS; please modify script to search for static jemalloc lib Windows-style.")
       endif()
-      find_library(JEMALLOC_LIBRARIES NAMES ${lib_name})
+      find_library(JEMALLOC_LIBRARIES NAMES ${lib_name} DOC ${JEMALLOC_LIBRARIES_DOC})
       if(NOT JEMALLOC_LIBRARIES)
         message(FATAL_ERROR
                   "Could not find jemalloc library ([${lib_name}]) location via CMake uber-searcher "
@@ -151,7 +162,8 @@ if(NOT JEMALLOC_LIBRARIES)
         unset(JEMALLOC_INCLUDEDIR)
         unset(JEMALLOC_INCLUDEDIR CACHE)
 
-        find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
+        find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h" # That's a nice representative one.
+                  DOC ${JEMALLOC_INCLUDEDIR_DOC})
         if(NOT JEMALLOC_INCLUDEDIR)
           message(FATAL_ERROR
                     "Could not find jemalloc #include root location via CMake uber-searcher "
@@ -402,19 +414,3 @@ include("${FLOW_LIKE_TOOLS}/FlowLikeLib.cmake")
 
 # See above.
 post_include_setup()
-
-# Side discussion: The 3 (as of this writing) cache settings set/checked by
-# find_*()/pkg_check_modules()/etc. above work fine; but really it'd
-# be nice to provide docstrings for them (for example I did so for FLOW_IPC_JEMALLOC_PREFIX which participates in no
-# find_*()/etc.).  Sure, it's just for ccmake/etc. users, but it's a nice thing to do.  CMake 3.26.3 at least won't
-# let me: the `set(BLAH CACHE STRING "docstring")` is okay in and of itself, but it prevents find_*()/etc. from doing
-# anything, even when ${BLAH} is empty -- I guess if it's defined (even if blank) it skips it?  Bizarre.
-# I (ygoldfel) tried pretty hard to work around it, but it was just unwieldy for such a silly thing; so I decided
-# the default docstrings for these ("Path to a library.", etc.) were not too bad, as long as we provide clear
-# error messages and otherwise document all this elsewhere.  TODO: Revisit.  Maybe a later CMake fixed it.
-#
-# Update: Turns out find_path() and find_library() both have optional DOC arg which is perfect for this.
-# So if it were about find_*() only then mystery solved.  However we also have pkg_check_modules() in the mix.  So:
-# All that's left is to find out how this might interact with pkg_check_modules() as pertains to JEMALLOC_LIBRARIES
-# and JEMALLOC_INCLUDEDIR vars it might set: 1, are they cache variables when set by that guy?  2, can the docstring
-# be set somehow with thus guy too (if applicable)?
