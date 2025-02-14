@@ -48,45 +48,155 @@ endif()
 # Mirror above find_package() calls.  As directed omit "REQUIRED."
 set(DEP_LIBS_PKG_ARG_LISTS "IpcShm ${DEP_IPC_SHM_VERSION} CONFIG")
 
-# However the jemalloc dependency requires some extra care.
-# Its build is based on autoconf, nor does it export a ...Config.cmake or Find....cmake; so we cannot
-# find it nicely using find_package().
-# (TODO: but look into the jemalloc/jemalloc-cmake GitHub repo -- what's that all about?)
-# Hence we must ensure 2 things more manually: the lib location and the include-path.
+# However the jemalloc dependency requires some extra care.  Note we follow the approach recommended
+# in FlowLikeLib.cmake doc comment.  jemalloc does not export a thing so we can use find_package(), so
+# we have to follow the alternate technique of manually determining the lib-absolute-path* (and shove it
+# into DEP_LIBS) and include-path (and load it via target_include_directories() call).  Let's do it.
+#
+# (*) Actually it can be anything that target_link_libraries() accepts: lib absolute path, bare lib name,
+#     or even link flag arg(s) like `-L... -l...`), other more obscure possibilities.
+#
+# What we want in the end: JEMALLOC_LIBRARIES (name borrowed from a thing below; you'll see) (static lib location)
+# and JEMALLOC_INCLUDEDIR (ditto) (the include-path).  We'll use the following order (which comports with
+# FlowLikeLib.cmake doc-comment recommendations).
+#   - If both are user-set already, use those values.  (Corner case: If only one is set but not the other, then that's
+#     confusing and an error.)  Else:
+#   - jemalloc build *does* produce a jemalloc.pc (pkg-config), so we can use pkg_check_modules().
 
-# Firstly: Finding the (static) library.  This approach is recommended by FlowLikeLib.cmake docs.
-if(NOT JEMALLOC_LIB)
-  block()
-    set(lib_name "jemalloc")
-    # Search for static lib specifically.  TODO: Is this needed really?  Being paranoid here?
-    if(UNIX)
-      set(lib_name "lib${lib_name}.a")
-    else()
-      message(FATAL_ERROR "Unsupported OS; please modify script to search for static jemalloc lib Windows-style.")
-    endif()
-    find_library(JEMALLOC_LIB NAMES ${lib_name})
-    if(NOT JEMALLOC_LIB)
-      message(FATAL_ERROR
-                "Could not find jemalloc library ([${lib_name}]) location via CMake uber-searcher "
-                "find_library().  Do not fret: Please build a jemalloc if not yet done and try again; "
-                "if it is still not found then please supply the full path to the library file (including "
-                "the file itself) as the CMake knob (cache setting) JEMALLOC_LIB.")
-    endif()
-    message(VERBOSE "CMake uber-searcher find_library() located jemalloc lib (see below); "
-                      "though you can override this via cache setting.")
-  endblock()
+set(JEMALLOC_LIBRARIES_DOC "jemalloc lib spec: full path of .a; or plain lib name; or lib-linking flag arg(s).")
+set(JEMALLOC_INCLUDEDIR_DOC "Path of dir that contains jemalloc public headers dir jemalloc/ (sans the latter itself).")
+
+# First eliminate corner case.
+if((JEMALLOC_LIBRARIES AND (NOT JEMALLOC_INCLUDEDIR)) OR
+   ((NOT JEMALLOC_LIBRARIES) AND JEMALLOC_INCLUDEDIR))
+  message(FATAL_ERROR "Must set neither (recommended) or both of: JEMALLOC_LIBRARIES and JEMALLOC_INCLUDEDIR.")
 endif()
+# Can now just check JEMALLOC_LIBRARIES alone for settedness.
 
-message(STATUS "jemalloc lib location: [${JEMALLOC_LIB}].")
-list(APPEND DEP_LIBS ${JEMALLOC_LIB})
+if(NOT JEMALLOC_LIBRARIES)
+  find_package(PkgConfig REQUIRED)
+  pkg_check_modules(JEMALLOC jemalloc)
+  if(JEMALLOC_FOUND)
+    if((NOT JEMALLOC_LIBRARIES) OR (NOT JEMALLOC_INCLUDEDIR))
+      message(FATAL_ERROR
+                "CMake pkg-config searcher claims JEMALLOC_FOUND but has not set "
+                "JEMALLOC_LIBRARIES [${JEMALLOC_LIBRARIES}] and/or JEMALLOC_INCLUDEDIR [${JEMALLOC_INCLUDEDIR}].  "
+                "Do not fret: Please build a jemalloc if not yet done and try again; "
+                "if it is still not found then please supply the full path to the library file (including "
+                "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+                "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+                "(cache setting) JEMALLOC_INCLUDEDIR.")
+    endif()
+    message(VERBOSE "CMake pkg-config searcher located jemalloc lib + include-dir (see below); "
+                      "though you can override this via cache settings.")
+
+    # pkg_check_modules() does not set results as cache variables, so let's promote them accordingly, so this need
+    # not be recomputed on subsequent invocations; so it's documented in ccmake UI and CMakeCache.txt... it's good.
+    # Further, fight (via unset()s) some weird "INTERNAL" doc-less cache variables pkg_check_modules() seems to set-up.
+    block()
+      set(save_JEMALLOC_LIBRARIES "${JEMALLOC_LIBRARIES}")
+      set(save_JEMALLOC_INCLUDEDIR "${JEMALLOC_INCLUDEDIR}")
+      unset(JEMALLOC_LIBRARIES)
+      unset(JEMALLOC_LIBRARIES CACHE)
+      unset(JEMALLOC_INCLUDEDIR)
+      unset(JEMALLOC_INCLUDEDIR CACHE)
+      set(JEMALLOC_LIBRARIES "${save_JEMALLOC_LIBRARIES}" CACHE STRING "${JEMALLOC_LIBRARIES_DOC}")
+      set(JEMALLOC_INCLUDEDIR "${save_JEMALLOC_INCLUDEDIR}" CACHE STRING "${JEMALLOC_INCLUDEDIR_DOC}")
+    endblock()
+  else()
+    # Commenting this out for now:
+    #   message(FATAL_ERROR
+    #             "CMake pkg-config searcher could not find jemalloc: JEMALLOC_FOUND not set.  "
+    #             "Do not fret: Please build a jemalloc if not yet done and try again; "
+    #             "if it is still not found then please supply the full path to the library file (including "
+    #             "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+    #             "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+    #             "(cache setting) JEMALLOC_INCLUDEDIR.")
+
+    # Here we should be just failing: either via message(FATAL_ERROR) (commented-out) or just by using `REQUIRED`
+    # in the pkg_check_modules() call above.  Instead we do what FlowLikeLib.cmake doc header specifically recommends
+    # against: we use an extra fallback (in the form of find_library() and find_path()).  Why the exception?  Answer:
+    # We know of a case where much of jemalloc is installed (the lib, headers) but ancillary items are not,
+    # namely (as relevant here) the .pc file and (as relevant when determining FLOW_IPC_JEMALLOC_PREFIX below)
+    # the jemalloc-config binary.  That case is when using the current (as of Feb 2025) jemalloc Conan recipe;
+    # its package() routine seems to clearly just install the lib and headers but not those other items.  Possibly
+    # we lack the Conan knowledge to wrangle it properly; or more likely in this case perhaps the recipe should be
+    # improved; but either way: in the official GitHub pipeline (elsewhere .github/.../main.yml) we use Conan
+    # to install jemalloc -- and then pkg_check_modules() fails above.  (find_program() for jemalloc-config also would
+    # fail; which would cause that code below to fail; which is why a conanfile.py as of this writing specifies
+    # FLOW_IPC_JEMALLOC_PREFIX manually to work-around it.)
+    #
+    # Perhaps the "right" approach would be to improve the Conan recipe; the problem is there, so why are we
+    # compensating for it here, when Conan is only one scenario, and pkg_check_modules() works great in others?
+    # So, arguably, leaving this here is a kludge due to lacking time and arguably know-how to wrangle Conan
+    # into submission.  Also there is some Conan-jemalloc-related work in progress elsewhere that might make such
+    # fixes moot and add to the confusion.  So, all that taken into account, we felt it would be harmless (if a bit
+    # ugly) to support a gimped jemalloc install by falling back to find_library() and find_path() after all.
+    #
+    # TODO: Get rid of this, once the jemalloc-Conan situation is stabilized and perhaps fixed.
+
+    message(WARNING
+              "CMake pkg-config searcher could not find jemalloc.  This is known to occur in some jemalloc installs "
+              "including as of this writing when installed via official jemalloc Conan recipe: jemalloc.pc is not "
+              "installed (nor is jemalloc-config executable which may be relevant later in the absence of "
+              "cache-setting FLOW_IPC_JEMALLOC_PREFIX).  Falling back to CMake searchers find_library() and "
+              "find_path().")
+
+    block()
+      set(lib_name "jemalloc")
+      # Search for static lib specifically.  TODO: Is this needed really?  Being paranoid here?
+      if(UNIX)
+        set(lib_name "lib${lib_name}.a")
+      else()
+        message(FATAL_ERROR "Unsupported OS; please modify script to search for static jemalloc lib Windows-style.")
+      endif()
+      find_library(JEMALLOC_LIBRARIES NAMES "${lib_name}" DOC "${JEMALLOC_LIBRARIES_DOC}")
+      if(NOT JEMALLOC_LIBRARIES)
+        message(FATAL_ERROR
+                  "Could not find jemalloc library ([${lib_name}]) location via CMake searcher "
+                  "find_library().  Do not fret: Please build a jemalloc if not yet done and try again; "
+                  "if it is still not found then please supply the full path to the library file (including "
+                  "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+                  "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+                  "(cache setting) JEMALLOC_INCLUDEDIR.")
+      else()
+        message(VERBOSE "CMake searcher find_library() located jemalloc lib (see below); "
+                          "though you can override this via cache setting.")
+
+        # Without these 2 lines find_path() fails; with both it succeeds.  I (ygoldfel) don't know
+        # *exactly* why it fails, but printing JEMALLOC_INCLUDEDIR at this stage showed an empty value.  So somehow
+        # find_path() thinks JEMALLOC_INCLUDEDIR has already been computed and to not look "again," was my hunch.
+        # So I added these 2 lines (1 of them might be enough but just to be safe...) -- because debugging this
+        # subtlety didn't seem worthwhile -- and that solved it; so that's that.  TODO: Revisit.
+        unset(JEMALLOC_INCLUDEDIR)
+        unset(JEMALLOC_INCLUDEDIR CACHE)
+
+        find_path(JEMALLOC_INCLUDEDIR NAMES "jemalloc/jemalloc.h" # That's a nice representative one.
+                  DOC "${JEMALLOC_INCLUDEDIR_DOC}")
+        if(NOT JEMALLOC_INCLUDEDIR)
+          message(FATAL_ERROR
+                    "Could not find jemalloc #include root location via CMake searcher "
+                    "find_path().  Do not fret: Please build a jemalloc if not yet done and try again; "
+                    "if it is still not found then please supply the full path to the library file (including "
+                    "the file itself) as the CMake knob (cache setting) JEMALLOC_LIBRARIES; and the full path "
+                    "to the include root (the directory containing, but not equal to, jemalloc/) as the CMake knob "
+                    "(cache setting) JEMALLOC_INCLUDEDIR.")
+        endif()
+        message(VERBOSE "CMake searcher find_path() located jemalloc lib (see below); "
+                          "though you can override this via cache setting.")
+      endif()
+    endblock()
+  endif()
+endif() # Else if (JEMALLOC_LIBRARIES): Cool, both that and JEMALLOC_INCLUDEDIR are set by user.
+
+message(STATUS "jemalloc lib location: [${JEMALLOC_LIBRARIES}].")
+message(STATUS "jemalloc header location: [${JEMALLOC_INCLUDEDIR}].")
+# (^-- Don't forget to target_include_directories() it later.)  Can/must add this now per FlowLikeLib.cmake doc cmnt.
+list(APPEND DEP_LIBS ${JEMALLOC_LIBRARIES})
 
 if(LINUX)
   list(APPEND DEP_LIBS dl)
 endif()
-
-# Secondly: Finding and specifying the include-path.  As recommended in FlowLikeLib.cmake docs:
-# find_path() to find; target_include_directories() to specify; the latter *after* include()ing the .cmake.
-# Anyway for locality the function with that stuff is just below.
 
 # There is one more thing however.  See the source file ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp
 # which specifies that IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX is a macro that must be defined (to blank or otherwise)
@@ -100,7 +210,7 @@ endif()
 # We could require the user to supply the je-prefix explicitly via knob (cache setting); but ideally it can be
 # found automatically.  Indeed: jemalloc builds/exports typically a binary called jemalloc-config which can output
 # this (and other compile-time) info.  But where is that program?  In *nix it is seemingly usually in ../bin
-# off the lib location (which is the dir part of JEMALLOC_LIB supposedly); but that doesn't sound reliable
+# off the lib location (which is the dir part of JEMALLOC_LIBRARIES supposedly); but that doesn't sound reliable
 # (what if the lib is not directly in /lib but like some platform-based subdir or something? etc.).
 # Anyway!  That's what find_program() is for.  If find_program() doesn't work, they can give the location by
 # setting knob manually.  Lastly jemalloc-config can be bypassed by simply supplying the je-prefix via yet
@@ -120,70 +230,87 @@ function(jemalloc_config_run)
                 "if it is still not found then please supply the full path as the CMake knob "
                 "(cache setting) JEMALLOC_CONFIG_BIN; and if for whatever reason this program is just "
                 "not available, then you can instead manually supply the je-prefix via CMake "
-                "knob (cache setting) JEMALLOC_PREFIX (note: special value \"none\" for a blank prefix).")
+                "knob (cache setting) FLOW_IPC_JEMALLOC_PREFIX (note: special value \"none\" for a blank prefix).")
     endif()
-    message(VERBOSE "CMake uber-searcher find_program() located jemalloc-config binary (see below); "
+    message(VERBOSE "CMake searcher find_program() located jemalloc-config binary (see below); "
                       "though you can override this via cache setting.")
   endif()
   message(STATUS "jemalloc-config binary path: [${JEMALLOC_CONFIG_BIN}].")
 
-  execute_process(COMMAND ${JEMALLOC_CONFIG_BIN} --config
+  execute_process(COMMAND "${JEMALLOC_CONFIG_BIN}" --config
                   OUTPUT_VARIABLE output
                   OUTPUT_STRIP_TRAILING_WHITESPACE
                   COMMAND_ERROR_IS_FATAL ANY)
-  string(REGEX REPLACE ".*--with-jemalloc-prefix=([^ ]*).*" "\\1" JEMALLOC_PREFIX ${output})
-  if(${JEMALLOC_PREFIX} STREQUAL "")
-    set(${JEMALLOC_PREFIX} "${NONE}")
+
+  # Possibilities:
+  #   - $output might contain (among other tokens) this token:
+  #       --with-jemalloc-prefix=
+  #     Means: empty prefix.  Not actually sure this form is possible, but defensively assume it is.
+  #   - Else $output might contain (among other tokens) this token:
+  #       --with-jemalloc-prefix=(1 or more non-space chars)
+  #     Means: non-empty prefix, namely the thing after =.  Certainly this form is possible/essential.
+  #   - Else $output might contain *no* token starting with
+  #       --with-jemalloc-prefix=
+  #     Means: again, empty prefix.  Certainly this form is possible (we have seen it, namely when jemalloc's
+  #     `configure` was invoked with no --with-jemalloc-prefix= arg).
+  set(pfx_cli_frag "--with-jemalloc-prefix=")
+  string(REGEX MATCH "${pfx_cli_frag}[^ ]*" FLOW_IPC_JEMALLOC_PREFIX "${output}")
+  # Now FLOW_IPC_JEMALLOC_PREFIX is one of:
+  #   - "--with-jemalloc-prefix="
+  #     Means FLOW_IPC_JEMALLOC_PREFIX should be "".  Hence should erase "--with-jemalloc-prefix=" from start.
+  #   - "--with-jemalloc-prefix=(1 or more non-space chars)""
+  #     Means FLOW_IPC_JEMALLOC_PREFIX should be (the part after =).
+  #     Hence should erase "--with-jemalloc-prefix=" from start.
+  #   - ""
+  #     Means (same as 1st situation).  Hence should do nothing.
+  # Therefore erasing "--with-jemalloc-prefix=" from start, if it is there (else doing nothing) = a correct way
+  # to get what we want.
+  string(REGEX REPLACE "^${pfx_cli_frag}" "" FLOW_IPC_JEMALLOC_PREFIX "${FLOW_IPC_JEMALLOC_PREFIX}")
+  unset(pfx_cli_frag)
+
+  # Lastly follow the convention for this cache setting.
+  if("${FLOW_IPC_JEMALLOC_PREFIX}" STREQUAL "")
+    set(FLOW_IPC_JEMALLOC_PREFIX "${NONE}")
   endif()
 
   # "Fun" quirk of CMake: a cache setting can't be straightforwardly modified from within a function.
   # Have to do this.
-  set(JEMALLOC_PREFIX ${JEMALLOC_PREFIX} CACHE STRING ${JEMALLOC_PREFIX_DOC} FORCE)
+  set(FLOW_IPC_JEMALLOC_PREFIX "${FLOW_IPC_JEMALLOC_PREFIX}" CACHE STRING "${FLOW_IPC_JEMALLOC_PREFIX_DOC}" FORCE)
 
   message(VERBOSE "jemalloc je-prefix auto-determined via jemalloc-config execution (see below); "
                     "though you can override this via cache setting.")
 
   list(POP_BACK CMAKE_MESSAGE_INDENT)
-  message(CHECK_PASS "(Done; found via jemalloc-config execution; prefix is [${JEMALLOC_PREFIX}].)")
+  message(CHECK_PASS "(Done; found via jemalloc-config execution; prefix is [${FLOW_IPC_JEMALLOC_PREFIX}].)")
 endfunction()
 
 function(post_include_setup)
   message(CHECK_START "(Library [${PROJ}] + headers/etc.: code-gen/install targets: additional setup.)")
   list(APPEND CMAKE_MESSAGE_INDENT "- ")
 
-  if(NOT JEMALLOC_INCLUDE_PATH)
-    find_path(JEMALLOC_INCLUDE_PATH NAMES "jemalloc/jemalloc.h") # That's a nice representative one.
-    if(NOT JEMALLOC_INCLUDE_PATH)
-      message(FATAL_ERROR
-                "Could not find jemalloc #include root location via CMake uber-searcher "
-                "find_path().  Do not fret: Please build a jemalloc if not yet done and try again; "
-                "if it is still not found then please supply the full path to the include root "
-                "(the directory containing, but not equal to, jemalloc/) as the CMake knob "
-                "(cache setting) JEMALLOC_INCLUDE_PATH.")
-    endif()
-    message(VERBOSE "CMake uber-searcher find_path() located jemalloc lib (see below); "
-                      "though you can override this via cache setting.")
+  if(NOT JEMALLOC_INCLUDEDIR)
+    message(FATAL_ERROR "Something went wrong -- we should have determined JEMALLOC_INCLUDEDIR earlier.  Bug?")
   endif()
 
   # Note: PUBLIC in case some of our headers #include jemalloc stuff (which as of this writing is the case).
-  target_include_directories(${PROJ} PUBLIC ${JEMALLOC_INCLUDE_PATH})
+  target_include_directories(${PROJ} PUBLIC ${JEMALLOC_INCLUDEDIR})
 
   set(NONE "none")
-  set(JEMALLOC_PREFIX_DOC
+  set(FLOW_IPC_JEMALLOC_PREFIX_DOC
       "jemalloc API-name prefix -- special value \"${NONE}\" for empty such prefix (how your jemalloc was configured).")
-  set(JEMALLOC_PREFIX CACHE STRING ${JEMALLOC_PREFIX_DOC})
-  if(NOT JEMALLOC_PREFIX)
+  set(FLOW_IPC_JEMALLOC_PREFIX CACHE STRING "${FLOW_IPC_JEMALLOC_PREFIX_DOC}")
+  if(NOT FLOW_IPC_JEMALLOC_PREFIX)
     jemalloc_config_run() # It has to succeed; or script aborts.
   endif()
-  message(STATUS "Shall compile with -DIPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=[${JEMALLOC_PREFIX}].")
+  message(STATUS "Shall compile with -DIPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=[${FLOW_IPC_JEMALLOC_PREFIX}].")
 
   # PRIVATE, as we need only apply it to some .cpp files of ours; no exported headers require it as of this writing.
   # Note: that could change (function templates, constexpr functions, explicitly-inlined functions) in which
   # case (as detail/jemalloc.hpp also notes) we cannot use the compiler-define technique and will need to generate
   # and export a header file.  An #error will make that clear though; until then let's do the easy thing.
   block()
-    set(pfx ${JEMALLOC_PREFIX})
-    if(pfx STREQUAL ${NONE}) # The special value is b/c an actual empty value is already taken for other purposes.
+    set(pfx "${FLOW_IPC_JEMALLOC_PREFIX}")
+    if(pfx STREQUAL "${NONE}") # The special value is b/c an actual empty value is already taken for other purposes.
       set(pfx "")
     endif()
     target_compile_definitions(${PROJ} PUBLIC "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX=${pfx}")
@@ -296,12 +423,3 @@ include("${FLOW_LIKE_TOOLS}/FlowLikeLib.cmake")
 
 # See above.
 post_include_setup()
-
-# Side discussion: The 3 (as of this writing) cache settings set/checked by find_*() above work fine; but really it'd
-# be nice to provide docstrings for them (for example I did so for JEMALLOC_PREFIX which does not participate in any
-# find_*()).  Sure, it's just for ccmake/etc. users, but it's a nice thing to do.  CMake 3.26.3 at least won't really
-# let me: the `set(BLAH CACHE STRING "docstring")` is okay in and of itself, but it prevents find_*() from doing
-# anything, even when ${BLAH} is empty -- I guess if it's defined (even if blank) it skips it?  Bizarre.
-# I (ygoldfel) tried pretty hard to work around it, but it was just unwieldy for such a silly thing; so I decided
-# the default docstrings for these ("Path to a library.", etc.) were not too bad, as long as we provide clear
-# error messages and otherwise document all this elsewhere.  TODO: Revisit.  Maybe a later CMake fixed it.
