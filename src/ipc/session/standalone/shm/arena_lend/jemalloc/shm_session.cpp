@@ -384,7 +384,14 @@ bool Shm_session::send_message(const Shm_channel::Msg_out& message,
                                const Shm_channel::Msg_in* original_message)
 {
   flow::Error_code ec;
-  if (!m_shm_channel.send(message, original_message, &ec))
+  bool result;
+
+  {
+    Lock lock(m_shm_channel_mutex);
+    result = m_shm_channel.send(message, original_message, &ec);
+  }
+
+  if (!result)
   {
     FLOW_LOG_WARNING("Failed to send message on already hosed channel, operation [" << operation << "]");
     return false;
@@ -405,7 +412,13 @@ bool Shm_session::send_message(const Shm_channel::Msg_out& message,
 bool Shm_session::send_sync_request(const Shm_channel::Msg_out& message, const string& operation)
 {
   flow::Error_code ec;
-  auto response = m_shm_channel.sync_request(message, nullptr, m_shm_channel_request_timeout, &ec);
+  Shm_channel::Msg_in_ptr response;
+
+  {
+    Lock lock(m_shm_channel_mutex);
+    response = m_shm_channel.sync_request(message, nullptr, m_shm_channel_request_timeout, &ec);
+  }
+
   if (!response && !ec)
   {
     FLOW_LOG_WARNING("Failed to send request on already hosed channel, operation [" << operation << "]");

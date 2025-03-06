@@ -450,6 +450,8 @@ private:
   /// Maps an arena to an arena shared memory pool listener; this is used for receiving changes in the SHM pools.
   std::unordered_map<std::shared_ptr<ipc::shm::arena_lend::jemalloc::Ipc_arena>,
                      std::unique_ptr<Shm_pool_listener_impl>> m_shm_pool_listener_map;
+  /// Mutex to protect access to mutable operations of #m_shm_channel
+  Mutex m_shm_channel_mutex;
   /// The channel used for transmitting shared memory pool messages.
   Shm_channel& m_shm_channel;
   /// The other end's process id cached from #m_shm_channel used for registering borrowed items.
