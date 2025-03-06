@@ -387,7 +387,7 @@ bool Shm_session::send_message(const Shm_channel::Msg_out& message,
   bool result;
 
   {
-    Lock lock(m_shm_channel_mutex);
+    //XXX Lock lock(m_shm_channel_mutex);
     result = m_shm_channel.send(message, original_message, &ec);
   }
 
@@ -415,7 +415,7 @@ bool Shm_session::send_sync_request(const Shm_channel::Msg_out& message, const s
   Shm_channel::Msg_in_ptr response;
 
   {
-    Lock lock(m_shm_channel_mutex);
+    //XXX Lock lock(m_shm_channel_mutex);
     response = m_shm_channel.sync_request(message, nullptr, m_shm_channel_request_timeout, &ec);
   }
 
