@@ -29,11 +29,18 @@ find_package(CapnProto CONFIG REQUIRED)
 if(TARGET ipc_transport_structured)
   set(CAPNPC_IMPORT_DIRS ${FLOW_LIKE_META_ROOT_ipc_transport_structured}/src)
 endif()
-capnp_generate_cpp(capnp_generated_srcs capnp_generated_hdrs_ignored "schema.capnp")
+capnp_generate_cpp(capnp_generated_srcs capnp_generated_hdrs "schema.capnp")
+
+# Create a custom target that depends on the generated files.
+add_custom_target(ipc_shm_arena_lend_link_test_schema_generation
+                  DEPENDS ${capnp_generated_srcs} ${capnp_generated_hdrs})
 
 function(handle_binary name_sh)
   set(name "ipc_shm_arena_lend_link_test_${name_sh}.exec") # Must match common.cpp constant values.
   add_executable(${name} common.cpp "main_${name_sh}.cpp" ${capnp_generated_srcs})
+
+  # Add explicit dependency on schema generation; otherwise things tend to go weird with a parallelized build.
+  add_dependencies(${name} ipc_shm_arena_lend_link_test_schema_generation)
 
   target_include_directories(${name} PRIVATE ${CMAKE_CURRENT_BINARY_DIR})
 
