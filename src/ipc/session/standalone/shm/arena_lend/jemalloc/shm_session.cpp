@@ -405,7 +405,20 @@ bool Shm_session::send_message(const Shm_channel::Msg_out& message,
 bool Shm_session::send_sync_request(const Shm_channel::Msg_out& message, const string& operation)
 {
   flow::Error_code ec;
-  auto response = m_shm_channel.sync_request(message, nullptr, m_shm_channel_request_timeout, &ec);
+  Shm_channel::Msg_in_ptr response;
+
+  {
+    /* Reminder: m_shm_channel.X() concurrent calls are OK generally, except that concurrent `.sync_request()`s
+     * are not allowed. So we lock this here (and only here). Perf/responsiveness note: Our expectation is that
+     * this is non-blocking (even though .sync_request() *generally* may block): since the session is up/coming up,
+     * the opposing side shall respond ASAP. (The timeout is an optional safety measure.) This non-blockingness can be
+     * important, as this code in the case of a lend-pool msg is synchronously inside a user SHM-allocation path
+     * (but only when a new pool must be created as part of the SHM-allocation). */
+    Lock lock(m_shm_channel_sync_request_mutex);
+
+    response = m_shm_channel.sync_request(message, nullptr, m_shm_channel_request_timeout, &ec);
+  }
+
   if (!response && !ec)
   {
     FLOW_LOG_WARNING("Failed to send request on already hosed channel, operation [" << operation << "]");

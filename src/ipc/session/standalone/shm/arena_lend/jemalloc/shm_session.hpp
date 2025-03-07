@@ -450,7 +450,15 @@ private:
   /// Maps an arena to an arena shared memory pool listener; this is used for receiving changes in the SHM pools.
   std::unordered_map<std::shared_ptr<ipc::shm::arena_lend::jemalloc::Ipc_arena>,
                      std::unique_ptr<Shm_pool_listener_impl>> m_shm_pool_listener_map;
-  /// The channel used for transmitting shared memory pool messages.
+  /// Mutex to prevent `m_shm_channel.sync_request()` concurrently with itself
+  Mutex m_shm_channel_sync_request_mutex;
+  /**
+   * The channel used for transmitting shared memory pool messages.
+   * Note that by transport::struc::Channel contract it *is safe* to execute `m_shm_channel.X()`
+   * and `m_shm_channel.Y()` concurrently for all `X` and `Y` (whether they're the same method or not),
+   * except when `X` and `Y` are both `sync_request`. Hence #m_shm_channel_sync_request_mutex protects
+   * against the latter.
+   */
   Shm_channel& m_shm_channel;
   /// The other end's process id cached from #m_shm_channel used for registering borrowed items.
   const util::process_id_t m_remote_process_id;

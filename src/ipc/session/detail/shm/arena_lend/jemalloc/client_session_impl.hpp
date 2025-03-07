@@ -446,7 +446,6 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
          * on this side there's nothing further to do either.  So just report the result of init_shm(). */
         err_code = Base::init_shm(std::move(local_hndl_or_null),
                                   Shared_name::ct(to_string(util::Process_credentials::own_process_id())));
-
         if (!err_code)
         {
           /* I lied (Arnie voice from Commando).  We also need to do this for each arena (we have just the one).
