@@ -225,9 +225,13 @@ CLASS_JEM_CLI_SESSION_IMPL::Client_session_impl(flow::log::Logger* logger_ptr,
                                                 On_passive_open_channel_handler&& on_passive_open_channel_func) :
   Base(logger_ptr, cli_app_ref, srv_app_ref, std::move(on_err_func), std::move(on_passive_open_channel_func)),
   m_shm_arena_pool_listener(get_logger()),
-  m_async_cleanup_worker(get_logger(), flow::util::ostream_op_string("jem_cli_sess_cln[", *this, ']'))
+  m_async_cleanup_worker(get_logger(),
+                         // Generally follow the lead of vanilla Client_session_impl::m_async_worker ctor call here:
+                         flow::util::ostream_op_string("CSnJCl-", srv_app_ref.m_name, '<', cli_app_ref.m_name))
 {
-  m_async_cleanup_worker.start();
+  m_async_cleanup_worker.start(flow::async::reset_this_thread_pinning);
+  // Don't inherit any strange core-affinity!  ^-- Worker must float free.
+
   m_async_cleanup_worker.post([this]() { cleanup(); });
 }
 
@@ -238,9 +242,13 @@ CLASS_JEM_CLI_SESSION_IMPL::Client_session_impl(flow::log::Logger* logger_ptr,
                                                 Task_err&& on_err_func) :
   Base(logger_ptr, cli_app_ref, srv_app_ref, std::move(on_err_func)),
   m_shm_arena_pool_listener(get_logger()),
-  m_async_cleanup_worker(get_logger(), flow::util::ostream_op_string("jem_cli_sess_cln[", *this, ']'))
+  m_async_cleanup_worker(get_logger(),
+                         // @todo Copy-pasting here... not great.
+                         flow::util::ostream_op_string("CSnJCl-", srv_app_ref.m_name, '<', cli_app_ref.m_name))
 {
-  m_async_cleanup_worker.start();
+  m_async_cleanup_worker.start(flow::async::reset_this_thread_pinning);
+  // Don't inherit any strange core-affinity!  ^-- Worker must float free.
+
   m_async_cleanup_worker.post([this]() { cleanup(); });
 }
 

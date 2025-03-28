@@ -71,6 +71,8 @@ Shm_session::Shm_session(flow::log::Logger* logger,
   m_serial_task_loop(logger, ("JSSS_" + to_string(m_remote_process_id))),
   m_parallel_task_loop(logger, ("JSSP_" + to_string(m_remote_process_id)), 0)
 {
+  using flow::async::reset_this_thread_pinning;
+
   FLOW_LOG_TRACE("Constructing [" << this << "]");
 
   if (!register_expected_messages())
@@ -79,8 +81,9 @@ Shm_session::Shm_session(flow::log::Logger* logger,
   }
 
   m_borrower_repository.register_owner(m_remote_process_id);
-  m_serial_task_loop.start();
-  m_parallel_task_loop.start();
+  m_serial_task_loop.start(reset_this_thread_pinning);
+  m_parallel_task_loop.start(reset_this_thread_pinning);
+  // Don't inherit any strange core-affinity!  ^-- Workers (could be lots of them!) must float free.
 }
 
 Shm_session::~Shm_session()
