@@ -380,8 +380,14 @@ CLASS_JEM_SESSION_SRV::Session_server(flow::log::Logger* logger_ptr, const Serve
     (Server_session_dtl<Server_session_obj>(nullptr, m_srv_app_ref, transport::sync_io::Native_socket_stream())
        .base().srv_namespace()),
   m_shm_arena_pool_listener(get_logger()),
-  m_async_cleanup_worker(get_logger(), flow::util::ostream_op_string("jem_sess_srv_cln[", *this, ']'))
+  m_async_cleanup_worker(get_logger(),
+                         /* (Linux) OS thread name will truncate the this-addr snippet to 15-5=10 chars here;
+                          * which should actually just fit.  Nothing else seems particularly useful;
+                          * like in non-exotic setups our srv-name is pretty much known. */
+                         flow::util::ostream_op_string("SSvJ-", this))
 {
+  using flow::async::reset_this_thread_pinning;
+
   // Before we continue: handle that Impl ctor may have thrown (then we don't get here) or emitted error via *err_code.
   if (err_code && *err_code)
   {
@@ -389,7 +395,9 @@ CLASS_JEM_SESSION_SRV::Session_server(flow::log::Logger* logger_ptr, const Serve
   }
   // else Impl ctor executed fine.
 
-  m_async_cleanup_worker.start();
+  m_async_cleanup_worker.start(reset_this_thread_pinning);
+  // Don't inherit any strange core-affinity!  ^-- Worker must float free.
+
   m_async_cleanup_worker.post([this]() { cleanup(); });
 } // Session_server::Session_server()
 
