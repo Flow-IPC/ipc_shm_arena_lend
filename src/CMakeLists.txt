@@ -320,7 +320,7 @@ function(post_include_setup)
   message(CHECK_PASS "(Done.)")
 endfunction()
 
-# (See above if wondering why we're not auto-searching for these.  There's a good reason.)
+# (See comment in FlowLikeLib.cmake if wondering why we're not auto-searching for these.  There's a good reason.)
 # Ideally keep this in `find -s` order.  Don't forget to exclude test/.
 set(SRCS
     ipc/session/detail/shm/arena_lend/jemalloc/session_shared_name.cpp

@@ -41,7 +41,7 @@ namespace ipc::session::shm::arena_lend { }
  * Support for SHM-backed ipc::session sessions and session-servers with the SHM-jemalloc
  * (ipc::shm::arena_lend::jemalloc) provider.  See the doc header for the general ipc::session::shm namespace.
  */
-namespace ipc::session::shm::arena_lend::jemalloc
+namespace ipc::session::shm::arena_lend::jemalloc // See also ipc::session::shm::arena_lend::jemalloc::rpc {} below.
 {
 
 // Types.
@@ -170,3 +170,54 @@ std::ostream& operator<<(std::ostream& os,
                                  <S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>& val);
 
 } // namespace ipc::session::shm::arena_lend::jemalloc
+
+/**
+ * Sub-namespace containing utilities useful when working with capnp-RPC-with-zero-copy module of Flow-IPC
+ * (transport::struc::shm::rpc) -- assuming one has chosen SHM-jemalloc as the SHM-provider for such work.
+ */
+namespace ipc::session::shm::arena_lend::jemalloc::rpc
+{
+
+// Types.
+
+/**
+ * Having decided to use SHM-jemalloc SHM-provider: Suitable template argument for
+ * transport::struc::shm::rpc::Client_context, or more generally a suitable session::Client_session for
+ * transport::struc::shm::rpc::Session_vat_network.
+ *
+ * @tparam S_MQ_TYPE_OR_NONE
+ *         Whether you want the session to include a transport::Persistent_mq_handle (MQ) pipe; and if so
+ *         what kind.  The default `NONE` is best, unless you specifically intend to create side channel(s)
+ *         in addition to the one used for the central capnp-RPC session; in the latter case choose the one
+ *         that fits your performance needs best.
+ *
+ * @internal
+ * ### Rationale ###
+ * Why this value for the alias and the ones nearby?  Answer: See shm::classic::rpc::Client_session doc header;
+ * same deal here.
+ */
+template<schema::MqType S_MQ_TYPE_OR_NONE = schema::MqType::NONE>
+using Client_session = jemalloc::Client_session<S_MQ_TYPE_OR_NONE, true>;
+
+/**
+ * Having decided to use SHM-jemalloc SHM-provider: Suitable template argument for
+ * transport::struc::shm::rpc::Context_server, or more generally a suitable session::Session_server for
+ * generating `Session`s in use with transport::struc::shm::rpc::Session_vat_network.
+ *
+ * @tparam S_MQ_TYPE_OR_NONE
+ *         See #Client_session.
+ */
+template<schema::MqType S_MQ_TYPE_OR_NONE = schema::MqType::NONE>
+using Session_server = jemalloc::Session_server<S_MQ_TYPE_OR_NONE, true>;
+
+/**
+ * Having decided to use SHM-jemalloc SHM-provider: Generally a suitable session::Server_session for
+ * transport::struc::shm::rpc::Session_vat_network.
+ *
+ * @tparam S_MQ_TYPE_OR_NONE
+ *         See #Client_session.
+ */
+template<schema::MqType S_MQ_TYPE_OR_NONE = schema::MqType::NONE>
+using Server_session = jemalloc::Server_session<S_MQ_TYPE_OR_NONE, true>;
+
+} // namespace ipc::session::shm::arena_lend::jemalloc::rpc
