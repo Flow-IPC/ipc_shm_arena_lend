@@ -230,7 +230,7 @@ protected:
      * @param pool_collection The object that allocated the underlying memory from which it should be returned
      * @param arena_id The arena in which the allocation was performed
      */
-    Ipc_object_deleter_no_cache(const std::shared_ptr<Shm_pool_collection>& pool_collection,
+    Ipc_object_deleter_no_cache(std::shared_ptr<Shm_pool_collection>&& pool_collection,
                                 Arena_id arena_id);
 
     /**
@@ -259,7 +259,7 @@ protected:
      *
      * @param thread_cache The thread cache to associate the allocation with.
      */
-    Ipc_object_deleter_cache(const std::shared_ptr<Thread_cache>& thread_cache);
+    Ipc_object_deleter_cache(std::shared_ptr<Thread_cache>&& thread_cache);
 
     /**
      * Release callback executed by shared pointer destruction. The destructor for the object will be called
@@ -402,10 +402,11 @@ Ipc_arena::Handle<T> Ipc_arena::construct_impl(bool use_cache, Args&&... args)
   Ipc_arena_activator ctx(this);
   if (use_cache)
   {
-    std::shared_ptr<Thread_cache> thread_cache = get_or_create_thread_cache(arena_id);
+    auto thread_cache = get_or_create_thread_cache(arena_id);
+    const auto thread_cache_id = thread_cache->get_thread_cache_id();
     return construct_helper<T>(
-      Shm_pool_collection::allocate(sizeof(T), arena_id, thread_cache->get_thread_cache_id()),
-      Ipc_object_deleter_cache(thread_cache),
+      Shm_pool_collection::allocate(sizeof(T), arena_id, thread_cache_id),
+      Ipc_object_deleter_cache(std::move(thread_cache)),
       std::forward<Args>(args)...);
   }
   else
@@ -422,23 +423,15 @@ template <typename T>
 Collection_id Ipc_arena::get_collection_id(const std::shared_ptr<T>& object)
 {
   {
-    const auto* deleter = std::get_deleter<Ipc_object_deleter_no_cache>(object);
+    auto const * const deleter = std::get_deleter<Ipc_object_deleter_no_cache>(object);
     if (deleter != nullptr)
     {
-      auto pool_collection = deleter->get_pool_collection();
-      auto* logger = pool_collection->get_logger();
-      if ((logger != nullptr) && logger->should_log(flow::log::Sev::S_INFO, Log_component::S_SESSION))
-      {
-        FLOW_LOG_SET_CONTEXT(logger, Log_component::S_SESSION);
-        FLOW_LOG_INFO_WITHOUT_CHECKING("Pool collection " << pool_collection << ", count " <<
-                                       pool_collection.use_count());
-      }
-      return pool_collection->get_id();
+      return deleter->get_pool_collection()->get_id();
     }
   }
 
   {
-    const auto* deleter = std::get_deleter<Ipc_object_deleter_cache>(object);
+    auto const * const deleter = std::get_deleter<Ipc_object_deleter_cache>(object);
     if (deleter != nullptr)
     {
       return deleter->get_thread_cache()->get_owner()->get_id();

@@ -230,7 +230,7 @@ void* Shm_pool_collection::allocate(size_t size)
   // Use the first arena
   auto iter = m_arenas.begin();
   assert(iter != m_arenas.end());
-  return allocate(size, *iter);
+  return get_jemalloc_memory_manager()->allocate(size, *iter);
 }
 
 void* Shm_pool_collection::allocate(size_t size, Arena_id arena_id)
@@ -256,7 +256,7 @@ void Shm_pool_collection::deallocate(void* address)
   // Use the first arena
   auto iter = m_arenas.begin();
   assert(iter != m_arenas.end());
-  deallocate(address, *iter);
+  get_jemalloc_memory_manager()->deallocate(address, *iter);
 }
 
 void Shm_pool_collection::deallocate(void* address, Arena_id arena_id)
@@ -614,17 +614,17 @@ Shm_pool_collection::get_or_create_thread_cache(Arena_id arena_id)
 }
 
 Shm_pool_collection::Object_deleter_no_cache::Object_deleter_no_cache(
-  const shared_ptr<Shm_pool_collection>& pool_collection, Arena_id arena_id) :
-  m_pool_collection(pool_collection),
+  shared_ptr<Shm_pool_collection>&& pool_collection, Arena_id arena_id) :
+  m_pool_collection(std::move(pool_collection)),
   m_arena_id(arena_id)
 {
 }
 
 Shm_pool_collection::Object_deleter_cache::Object_deleter_cache(
-  const shared_ptr<Thread_cache>& thread_cache) :
-  m_thread_cache(thread_cache)
+  shared_ptr<Thread_cache>&& thread_cache) :
+  m_thread_cache(std::move(thread_cache))
 {
-  assert(thread_cache != nullptr);
+  assert(m_thread_cache != nullptr);
 }
 
 bool Shm_pool_collection::Thread_local_data::insert_cache(const shared_ptr<Thread_cache>& thread_cache)
