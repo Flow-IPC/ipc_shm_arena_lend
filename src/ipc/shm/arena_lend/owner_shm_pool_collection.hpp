@@ -266,9 +266,9 @@ protected:
   inline std::string generate_shm_object_name(pool_id_t shm_pool_id) const;
 
   /**
-   * Performs an allocation backed by shared memory, uses the allocation to construct an object and returns a shared
+   * Construct an object at a pre-allocated location in shared memory and returns a shared
    * pointer to this object. When the shared pointer has no more references, it will be destructed by this pool
-   * collection instance. The start() method must be executed prior to any calls to this.
+   * collection instance via the given deleter. The start() method must be executed prior to any calls to this.
    *
    * @tparam T The object type to be created.
    * @tparam Deleter A copy-constructible class containing operator() that performs destruction of the memory.

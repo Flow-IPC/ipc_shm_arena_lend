@@ -240,14 +240,14 @@ void Ipc_arena::Event_listener_impl::notify_removed_shm_pool(const shared_ptr<Sh
 }
 
 Ipc_arena::Ipc_object_deleter_no_cache::Ipc_object_deleter_no_cache(
-  const shared_ptr<Shm_pool_collection>& pool_collection, Arena_id arena_id) :
-  Object_deleter_no_cache(pool_collection, arena_id)
+  shared_ptr<Shm_pool_collection>&& pool_collection, Arena_id arena_id) :
+  Object_deleter_no_cache(std::move(pool_collection), arena_id)
 {
 }
 
 Ipc_arena::Ipc_object_deleter_cache::Ipc_object_deleter_cache(
-  const shared_ptr<Thread_cache>& thread_cache) :
-  Object_deleter_cache(thread_cache)
+  shared_ptr<Thread_cache>&& thread_cache) :
+  Object_deleter_cache(std::move(thread_cache))
 {
 }
 
