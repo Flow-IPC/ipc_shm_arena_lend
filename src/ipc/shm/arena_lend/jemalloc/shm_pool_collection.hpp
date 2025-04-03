@@ -113,17 +113,16 @@ public:
   {
     if (use_cache)
     {
-      std::shared_ptr<Thread_cache> thread_cache = get_or_create_thread_cache(arena_id);
-      return construct_helper<T>(allocate(sizeof(T), arena_id, thread_cache->get_thread_cache_id()),
-                                 Object_deleter_cache(thread_cache),
+      auto thread_cache = get_or_create_thread_cache(arena_id);
+      const auto thread_cache_id = thread_cache->get_thread_cache_id();
+      return construct_helper<T>(allocate(sizeof(T), arena_id, thread_cache_id),
+                                 Object_deleter_cache(std::move(thread_cache)),
                                  std::forward<Args>(args)...);
     }
-    else
-    {
-      return construct_helper<T>(allocate(sizeof(T), arena_id),
-                                 Object_deleter_no_cache(shared_from_this(), arena_id),
-                                 std::forward<Args>(args)...);
-    }
+    // else
+    return construct_helper<T>(allocate(sizeof(T), arena_id),
+                               Object_deleter_no_cache(shared_from_this(), arena_id),
+                               std::forward<Args>(args)...);
   }
 
   /**
@@ -542,7 +541,7 @@ protected:
      * @param pool_collection The object that allocated the underlying memory from which it should be returned.
      * @param arena_id The arena in which the allocation was performed.
      */
-    Object_deleter_no_cache(const std::shared_ptr<Shm_pool_collection>& pool_collection, Arena_id arena_id);
+    Object_deleter_no_cache(std::shared_ptr<Shm_pool_collection>&& pool_collection, Arena_id arena_id);
 
     /**
      * Release callback executed by shared pointer destruction. The destructor for the object will be called
@@ -554,7 +553,13 @@ protected:
     template <typename T>
     void operator()(T* p)
     {
-      // Call object's destructor (works for primitives)
+      /* Call object's destructor (works for primitives).
+       * Key context: an allocator-equipped T (usually STL-compliant container) here will (in T::~T())
+       * call-through to m_pool_collection->deallocate() for each buffer that T had allocated for itself
+       * (e.g., for vector<> internal buffer; for list<> the various nodes). In the process more destructors
+       * may be invoked which would quite possibly do more dtor calling and thus deallocate()ing. And so on.
+       * Hence the present operator()() is called at just the outer layer, then the inner deallocations (if any)
+       * happen, and then we call deallocate() on the outer object's memory, last-thing, just below. */
       p->~T();
       m_pool_collection->deallocate(p, m_arena_id);
     }
@@ -591,7 +596,7 @@ protected:
      *
      * @param thread_cache The thread cache to associate the allocation with.
      */
-    Object_deleter_cache(const std::shared_ptr<Thread_cache>& thread_cache);
+    Object_deleter_cache(std::shared_ptr<Thread_cache>&& thread_cache);
 
     /**
      * Release callback executed by shared pointer destruction. The destructor for the object will be called
@@ -603,7 +608,7 @@ protected:
     template <typename T>
     void operator()(T* p)
     {
-      // Call object's destructor (works for primitives)
+      // Call object's destructor (works for primitives). See more key notes in Object_deleter_no_cache comment.
       p->~T();
       m_thread_cache->get_owner()->deallocate(p,
                                               m_thread_cache->get_arena_id(),
