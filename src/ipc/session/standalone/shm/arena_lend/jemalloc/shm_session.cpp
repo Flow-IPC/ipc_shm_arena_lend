@@ -26,6 +26,7 @@
 #include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/transport/struc/channel.hpp"
+#include <cstring>
 
 using ipc::shm::arena_lend::jemalloc::Ipc_arena;
 
@@ -346,11 +347,14 @@ bool Shm_session::deserialize_handle(const Blob& blob,
     return false;
   }
 
-  const uint8_t* blob_ptr = blob.const_data();
-  const auto object_handle = reinterpret_cast<const Shm_object_handle*>(blob_ptr);
-  collection_id = object_handle->m_collection_id;
-  shm_pool_id = object_handle->m_pool_id;
-  pool_offset = object_handle->m_pool_offset;
+  /* memcpy() it out of there: the source address may not be aligned.  (In many APIs such things are assumed as a
+   * matter of course, but as `blob` may be IPCed-over to us via any technique, we're being
+   * extra defensive.) */
+  Shm_object_handle object_handle;
+  std::memcpy(&object_handle, blob.const_data(), sizeof(object_handle));
+  collection_id = object_handle.m_collection_id;
+  shm_pool_id = object_handle.m_pool_id;
+  pool_offset = object_handle.m_pool_offset;
 
   return true;
 }
