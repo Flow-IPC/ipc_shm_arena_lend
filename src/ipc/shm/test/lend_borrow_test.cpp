@@ -76,7 +76,7 @@ namespace
 
   ipc::test::Test_logger g_logger_obj;
   Logger* const g_logger_console = &g_logger_obj;
-#if 1
+#if 0 //XXXno
   Logger* const g_logger = nullptr; // Normal: Flow-IPC objects silent.
 #else
   Logger* const g_logger = &g_logger_obj; // Flip for debugging.
