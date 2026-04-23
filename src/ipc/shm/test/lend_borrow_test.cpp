@@ -185,7 +185,7 @@ namespace
     ASSERT_NE(h_cli.get(), nullptr);
 
     const auto blob = cli.lend_object(h_cli);
-    EXPECT_GT(blob.size(), 0u);
+    EXPECT_FALSE(blob.empty());
 
     /* Normally `blob` would be transmitted over (any) IPC between processes here; we aren't testing
      * that and can cheat by literally using the same one. */
@@ -223,7 +223,7 @@ namespace
     ASSERT_NE(h_cli.get(), nullptr);
 
     const auto blob = shm_engine<SHM_TYPE>(cli)->lend_object(h_cli);
-    EXPECT_GT(blob.size(), 0u);
+    EXPECT_FALSE(blob.empty());
     auto h_srv = shm_engine<SHM_TYPE>(srv)->template borrow_object<Payload>(blob);
     ASSERT_NE(h_srv.get(), nullptr);
     EXPECT_EQ(*h_srv, S_CANARY);
@@ -246,7 +246,7 @@ namespace
     ASSERT_NE(h_cli.get(), nullptr);
 
     const auto blob = shm_engine<SHM_TYPE>(cli)->lend_object(h_cli);
-    ASSERT_GT(blob.size(), 0u);
+    EXPECT_FALSE(blob.empty());
     const auto truncated = make_resized_copy(blob, blob.size() - 1);
     auto h_srv = shm_engine<SHM_TYPE>(srv)->template borrow_object<Payload>(truncated);
     EXPECT_EQ(h_srv.get(), nullptr);
@@ -269,7 +269,7 @@ namespace
     ASSERT_NE(h_cli.get(), nullptr);
 
     const auto blob = shm_engine<SHM_TYPE>(cli)->lend_object(h_cli);
-    ASSERT_GT(blob.size(), 0u);
+    EXPECT_FALSE(blob.empty());
     const auto padded = make_resized_copy(blob, blob.size() + 4);
     auto h_srv = shm_engine<SHM_TYPE>(srv)->template borrow_object<Payload>(padded);
     EXPECT_EQ(h_srv.get(), nullptr);
@@ -293,7 +293,7 @@ namespace
     ASSERT_NE(h_cli.get(), nullptr);
 
     const auto blob = shm_engine<SHM_TYPE>(cli)->lend_object(h_cli);
-    ASSERT_GT(blob.size(), 0u);
+    EXPECT_FALSE(blob.empty());
     const auto shifted = make_misaligned_copy(blob, 1);
     ASSERT_EQ(shifted.size(), blob.size());
     auto h_srv = shm_engine<SHM_TYPE>(srv)->template borrow_object<Payload>(shifted);
