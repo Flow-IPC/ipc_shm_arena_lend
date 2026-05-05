@@ -143,6 +143,12 @@ public:
     Borrower_shm_pool_collection_repository_singleton::get_instance().set_logger(get_logger());
   }
 
+  ~Shm_session_test() override
+  {
+    // Must remember to remove our stuff from singleton so as to not mess over subsequent tests.
+    Borrower_shm_pool_collection_repository_singleton::get_instance().set_logger(nullptr);
+  }
+
   /**
    * Retrieves the logger used in log messages, especially utilized with macros.
    *
