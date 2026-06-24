@@ -353,6 +353,22 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
                              (get_logger(), nickname, std::move(local_hndl))),
                         transport::struc::Channel_base::S_SERIALIZE_VIA_HEAP,
                         Base::master_channel_const().session_token());
+
+  /* Please see Native_socket_stream::remote_peer_process_credentials() doc header for explanation of this.
+   * (Technically this is only necessary server-side; client-side the values will already be correct, because
+   * the connect_pair() call occurred on the opposing-to-us side; and hence will overwrite X with X -- a no-op.
+   * Nevertheless doing it this way is (1) simpler code; (2) perf-wise of negligible impact; and (3) more
+   * maintainable.  In any case master_channel_const().owned_channel().remote_peer_process_credentials() has
+   * correct values, so shoving them into m_shm_channel is not-wrong.) */
+  {
+    Error_code err_code;
+    m_shm_channel->owned_channel_mutable()->blob_snd()->remote_peer_process_credentials
+      (Base::master_channel_const().owned_channel().remote_peer_process_credentials(&err_code));
+
+    assert((!err_code) && "By contract that should only fail if the socket got hosed via transmission; but "
+                          "it is a local socket we just established; so there is no way.");
+  }
+
   m_shm_channel->start([this, setup_done](const Error_code& err_code) mutable
   {
     // We are in a struc::Channel thread (not our thread W).
