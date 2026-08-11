@@ -2236,7 +2236,7 @@ bool Thread_lcl_obj_db_admin<Shm_arena_t>::forgetting_shm_arena(collection_id_t 
 
       saved_on_done_func = std::move(on_done_func);
 
-      for (const auto [obj_db, nil] : obj_db_per_thread)
+      for (const auto& [obj_db, nil] : obj_db_per_thread)
       {
         db_set.insert(obj_db);
         /* It means: "Yo, `obj_db`, if you've got any stuff pertaining to arena collection_id, remove/deinit it;
@@ -2249,7 +2249,7 @@ bool Thread_lcl_obj_db_admin<Shm_arena_t>::forgetting_shm_arena(collection_id_t 
     /* For each extant _admin set up flag to trigger forgetting-of-arena in that guy's thread opportunistically.
      * Except that if we are in the thread corresponding to one of the `_admin`s, we can do that part synchronously.
      * If that happens, *and* it's the only one, then we are done and therefore done_synchronously=true. */
-    for (const auto [obj_db, nil] : obj_db_per_thread)
+    for (const auto& [obj_db, nil] : obj_db_per_thread)
     {
       if (this_thread_unique_token() == obj_db->m_thread_token)
       {
@@ -3226,7 +3226,7 @@ void Thread_lcl_obj_db_client<Shm_arena_t>::forgetting_shm_arena(collection_id_t
       assert(db_set.empty()
              && "forgetting_shm_arena() called twice on the same owner+collection ID?  Bug?");
 
-      for (const auto [obj_db, nil] : obj_db_per_thread)
+      for (const auto& [obj_db, nil] : obj_db_per_thread)
       {
         db_set.insert(obj_db);
         /* It means: "Yo, `obj_db`, if you've got any stuff pertaining to arena collection_id, remove/deinit it;
@@ -3234,7 +3234,7 @@ void Thread_lcl_obj_db_client<Shm_arena_t>::forgetting_shm_arena(collection_id_t
       }
     }); // s_state.m_arenas_to_forget_map.while_locked()
 
-    for (const auto [obj_db, nil] : obj_db_per_thread)
+    for (const auto& [obj_db, nil] : obj_db_per_thread)
     {
       obj_db->m_forget_resources_requested_poll_flag.arm_next_poll();
     }
