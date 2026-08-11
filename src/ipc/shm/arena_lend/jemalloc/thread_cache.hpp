@@ -673,12 +673,16 @@ void Thread_cache::destroy_arena_safely(arena_id_t arena_id, const flow::log::Lo
       }
     }); // s_state.m_arenas_death_row_map.while_locked()
 
-    for (const auto& [cache, nil] : state_per_thread)
+    for (const auto& cache_and_nil : state_per_thread)
     {
-      const auto& cache_ref = *cache;
+      /* Alias: FLOW_LOG_..._LOCKED() messages below and other code may not name structured bindings (C++17).
+       * @todo Move to C++20 => Use bindings after all for pithiness.  (Some C++17-mode compilers already OK; not all.)
+       *       Remove the @warning about this from doc header of FLOW_LOG_WARNING_LOCKED() (in Flow, not Flow-IPC). */
+      auto* const cache = cache_and_nil.first;
+
       if (this_thread_unique_token() == cache->thread_token())
       {
-        FLOW_LOG_INFO_LOCKED("Jem_tcache[" << cache_ref << "]: "
+        FLOW_LOG_INFO_LOCKED("Jem_tcache[" << *cache << "]: "
                              "There was a typically-cross-thread tcache-destruction request "
                              "(arena [" << arena_id << "] being destroyed); "
                              "but we are in the relevant thread *now*, so we shall simply tcache-destroy the "
@@ -717,7 +721,7 @@ void Thread_cache::destroy_arena_safely(arena_id_t arena_id, const flow::log::Lo
           {
             const auto id = it_arena_and_tcache->second;
             FLOW_LOG_INFO_LOCKED
-              ("Jem_tcache[" << cache_ref << "]: Indeed we do hold tcache [" << id << "] for that arena.  "
+              ("Jem_tcache[" << *cache << "]: Indeed we do hold tcache [" << id << "] for that arena.  "
                "Proceeding with destruction to cross ourselves off the list.  If that makes "
                "the list empty (does it? = [" << (!on_done_func.empty()) << "]), "
                "we shall imminently destroy arena.");
