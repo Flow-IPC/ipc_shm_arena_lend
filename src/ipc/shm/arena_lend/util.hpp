@@ -22,60 +22,17 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
-#include "ipc/shm/arena_lend/borrower_shm_pool_repository.hpp"
+/// @file
+#pragma once
 
-using std::shared_ptr;
-using std::string;
+#include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
 
 namespace ipc::shm::arena_lend
 {
 
-shared_ptr<Shm_pool> Borrower_shm_pool_repository::increment_use(pool_id_t shm_pool_id)
-{
-  Lock lock(get_shm_pool_maps_mutex());
+// Types.
 
-  auto& shm_pool_id_map = get_shm_pool_id_map();
-  const auto iter = shm_pool_id_map.find(shm_pool_id);
-  if (iter == shm_pool_id_map.end())
-  {
-    return nullptr;
-  }
-
-  auto& shm_pool_data = iter->second;
-  shm_pool_data.increment_use();
-  return shm_pool_data.get_shm_pool();
-}
-
-shared_ptr<Shm_pool> Borrower_shm_pool_repository::erase_or_decrement_use(pool_id_t shm_pool_id,
-                                                                          unsigned int& use_count)
-{
-  Lock lock(get_shm_pool_maps_mutex());
-
-  auto& shm_pool_id_map = get_shm_pool_id_map();
-  auto iter = shm_pool_id_map.find(shm_pool_id);
-  if (iter == shm_pool_id_map.end())
-  {
-    return nullptr;
-  }
-
-  auto& shm_pool_data = iter->second;
-  // Save SHM pool handle before iterator is invalidated
-  auto shm_pool = shm_pool_data.get_shm_pool();
-  if (shm_pool_data.get_use_count() <= 1)
-  {
-    // Remove the entry
-    use_count = 0;
-    // Iterator is now invalid
-    erase_locked(iter);
-  }
-  else
-  {
-    // Decrement the counter
-    shm_pool_data.decrement_use();
-    use_count = shm_pool_data.get_use_count();
-  }
-
-  return shm_pool;
-}
+/// Tag type for the Action_registry that fans out `set_logger()` calls to all arena-lend singletons.
+struct Set_logger_tag {};
 
 } // namespace ipc::shm::arena_lend

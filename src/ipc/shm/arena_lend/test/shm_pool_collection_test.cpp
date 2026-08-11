@@ -121,8 +121,18 @@ TEST_F(Shm_pool_collection_DeathTest, Interface)
 
   EXPECT_DEATH((*static_cast<char*>(read_pool->get_address()) = 'c'), ".*");
 
-  EXPECT_TRUE(collection.remove_shm_object(S_DEATH_TEST_SHM_OBJECT_NAME));
+  // (pool->get_name() = the full as-created object name; no need to recompose it by hand.)
+  EXPECT_TRUE(collection.remove_shm_object(pool->get_name()));
 }
+
+// XXX apropos of nothing - tests now seem to be leaving stuff behind
+// - (update) cleaned everything up that we know of, but some tests are still disabled, and some will be newly written
+// - so check `ls -l /dev/shm /dev/mqueue /tmp/var/run` and CWD after unit-test run, after test-set is finalized. Leave XXX in until then.
+
+//XXX (random placement for this xxx, but w/e) Doxygen: Once it runs clean (should be now), see if we can get some of Yurified and/or key SHMJ parts into
+//official Doxygen run; right now they're all deliberately skipped due to echan non-compliance, but since heavy Yuri meddling and Yurification the key
+//things should be compliant (but possibly might link to non-compliant items, so the links will not resolve... we will see). I was thinking
+// Ipc_arena + nearby _fwd.hpp aliases maybe; Shm_session + ditto; and stats.
 
 /// Tests for the public and protected interfaces.
 TEST_F(Shm_pool_collection_test, Interface)
@@ -243,7 +253,7 @@ TEST_F(Shm_pool_collection_test, Multiprocess)
     Test_borrower borrower;
     EXPECT_EQ(0, borrower.execute_read_check(collection.get_id(),
                                              pool->get_id(),
-                                             pool->get_name(),
+                                             collection.get_pool_name_base().str(),
                                              get_pool_size(),
                                              0,
                                              S_ARBITRARY_DATA));

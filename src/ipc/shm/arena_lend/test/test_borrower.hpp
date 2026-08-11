@@ -24,8 +24,9 @@
 
 #pragma once
 
-#include <string>
 #include "ipc/shm/arena_lend/shm_pool_collection.hpp"
+#include "ipc/shm/arena_lend/shm_pool.hpp"
+#include <string>
 
 namespace ipc::shm::arena_lend::test
 {
@@ -42,16 +43,18 @@ public:
    * Runs a process that opens a shared memory pool and makes sure the data matches expected.
    *
    * @param shm_pool_collection_id The identifier for the shared memory collection.
-   * @param shm_object_name The name of the shared memory object to open.
+   * @param shm_pool_id The identifier for the pool to open within that collection.
+   * @param shm_object_name_base The collection's pool-name-base; the actual SHM-object name to open is
+   *                             computed from it plus `shm_pool_id` (owner and borrower agree on that scheme).
    * @param shm_object_size The size of the shared memory.
    * @param data_offset The offset from the base address of the shared memory region to read data from.
    * @param data The expected data in the shared memory.
    *
    * @return Upon success, 0; otherwise, non-zero.
    */
-  int execute_read_check(Collection_id shm_pool_collection_id,
+  int execute_read_check(collection_id_t shm_pool_collection_id,
                          pool_id_t shm_pool_id,
-                         const std::string& shm_object_name,
+                         const std::string& shm_object_name_base,
                          std::size_t shm_object_size,
                          std::size_t data_offset,
                          const std::string& data);
@@ -65,7 +68,7 @@ public:
   /// The shared memory pool id command-line parameter.
   static const std::string S_SHM_POOL_ID_PARAM;
   /// The shared memory object name command-line parameter.
-  static const std::string S_SHM_OBJECT_NAME_PARAM;
+  static const std::string S_SHM_OBJECT_NAME_BASE_PARAM;
   /// The shared memory object size command-line parameter.
   static const std::string S_SHM_OBJECT_SIZE_PARAM;
   /// The offset from the base of the shared memory object where the data resides command-line parameter.

@@ -24,20 +24,19 @@
 
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_shm_session_server.hpp"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_shm_session.hpp"
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/test/test_common_util.hpp"
 #include <flow/test/test_common_util.hpp>
 #include <boost/filesystem.hpp>
+#include <signal.h>
+#include <unistd.h>
 
 namespace fs = boost::filesystem;
 
-using std::atomic;
 using std::make_shared;
 using std::ostream;
 using std::shared_ptr;
-using std::static_pointer_cast;
 using std::string;
 using std::unique_ptr;
 using std::weak_ptr;
@@ -54,15 +53,14 @@ namespace ipc::session::shm::arena_lend::jemalloc::test
 {
 
 using ipc::session::schema::MqType;
-using ipc::transport::struc::Channel;
-using ipc::util::Fine_duration;
 using Blob = Shm_session::Blob;
 using Fs_path = Test_shm_session_server::Fs_path;
 
 // Static constants
 const string Test_shm_session_server::S_CLASS_NAME("Test_shm_session_server");
-const string Test_shm_session_server::S_CLIENT_APP_NAME("Test_client");
-const string Test_shm_session_server::S_SERVER_APP_NAME("Test_server");
+// (Reminder: Session_server et al does not like underscores or other separator characters in these.)
+const string Test_shm_session_server::S_CLIENT_APP_NAME("testShmSessionCli");
+const string Test_shm_session_server::S_SERVER_APP_NAME("testShmSessionSrv");
 const Fs_path Test_shm_session_server::S_TEMP_DIR("/tmp");
 const string Test_shm_session_server::S_SERVER_PROGRAM_NAME(
   "libipc_test_jemalloc_shm_session_server.exec");
@@ -70,26 +68,19 @@ const Fs_path Test_shm_session_server::S_KERNEL_PERSISTENT_RUN_DIR(S_TEMP_DIR / 
 const string Test_shm_session_server::S_OBJECT_DESC("Object description");
 // This value must coincide with the log messages in Shm_session
 const string Test_shm_session_server::S_SESSION_DISCONNECTION_PHRASE("Disconnected,");
-const Fine_duration Test_shm_session_server::S_SHM_CHANNEL_RESPONSE_TIMEOUT = boost::chrono::seconds(1);
-void* Test_shm_session_server::S_ERROR_HANDLING_SHM_POOL_ADDRESS = reinterpret_cast<void*>(0xBEEF);
-// This value must coincide with the log messages in Shm_session
-const string Test_shm_session_server::S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE(
-  "Remote peer failed to complete action");
-// This value must coincide with the log messages in Shm_session, Shm_session_data and Lender_collection
-const string Test_shm_session_server::S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE(
-  "Could not register duplicate");
-// This value must coincide with the log messages in Lender_collection
-const string Test_shm_session_server::S_ERROR_HANDLING_UNREGISTERED_MESSAGE_PHRASE(
-  "Could not deregister unregistered");
-// This value must coincide with the log messages in Shm_session_data
-const string Test_shm_session_server::S_ERROR_HANDLING_UNREGISTERED_COLLECTION_MESSAGE_PHRASE(
-  "Could not find lender collection");
 
 // Static method
 Fs_path Test_shm_session_server::get_program_path(pid_t process_id)
 {
   Process_credentials creds(process_id, get_process_creds().user_id(), get_process_creds().group_id());
   return creds.process_invoked_as();
+}
+
+// Static method
+void Test_shm_session_server::remove_kernel_persistent_state()
+{
+  boost::system::error_code err_code_ignored;
+  fs::remove_all(S_KERNEL_PERSISTENT_RUN_DIR, err_code_ignored);
 }
 
 // Static method
@@ -102,7 +93,7 @@ const Fs_path& Test_shm_session_server::get_server_path()
 // Static method
 Fs_path Test_shm_session_server::form_server_path()
 {
-  return (get_program_path(get_process_creds().process_id()).parent_path() / S_SERVER_PROGRAM_NAME);
+  return get_program_path(get_process_creds().process_id()).parent_path() / S_SERVER_PROGRAM_NAME;
 }
 
 // Static method
@@ -145,32 +136,25 @@ Test_shm_session_server::Test_shm_session_server(flow::log::Logger* logger,
                                                  Operation_mode operation_mode,
                                                  size_t performance_expected_clients) :
   flow::log::Log_context(logger, Log_component::S_TEST),
-  m_task_loop(get_logger(), (S_SERVER_APP_NAME + "_loop")),
-  m_arena_shm_pool_listener(get_logger()),
-  m_memory_manager(make_shared<Memory_manager>(get_logger())),
+  /* PID-qualify the loop (and thus its thread's) nickname: an external-process test's child-server threads
+   * are otherwise indistinguishable, in the shared console output, from an in-process server's. */
+  m_task_loop(get_logger(),
+              (S_SERVER_APP_NAME + "_loop_" + std::to_string(get_process_creds().process_id()))),
+  m_memory_manager(make_shared<Memory_manager>()),
   m_shm_arena(Test_ipc_arena::create(get_logger(),
                                      m_memory_manager,
-                                     create_shm_object_name_generator(S_CLASS_NAME))),
+                                     create_test_pool_name_base(S_CLASS_NAME))),
   m_test_shm_pool_committed(false),
+  m_object_deleted_relay(make_shared<Object_deleted_relay>()),
   m_test_object_deleted(false),
   m_client_process_id(client_process_id),
   m_operation_mode(operation_mode),
   m_object_creation_callback(std::move(object_creation_callback)),
   m_result_callback(std::move(result_callback)),
-  m_error_handling_shm_arena(
-    ((operation_mode == Operation_mode::S_ERROR_HANDLING) ?
-     Test_ipc_arena::create(get_logger(),
-                            m_memory_manager,
-                            create_shm_object_name_generator(S_CLASS_NAME)) :
-     nullptr)),
-  m_error_handling_shm_pool(
-    new Shm_pool(ipc::shm::arena_lend::detail::Shm_pool_offset_ptr_data_base::generate_pool_id(),
-                 generate_shm_object_name(S_CLASS_NAME),
-                 S_ERROR_HANDLING_SHM_POOL_ADDRESS,
-                 S_ERROR_HANDLING_SHM_POOL_SIZE,
-                 S_ERROR_HANDLING_SHM_POOL_FD)),
   m_performance_expected_clients(performance_expected_clients)
 {
+  m_object_deleted_relay->m_server = this;
+
   Error_code ec;
   if (!flow::test::create_directory_if_not_exists(S_KERNEL_PERSISTENT_RUN_DIR, ec))
   {
@@ -179,12 +163,17 @@ Test_shm_session_server::Test_shm_session_server(flow::log::Logger* logger,
   }
 
   FLOW_LOG_INFO("Created kernel persistent directory [" << S_KERNEL_PERSISTENT_RUN_DIR << "]");
-
-  m_shm_arena->add_shm_pool_listener(&m_arena_shm_pool_listener);
 }
 
 Test_shm_session_server::~Test_shm_session_server()
 {
+  {
+    /* Past this point the lent object's destructor callback -- which can fire as late as process exit --
+     * must not touch *this. See Object_deleted_relay. */
+    Lock lock(m_object_deleted_relay->m_mutex);
+    m_object_deleted_relay->m_server = nullptr;
+  }
+
   m_task_loop.stop();
   // Thread joined, so any post()ed stuff doesn't try to touch items while dtor destroys them before m_task_loop.
 
@@ -270,7 +259,7 @@ bool Test_shm_session_server::start()
     size_t alignment = size;
     bool zero = false;
     m_test_shm_pool_committed = false;
-    Shm_pool_collection::Arena_id arena_id = m_shm_arena->get_arena_id();
+    arena_id_t arena_id = m_shm_arena->get_jemalloc_arena_id();
     void* pool_address =
       m_shm_arena->create_shm_pool(nullptr, size, alignment, &zero, &m_test_shm_pool_committed, arena_id);
     m_test_shm_pool = m_shm_arena->lookup_shm_pool_exact(pool_address);
@@ -343,15 +332,8 @@ bool Test_shm_session_server::handle_accept(const shared_ptr<Server_session>& se
         [&](const Error_code& ec)
         {
           FLOW_LOG_INFO("Error [" << ec << "] occurred, but it may be expected upon graceful close");
-          // If we haven't set a result yet, then let's count this as an error
-          if (set_result(false))
-          {
-            auto session_data = find_session_data(session);
-            if (session_data != nullptr)
-            {
-              session_data->get_shm_session()->set_disconnected();
-            }
-          }
+          // Shm_session handles its own disconnection internally now.
+          set_result(false);
         },
         [this, session_wp = weak_ptr<Server_session>(session)](App_channel_base&& app_channel_base,
                                                                Session_mdt_reader&& mdt_reader) mutable
@@ -400,109 +382,27 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
   auto mdt_builder = session->mdt_builder();
   mdt_builder->initPayload().setType(TestSessionMetadata::ChannelType::SHM);
 
-  Shm_session::Shm_channel_base shm_channel_base;
+  /* Unstructured channel: Shm_session subsumes it as-is (upgrading it to a structured channel internally;
+   * hence also no need to start() anything here). */
+  Shm_session::Shm_channel shm_channel;
   Error_code ec;
-  if (!session->open_channel(&shm_channel_base, mdt_builder, &ec) || ec)
+  if (!session->open_channel(&shm_channel, mdt_builder, &ec) || ec)
   {
     FLOW_LOG_WARNING("Error in opening SHM channel, error [" << ec << "]");
     return false;
   }
 
-  // Create structured channel
-  auto shm_channel =
-    make_shared<Shm_session::Shm_channel>(get_logger(),
-                                          std::move(shm_channel_base),
-                                          transport::struc::Channel_base::S_SERIALIZE_VIA_HEAP,
-                                          session->session_token());
-  shm_channel->start([&](const auto& ec) { shm_channel_error_handler(ec); });
-
   auto shm_session =
     Test_shm_session::create(get_logger(),
-                             Borrower_shm_pool_collection_repository_singleton::get_instance(),
-                             *shm_channel,
-                             [&](const auto& ec) { shm_channel_error_handler(ec); },
-                             S_SHM_CHANNEL_RESPONSE_TIMEOUT);
+                             std::move(shm_channel),
+                             session->session_token(),
+                             [this](const auto& ec) { shm_channel_error_handler(ec); });
   if (!shm_session->lend_arena(m_shm_arena))
   {
     return false;
   }
 
-  if (m_operation_mode == Operation_mode::S_ERROR_HANDLING)
-  {
-    // Lend same arena as previously registered
-    bool return_value = true;
-    if (!check_output([&]() { return_value = shm_session->lend_arena(m_shm_arena); },
-                      std::cerr,
-                      S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE))
-    {
-      FLOW_LOG_WARNING("Did not encounter expected failure phrase [" <<
-                       S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE << "] when relending arena");
-      return false;
-    }
-    if (return_value)
-    {
-      FLOW_LOG_WARNING("Unexpected success in relending collection [" << m_shm_arena->get_id() << "]");
-      return false;
-    }
-    FLOW_LOG_INFO("Expected failure in relending collection [" << m_shm_arena->get_id() << "]");
-
-    // Lend an additional arena, but the borrower should already have the id registered, so we expect failure
-    if (!check_output([&]() { return_value = shm_session->lend_arena(m_error_handling_shm_arena); },
-                      std::cerr,
-                      S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE))
-    {
-      FLOW_LOG_WARNING("Did not encounter expected failure message [" <<
-                       S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE << "] when lending arena");
-      return false;
-    }
-    if (return_value)
-    {
-      FLOW_LOG_WARNING("Unexpected success in lending collection [" << get_error_handling_collection_id() << "]");
-      return false;
-    }
-    FLOW_LOG_INFO("Expected failure in lending arena [" << get_error_handling_collection_id() << "]");
-
-    // Lend same shared memory pool as previously registered
-    if (!check_output([&]() { return_value = shm_session->lend_shm_pool(m_shm_arena->get_id(), m_test_shm_pool); },
-                      std::cerr,
-                      S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE))
-    {
-      FLOW_LOG_WARNING("Did not encounter expected failure phrase [" <<
-                       S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE << "] when relending shared memory pool");
-      return false;
-    }
-    if (return_value)
-    {
-      FLOW_LOG_WARNING("Unexpected success in relending shared memory pool [" << m_test_shm_pool->get_id() << "]");
-      return false;
-    }
-    FLOW_LOG_INFO("Expected failure in relending shared memory pool [" << m_test_shm_pool->get_id() << "]");
-
-    // Lend object from unregistered collection id
-    shared_ptr<int> test_object = m_error_handling_shm_arena->construct<int>();
-    if (test_object == nullptr)
-    {
-      FLOW_LOG_WARNING("Could not create object");
-      return false;
-    }
-    Blob blob;
-    if (!check_output([&]() { blob = shm_session->lend_object(test_object); },
-                      std::cerr,
-                      S_ERROR_HANDLING_UNREGISTERED_COLLECTION_MESSAGE_PHRASE))
-    {
-      FLOW_LOG_WARNING("Did not encounter expected failure phrase [" <<
-                       S_ERROR_HANDLING_UNREGISTERED_COLLECTION_MESSAGE_PHRASE << "] when lending object");
-      return false;
-    }
-    if (!blob.empty())
-    {
-      FLOW_LOG_WARNING("Unexpected success in lending object in an unregistered collection");
-      return false;
-    }
-    FLOW_LOG_INFO("Expected failure in lending object in an unregistered collection");
-  }
-
-  if (!register_session(session, std::move(shm_channel), std::move(shm_session)))
+  if (!register_session(session, std::move(shm_session)))
   {
     return false;
   }
@@ -526,10 +426,9 @@ void Test_shm_session_server::shm_channel_error_handler(const Error_code& ec)
 }
 
 bool Test_shm_session_server::register_session(const shared_ptr<Server_session>& session,
-                                               shared_ptr<Shm_channel>&& shm_channel,
                                                shared_ptr<Test_shm_session>&& shm_session)
 {
-  auto result = m_session_map.emplace(session, Session_data(std::move(shm_channel), std::move(shm_session)));
+  auto result = m_session_map.emplace(session, Session_data(std::move(shm_session)));
   if (!result.second)
   {
     FLOW_LOG_WARNING("Could not register session [" << session.get() << "]");
@@ -671,43 +570,15 @@ bool Test_shm_session_server::process_request(const shared_ptr<Server_session>& 
         return false;
       }
 
-      if (m_operation_mode == Operation_mode::S_ERROR_HANDLING)
+      if (m_operation_mode == Operation_mode::S_CRASH)
       {
-        // Lend shared memory pool, which should fail as it should be already registered on the borrower side
-        auto* session_data = find_session_data(session);
-        if (session_data != nullptr)
-        {
-          const auto& shm_session = session_data->get_shm_session();
-          bool return_value = true;
-          if (!check_output([&]()
-                            {
-                              return_value = shm_session->lend_shm_pool(m_shm_arena->get_id(),
-                                                                        get_error_handling_shm_pool());
-                            },
-                            std::cerr,
-                            S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE))
-          {
-            FLOW_LOG_WARNING("Did not encounter expected failure message [" <<
-                             S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE << "]");
-            return false;
-          }
-          if (!return_value)
-          {
-            FLOW_LOG_INFO("Expected failure lending error handling SHM pool [" <<
-                          get_error_handling_shm_pool()->get_id() << "]");
-          }
-          else
-          {
-            FLOW_LOG_WARNING("Unexpected success lending error handling SHM pool [" <<
-                             get_error_handling_shm_pool()->get_id() << "]");
-            set_result(false);
-          }
-        }
-        else
-        {
-          FLOW_LOG_WARNING("Could not find session data to lend error handling SHM pool");
-          set_result(false);
-        }
+        /* Crash-test mode: die abruptly, at the point where the client provably holds the borrowed object.
+         * SIGKILL cannot be caught, so zero teardown runs: no object reclamation, no pool purging or
+         * unlinking; the client-side test then verifies the post-owner-crash contract.  Self-kill (versus
+         * the launcher killing us) makes the crash point deterministic. */
+        FLOW_LOG_INFO("Crash mode: client confirmed receiving the object; self-terminating via SIGKILL now.");
+        ::kill(get_process_creds().process_id(), SIGKILL);
+        assert(false && "Unreachable: SIGKILL is immediate.");
       }
 
       if (!send_cleanup(session))
@@ -732,6 +603,20 @@ bool Test_shm_session_server::process_request(const shared_ptr<Server_session>& 
       }
 
       set_app_channel_state(session, Channel_state::S_FINISH);
+
+      if (all_app_channels_finished())
+      {
+        /* Every session's client has, before sending its FINISH, released the borrowed object (except in
+         * S_DISCONNECT mode, wherein the listener intentionally still holds it); and no further session will
+         * need it lent. So drop our owner handle, making the object garbage-collectible; and collect it.
+         * (Owner-side garbage collection is piggybacked onto SHM-jemalloc operations -- of which, at this
+         * point in the test, there would never be another one; so trigger it explicitly. We are on the thread
+         * that construct()ed the object -- a requirement; see this_thread_gc() doc header.) The result,
+         * outside S_DISCONNECT mode: ~Owner_object_wrapper() -> destructor callback ->
+         * handle_object_deleted() -> check_test_completed() can then pass. */
+        m_test_object.reset();
+        Ipc_arena::this_thread_gc();
+      }
       break;
     }
   }
@@ -768,34 +653,39 @@ bool Test_shm_session_server::send_object(const shared_ptr<Server_session>& sess
     return false;
   }
 
-  shared_ptr<void> object;
-  if (!is_weak_ptr_initialized(m_test_object_weak))
+  if (m_test_object == nullptr)
   {
     // Create object
     FLOW_LOG_INFO("Creating object for lending");
-    auto object_pair = m_object_creation_callback(m_shm_arena, [this]()
-                                                  {
-                                                    m_task_loop.post([this]() { handle_object_deleted(); });
-                                                  });
-    object = object_pair.second;
-    assert(object != nullptr);
+    auto object_pair
+      = m_object_creation_callback(m_shm_arena,
+                                   [relay = m_object_deleted_relay]()
+                                   {
+                                     /* Attn: this (the lent object's destructor callback) can fire after the
+                                      * server's destruction, on an internal thread (see Object_deleted_relay
+                                      * doc header for when/how); hence the relay indirection. */
+                                     Lock lock(relay->m_mutex);
+                                     auto* const server = relay->m_server;
+                                     if (server != nullptr)
+                                     {
+                                       server->m_task_loop.post([server]()
+                                                                {
+                                                                  server->handle_object_deleted();
+                                                                });
+                                     }
+                                   });
+    assert(object_pair.second != nullptr);
 
-    // Save object type and object as weak pointer; we will be storing object in the session registry
+    /* Save object type and a *strong* handle to the object: the owner must hold its handle to (re)lend the
+     * object to further sessions (once the owner-side handle group dies, the object is pending garbage
+     * collection and cannot be lent again). We drop the handle once every session has FINISHed; see
+     * process_request(). */
     m_test_object_type = object_pair.first;
-    m_test_object_weak = object_pair.second;
-  }
-  else
-  {
-    object = m_test_object_weak.lock();
-    if (object == nullptr)
-    {
-      FLOW_LOG_WARNING("Object already released and invalid");
-      return false;
-    }
+    m_test_object = std::move(object_pair.second);
   }
 
   // Serialize object
-  auto serialized_object = shm_session->lend_object(object);
+  auto serialized_object = shm_session->lend_object(m_test_object);
 
   TestObjectMessage::ObjectType message_object_type = {};
   switch (m_test_object_type)
@@ -823,7 +713,7 @@ bool Test_shm_session_server::send_object(const shared_ptr<Server_session>& sess
   capnp_object.setShmPoolIdToCheck(m_test_shm_pool->get_id());
 
   Error_code ec;
-  if (!app_channel->send(message, nullptr, &ec))
+  if (!app_channel->send(&message, nullptr, &ec))
   {
     FLOW_LOG_WARNING("Could not send message, error [" << ec << "]");
     return false;
@@ -840,46 +730,12 @@ bool Test_shm_session_server::send_cleanup(const shared_ptr<Server_session>& ses
     if (!m_shm_arena->remove_shm_pool(m_test_shm_pool->get_address(),
                                       m_test_shm_pool->get_size(),
                                       m_test_shm_pool_committed,
-                                      m_shm_arena->get_arena_id()))
+                                      m_shm_arena->get_jemalloc_arena_id()))
     {
       FLOW_LOG_WARNING("Could not remove SHM pool");
       return false;
     }
     FLOW_LOG_INFO("Removed SHM pool [" << m_test_shm_pool->get_id() << "]");
-
-    if (m_operation_mode == Operation_mode::S_ERROR_HANDLING)
-    {
-      auto* session_data = find_session_data(session);
-      if (session_data == nullptr)
-      {
-        FLOW_LOG_WARNING("Could not locate session");
-        return false;
-      }
-
-      // Attempt to remove just removed shared memory pool
-      const auto& shm_session = session_data->get_shm_session();
-      bool return_value = true;
-      if (!check_output([&]()
-                        {
-                          return_value = shm_session->remove_lender_shm_pool(m_shm_arena->get_id(), m_test_shm_pool);
-                        },
-                        std::cerr,
-                        S_ERROR_HANDLING_UNREGISTERED_MESSAGE_PHRASE))
-      {
-        FLOW_LOG_WARNING("Did not encounter expected failure phrase [" <<
-                         S_ERROR_HANDLING_UNREGISTERED_MESSAGE_PHRASE <<
-                         "] when removing unregistered shared memory pool");
-        return false;
-      }
-      if (return_value)
-      {
-        FLOW_LOG_WARNING("Unexpected success in removing unregistered shared memory pool [" <<
-                         m_test_shm_pool->get_id() << "]");
-        return false;
-      }
-      FLOW_LOG_INFO("Expected failure in removing unregistered shared memory pool [" <<
-                    m_test_shm_pool->get_id() << "]");
-    }
 
     m_test_shm_pool.reset();
   }
@@ -896,7 +752,7 @@ bool Test_shm_session_server::send_cleanup(const shared_ptr<Server_session>& ses
   message.body_root()->setResponseType(TestMessage::ResponseType::CLEANUP);
 
   Error_code ec;
-  if (!app_channel->send(message, nullptr, &ec))
+  if (!app_channel->send(&message, nullptr, &ec))
   {
     FLOW_LOG_WARNING("Could not send message, error [" << ec << "]");
     return false;
@@ -926,12 +782,9 @@ bool Test_shm_session_server::check_test_completed()
   }
 
   // Check if the channels have completed
-  for (const auto& cur_map_pair : m_session_map)
+  if (!all_app_channels_finished())
   {
-    if (cur_map_pair.second.get_app_channel_state() != Channel_state::S_FINISH)
-    {
-      return false;
-    }
+    return false;
   }
 
   // We completed the test
@@ -958,20 +811,20 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
 
   size_t size = Jemalloc_pages::get_page_size();
   size_t alignment = size;
-  auto arena_id = m_shm_arena->get_arena_id();
+  auto arena_id = m_shm_arena->get_jemalloc_arena_id();
   bool zero = false;
   bool committed = false;
   void* pool_address = m_shm_arena->create_shm_pool(nullptr, size, alignment, &zero, &committed, arena_id);
 
-  // Simulate disconnection
-  shm_session->set_disconnected();
+  // Simulate disconnection.
+  shm_session->set_disconnected(ipc::transport::error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE);
 
   // Attempt to lend arena
   bool result = true;
   auto test_arena =
     Test_ipc_arena::create(get_logger(),
                            m_memory_manager,
-                           create_shm_object_name_generator(S_CLASS_NAME));
+                           create_test_pool_name_base(S_CLASS_NAME));
   if (test_arena == nullptr)
   {
     FLOW_LOG_WARNING("Could not create arena");
@@ -979,20 +832,8 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
   }
 
   {
-    bool return_value = true;
-    // Configure log severity override for log output checks
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    if (!check_output([&]() { return_value = shm_session->lend_arena(test_arena); },
-                      std::cout,
-                      S_SESSION_DISCONNECTION_PHRASE))
-    {
-      FLOW_LOG_WARNING("Did not get expected message output when attempting to lend arena");
-      result = false;
-    }
-    // Reset log severity override
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
-
-    if (return_value)
+    // (Contrast with the pool-creation check below: here the return value suffices; no log-scraping needed.)
+    if (shm_session->lend_arena(test_arena))
     {
       FLOW_LOG_WARNING("Expected failure to lend arena, but got success");
       result = false;
@@ -1010,21 +851,21 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
     bool zero = false;
     bool committed = false;
     void* local_pool_address;
-    // Configure log severity override for log output checks
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
+    /* Unlike the lend_arena/lend_object checks around this one, here the log phrase is the *only* observable:
+     * the allocation itself succeeds by design despite the failed lend-notification (Shm_session failure must
+     * not cause Ipc_arena allocation failure), so there is no return value to check.  (The phrase is logged at
+     * WARNING severity, hence to stderr; no verbosity override needed.) */
     if (!check_output([&]()
                       {
                         local_pool_address =
                           m_shm_arena->create_shm_pool(nullptr, size, alignment, &zero, &committed, arena_id);
                       },
-                      std::cout,
+                      std::cerr,
                       S_SESSION_DISCONNECTION_PHRASE))
     {
       FLOW_LOG_WARNING("Did not get expected message output when attempting to lend pool");
       result = false;
     }
-    // Reset log severity override
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
 
     // Clean up test
     bool return_value = m_shm_arena->remove_shm_pool(local_pool_address, size, committed, arena_id);
@@ -1037,7 +878,7 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
 
   // Attempt to lend object
   {
-    shared_ptr<int> test_object = m_shm_arena->construct<int>();
+    auto test_object = m_shm_arena->construct<int>();
     if (test_object == nullptr)
     {
       FLOW_LOG_WARNING("Could not create object");
@@ -1045,19 +886,8 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
       return false;
     }
 
-    Blob blob;
-    // Configure log severity override for log output checks
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    if (!check_output([&]() { blob = shm_session->lend_object(test_object); },
-                      std::cout,
-                      S_SESSION_DISCONNECTION_PHRASE))
-    {
-      FLOW_LOG_WARNING("Did not get expected message output when attempting to lend object");
-      result = false;
-    }
-    // Reset log severity override
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
-
+    // (Contrast with the pool-creation check above: here the return value suffices; no log-scraping needed.)
+    Blob blob = shm_session->lend_object(test_object);
     if (!blob.empty())
     {
       FLOW_LOG_WARNING("Expected failed serialization of object");
@@ -1071,22 +901,13 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
     }
   }
 
-  // Attempt to send remove shared memory pool
+  // Remove the earlier-created shared memory pool while disconnected
   {
-    bool return_value = true;
-    // Configure logger for log output checks
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    if (!check_output([&]() { return_value = m_shm_arena->remove_shm_pool(pool_address, size, committed, arena_id); },
-                      std::cout,
-                      S_SESSION_DISCONNECTION_PHRASE))
-    {
-      FLOW_LOG_WARNING("Did not get expected message output when attempting to remove pool");
-      result = false;
-    }
-    // Reset log severity override
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
-
-    if (!return_value)
+    /* Pool removals are not propagated to borrowers (Shm_session::remove_lender_shm_pool() is a no-op;
+     * borrower-side cleanup happens wholesale in ~Shm_session()); so -- unlike with the lend attempts above --
+     * disconnection plays no part, and there is no phrase to check for. Simply verify the removal itself
+     * succeeds. */
+    if (!m_shm_arena->remove_shm_pool(pool_address, size, committed, arena_id))
     {
       FLOW_LOG_WARNING("Removal of pool failed");
       result = false;
@@ -1134,11 +955,17 @@ void Test_shm_session_server::execute_allocation_performance_tests()
   set_result(success);
 }
 
-// Static method
-bool Test_shm_session_server::is_weak_ptr_initialized(const weak_ptr<void>& weak)
+bool Test_shm_session_server::all_app_channels_finished() const
 {
-  const weak_ptr<void> empty_weak;
-  return (weak.owner_before(empty_weak) || empty_weak.owner_before(weak));
+  for (const auto& cur_map_pair : m_session_map)
+  {
+    if (cur_map_pair.second.get_app_channel_state() != Channel_state::S_FINISH)
+    {
+      return false;
+    }
+  }
+
+  return true;
 }
 
 // Static method
@@ -1146,25 +973,23 @@ shared_ptr<Test_shm_session_server::Test_ipc_arena>
 Test_shm_session_server::Test_ipc_arena::create(
   flow::log::Logger* logger,
   const shared_ptr<Memory_manager>& memory_manager,
-  Shm_object_name_generator&& name_generator)
+  Shared_name&& pool_name_base)
 {
-  auto arena = shared_ptr<Test_ipc_arena>(
-    new Test_ipc_arena(logger, memory_manager, std::move(name_generator)));
-  if (!arena->start())
-  {
-    return nullptr;
-  }
-
-  return arena;
+  auto raw_arena = new Test_ipc_arena{logger, memory_manager, std::move(pool_name_base)};
+  raw_arena->start();
+  /* Ipc_arena teardown must go through (protected) destroy(), not `delete` (see its doc header);
+   * production Ipc_arena::create() sets up the same disposer. */
+  return shared_ptr<Test_ipc_arena>(raw_arena,
+                                    [](auto* arena) { arena->destroy(); });
 }
 
 Test_shm_session_server::Test_ipc_arena::Test_ipc_arena(
   flow::log::Logger* logger,
   const shared_ptr<Memory_manager>& memory_manager,
-  Shm_object_name_generator&& name_generator) :
+  Shared_name&& pool_name_base) :
   Ipc_arena(logger,
             memory_manager,
-            std::move(name_generator),
+            std::move(pool_name_base),
             util::shared_resource_permissions(util::Permissions_level::S_GROUP_ACCESS))
 {
 }

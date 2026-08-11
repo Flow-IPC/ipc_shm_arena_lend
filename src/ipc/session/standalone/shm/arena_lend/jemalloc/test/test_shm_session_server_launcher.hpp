@@ -32,8 +32,13 @@ namespace ipc::session::shm::arena_lend::jemalloc::test
 
 /**
  * Launches a process that executes a server to be used for
- * #ipc::session::shm::arena_lend::jemalloc::test::Shm_session_test.
- * The process is waited on asynchronously to the calling thread.
+ * #ipc::session::shm::arena_lend::jemalloc::test::Shm_session_test; used by the External_* tests (the
+ * In_process_* ones construct Test_shm_session_server directly instead). The child binary
+ * (libipc_test_jemalloc_shm_session_server.exec, expected next to the test binary; see
+ * test_jemalloc_shm_session_server_main.cpp) is passed the object type, operation mode and our PID via
+ * argv; its exit code -- produced by Test_shm_session_server_executor::run() in the child -- is mapped back
+ * to Result and delivered via the result callback. The process is waited on asynchronously to the calling
+ * thread (an internal one-thread task loop runs the blocking launch-and-wait).
  */
 class Test_shm_session_server_launcher :
   public flow::log::Log_context

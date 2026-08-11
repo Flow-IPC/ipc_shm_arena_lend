@@ -22,11 +22,6 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
-#include <gtest/gtest.h>
-#include <unistd.h>
-#include <sys/types.h>
-#include <future>
-#include <optional>
 #include "ipc/session/client_session.hpp"
 #include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp"
@@ -37,19 +32,30 @@
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_session_metadata.capnp.h"
 #include "ipc/shm/arena_lend/borrower_allocator_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
-#include "ipc/shm/arena_lend/shm_pool_repository_singleton.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/shm/stl/stateless_allocator.hpp"
+#include "ipc/shm/arena_lend/util.hpp"
 #include "ipc/test/test_common_util.hpp"
 #include "ipc/test/test_logger.hpp"
+#include "ipc/transport/asio_local_stream_socket.hpp"
+#include "ipc/transport/sync_io/native_socket_stream.hpp"
 #include <flow/test/test_common_util.hpp>
+#include <boost/thread/future.hpp>
+#include <boost/uuid/uuid_generators.hpp>
+#include <array>
+#include <atomic>
+#include <cstring>
+#include <filesystem>
+#include <optional>
+#include <thread>
+#include <gtest/gtest.h>
+#include <unistd.h>
+#include <sys/types.h>
 
-namespace chrono = std::chrono;
+namespace chrono = boost::chrono;
 
-using std::future;
-using std::future_status;
-using std::promise;
-using std::make_pair;
+using boost::promise;
+using boost::future_status;
 using std::make_shared;
 using std::make_unique;
 using std::optional;
@@ -80,6 +86,12 @@ using ipc::shm::arena_lend::Shm_pool;
 using ipc::shm::arena_lend::jemalloc::Ipc_arena;
 using ipc::shm::arena_lend::jemalloc::Memory_manager;
 
+/* The borrower-side registry of borrowed pools; a singleton, templated on the arena type purely as a
+ * compile-time discriminator. Note: in checks below we always use to_address_safe(), which returns null on an
+ * unknown/no-longer-borrowed pool id; plain to_address() is undefined behavior in that case -- which is
+ * exactly the case various checks probe for (and any check might hit, when failing). */
+using Borrower_repo = Borrower_shm_pool_collection_repository<Ipc_arena>;
+
 using flow::test::check_output;
 using ipc::test::Test_logger;
 using flow::test::to_underlying;
@@ -97,14 +109,110 @@ using Client_channel_base = Client_session::Channel_obj;
 using Client_channel = typename Client_session::Structured_channel<TestMessage>;
 
 // Channel aliases
-using Shm_channel_base = Shm_session::Shm_channel_base;
-using Shm_channel = Shm_session::Shm_channel;
+using Shm_channel = Shm_session::Shm_channel; // (Unstructured; a Shm_session subsumes one.)
+
+/* ==================================== What this suite aims to prove ====================================
+ *
+ * First, some assumptions worth stating plainly, for a reader who has not been living inside SHM-jemalloc.
+ * SHM-jemalloc is an "arena-lending" shared-memory provider. One process -- call it the owner -- creates an
+ * arena (Ipc_arena) and constructs C++ objects inside it. The memory itself lives in shared-memory pools,
+ * which the arena creates as needed. A second process -- the borrower -- can be lent such an object: the
+ * owner produces a small handle-blob via Shm_session::lend_object() (Shm_session being the per-conversation
+ * lending engine), transmits it by whatever IPC means it likes, and the borrower turns it back into a usable
+ * pointer via borrow_object(). From then on the two processes co-own the object, in the style of a
+ * cross-process shared_ptr group: it is destroyed only once every side has dropped every handle. The
+ * bookkeeping for that is a use-count living in shared memory itself. A session, meanwhile, can end in two
+ * broad ways: civilized (each side finishes its business, releases what it borrowed, destroys its session
+ * object) or uncivilized (a process crashes, or exits while the other side still holds borrowed objects).
+ * Much of the subtlety below -- and in the production design -- concerns what exactly is guaranteed in each
+ * kind of ending.
+ *
+ * The tests in this file were not written top-down from the following list. They accumulated over time, and
+ * they overlap; the list came later, to state what we believe needs testing and to show how each item is in
+ * fact covered. Each item has a codename (A1, B2, ...); test doc headers below cite the codenames they cover.
+ *
+ * Group A -- which things keep which other things alive:
+ * - A1: An object handle from Ipc_arena::construct() keeps its arena alive. (Covered by ipc_arena_test, not
+ *   here; the present suite merely relies on it throughout.)
+ * - A2: lend_arena() stores its own reference to the arena, and there is no un-lend operation. Hence, once
+ *   an arena is lent, the user may drop their own arena handle; everything keeps working.
+ *   [Standalone_hold_edges]
+ * - A3: Each borrow_object()-returned handle keeps the borrower-side Shm_session alive. Hence the user may
+ *   drop their session handle while still holding borrowed objects; the session truly dies -- performing its
+ *   borrower-side cleanup -- only once the last such handle is gone. [Standalone_hold_edges]
+ * - A4: The reverse direction deliberately does *not* hold: a lent-but-unreturned object does not keep the
+ *   owner's arena alive. If the arena gets destroyed anyway, its objects are considered moot -- use-counts
+ *   notwithstanding -- and are reclaimed. [Disconnected pair; and see C2]
+ *
+ * Group B -- the everyday lend/borrow lifecycle, everything alive and connected:
+ * - B1: Lending propagates all that is needed (the arena's identity, each shared-memory pool, the object
+ *   blob itself), and the borrower reads back exactly the content the owner wrote -- for flat objects and
+ *   for offset-pointer-based (STL-style) ones. [In_process_array and its siblings]
+ * - B2: Returning an object requires no messaging: the borrower's final release decrements the use-count in
+ *   shared memory; the owner side notices -- its garbage collection is piggy-backed onto other operations --
+ *   and runs the object's destructor. [In_process_array and siblings; the FINISH-time explicit
+ *   Ipc_arena::this_thread_gc() call in the server harness makes the detection deterministic]
+ * - B3: When the owner removes a shared-memory pool mid-session, that is *not* propagated to the borrower;
+ *   the borrower's pool registrations are cleaned up wholesale when its Shm_session is destroyed, and not
+ *   before. [In_process_array and siblings, via the still-registered and deregistered-after checks]
+ * - B4: When several sessions borrow from the same pool, the borrower side registers it once and
+ *   reference-counts; it is deregistered only when the last of those sessions dies. [Multisession pair]
+ * - B5: To lend -- or re-lend -- an object, the owner must itself hold a live handle to it; and every
+ *   borrowing session sees the object at the same borrower-side address. [Multisession pair]
+ *
+ * Group C -- how sessions end:
+ * - C1: The civilized, borrower-goes-first ending: release all borrowed handles, tell the owner (the app's
+ *   own FINISH message here), then destroy the sessions. [every In_process/External/Multisession test]
+ * - C2: The owner-side-goes-first ending, with a borrow still outstanding: per A4 the arena teardown simply
+ *   proceeds. What the borrower keeps: its memory stays mapped while it holds the handle, so reading through
+ *   the handle cannot crash; but the *content* is no longer guaranteed. [Disconnected pair]
+ * - C3: Standalone Shm_session use (as in this file) has no automatic end-of-session handshake; that is what
+ *   ipc::session's Graceful_finisher provides in the full-stack setup. A standalone user must therefore
+ *   build their own -- here it is the FINISH message -- and this whole suite structurally relies on that
+ *   gate; the Disconnected pair shows what happens when it is deliberately skipped.
+ * - C4: Graceful_finisher itself is ipc::session territory and is deliberately not tested here; it needs
+ *   its own coverage at that level.
+ * - C5: When the opposing side goes away, one's error handler fires exactly once, with a truthy Error_code,
+ *   from the session's own background thread. Afterward lend_arena() returns false and lend_object() returns
+ *   an empty blob; but borrow_object() of an already-obtained blob still works normally. And destroying
+ *   one's *own* session -- the local-trigger ending -- never fires one's own handler at all.
+ *   [Standalone_session_end_errors]
+ * - C6: Operations attempted after disconnection fail gracefully rather than crash. That includes creating a
+ *   pool in an already-lent arena: the failed lend-notification must not fail the allocation itself (that
+ *   one is verified by log phrase, as the allocation's success leaves nothing else to observe).
+ *   [Disconnected pair, server side]
+ * - C7: If the owner *process* exits while a borrow is outstanding, its exit-time cleanup removes the
+ *   use-count pool from the file-system. The borrower's eventual release discovers the pool is gone,
+ *   concludes the object is moot, and quietly does nothing -- rather than, say, throwing from a shared_ptr
+ *   destructor. [Disconnected_external_process, which asserts that exact code path fired]
+ *
+ * Group D -- crashes (the fully uncivilized endings):
+ * - D1: The owner crashes (SIGKILL, so zero teardown runs). The borrower detects the channel's death; the
+ *   borrowed content is fully intact (nothing was torn down, so nothing scrubbed it); and the owner's pool
+ *   files leak into the file-system -- documented behavior, and the test cleans them up.
+ *   [Crash_external_process]
+ * - D2: The borrower crashes. Not tested directly, on purpose: the owner-side machinery cannot distinguish a
+ *   crashed borrower from a merely-slow one, or from a lend that was never borrowed at all -- and that last,
+ *   equivalent scenario (no reclamation while the arena lives; mooting at arena death) is asserted by
+ *   Standalone_session_end_errors.
+ * - D3: Releasing a borrowed handle after the owner *crashed* -- contrast C7, where the owner exited
+ *   cleanly: here the pool file was never unlinked, so the release takes the normal path and simply works.
+ *   [Crash_external_process]
+ *
+ * Also intentionally untested, for the record: channel-hosing first noticed by a failed *send* (inherently
+ * timing-dependent; the receive-side detection C5 covers the same handler contract); feeding borrow_object()
+ * garbage of the correct size (documented undefined behavior); wrong-size or misaligned blobs (covered by
+ * Lend_borrow_test's sabotage_* cases); crashing mid-message (torn channel frames; soak-test territory); and
+ * the ipc::session-level concerns (Graceful_finisher per C4; the client/server start/stop cycle), which
+ * belong at that level rather than here. The Allocation_performance_* trio, finally, is a smoke benchmark
+ * rather than a contract test; see its helper's doc header.
+ * ======================================================================================================== */
 
 /* @todo Notes from ygoldfel's working with these (incredibly useful) test cases -- as well as other test cases
  * in this suite -- when debugging a major change in how pointers are represented:
  *   - In Shm_session_test: the logging situation is a bit unpleasant at times, when volume is relatively high.
  *     2 processes send output to stdout/stderr, and these 2 streams are interleaved pretty often.
- *     Technically one should not be using 2+ `Simple_ostream_logger`s to one stream simultaenously per its docs;
+ *     Technically one should not be using 2+ `Simple_ostream_logger`s to one stream simultaneously per its docs;
  *     that's why. The idea of using one timestamp format for 1 versus the other, to distinguish them (if that was
  *     the idea), works pretty well in a pinch, but the interleaving is tough.
  *     - Would suggest -- for the overall test suite -- perhaps using `Async_file_logger`s to files and so on.
@@ -124,10 +232,20 @@ using Shm_channel = Shm_session::Shm_channel;
  *      alternatively perhaps clearly warning when a confusing situation might occur. It's just difficult to orient
  *      oneself, for a newbie at least, due to the sheer volume of output. (Segregating test output versus
  *      library output, as suggested above, would help with this too.)
- *
  * I suspect this can all be addressed by looking at logging in the unit test suite holistically and then making
  * some changes having considered everything. Shm_session_test is, I believe, special due to using 2 helper
- * executables; there are some other tests that launch processes too but not in the same way (I think). */
+ * executables; there are some other tests that launch processes too but not in the same way (I think).
+ *
+ * Many tests, at this point, are quite simple; so really what to do depends. It won't be rocket science,
+ * but it's a matter of classifying the nicest thing to for each test, write up some simple utilities that
+ * cover all needs, and then apply them.
+ *
+ * Note: there is no need to work overtime for some sort of consistency just for its own sake.
+ * E.g., if some test uses plain `cout`, while another uses FLOW_LOG_INFO()
+ * to console, that doesn't mean one of them has to be changed. The test suite is not a work of art, nor is
+ * it production code; and there will be different authors with their own preferences. The goal here is
+ * convenience, for the maintainer and test-runner; that's all.)
+ */
 
 /// Google test fixture. Contains server test information.
 class Shm_session_test :
@@ -139,14 +257,20 @@ public:
     m_logger(flow::log::Sev::S_INFO),
     m_log_component(Log_component::S_TEST)
   {
+    /* Nickname the main (test-driving) thread, so its log lines are easy to pick out among the various
+     * worker-thread logging. (Skip renaming the OS thread: for the process' main thread that would rename
+     * the process in `ps` et al.) */
+    flow::log::Logger::this_thread_set_logged_nickname("testMain", get_logger(), false);
+
     // Establish logger prior to execution
-    Borrower_shm_pool_collection_repository_singleton::get_instance().set_logger(get_logger());
+    ipc::shm::arena_lend::set_logger(get_logger());
   }
 
   ~Shm_session_test() override
   {
     // Must remember to remove our stuff from singleton so as to not mess over subsequent tests.
-    Borrower_shm_pool_collection_repository_singleton::get_instance().set_logger(nullptr);
+    ipc::shm::arena_lend::set_logger(nullptr);
+    flow::log::Logger::this_thread_set_logged_nickname({}, get_logger(), false);
   }
 
   /**
@@ -174,14 +298,16 @@ public:
    * within the threshold, an error is emitted and the method returns.
    */
   void wait_for_server_completion(
-    const std::chrono::duration<size_t>& wait_duration = Test_shm_session_server_executor::S_TEST_TIMEOUT)
+    const chrono::duration<size_t>& wait_duration = Test_shm_session_server_executor::S_TEST_TIMEOUT)
   {
     // Wait for server to complete
     auto server_future = m_server_promise.get_future();
     auto server_status = server_future.wait_for(wait_duration);
     if (server_status == future_status::ready)
     {
-      EXPECT_TRUE(server_future.get());
+      EXPECT_TRUE(server_future.get()) <<
+        "The server reported failure. If it ran as a separate process: see launcher warnings above "
+        "(abnormal-exit info) and its log output, which is interleaved with ours in the console.";
     }
     else
     {
@@ -216,7 +342,7 @@ private:
   /// Synchronizes access to m_server_result.
   mutable Mutex m_server_result_mutex;
   /// Stores the server's result.
-  boost::optional<bool> m_server_result;
+  optional<bool> m_server_result;
   /// Used to wait until the server result is available or a timeout is reached.
   promise<bool> m_server_promise;
 }; // class Shm_session_test
@@ -225,26 +351,33 @@ namespace
 {
 
 /**
- * The amount of time in microseconds that will be delayed to allow the external server process to start up and be
- * in a steady state.
+ * The delay between client attempts to connect to a server that may still be starting up (notably an
+ * external-process server, which is spawned concurrently with the client's execution).
  */
-static const chrono::duration S_WAIT_FOR_SERVER_START_DURATION = chrono::milliseconds(1000);
+static const chrono::duration S_CONNECT_RETRY_DELAY = chrono::milliseconds(100);
+/// The max number of client connect attempts (spaced S_CONNECT_RETRY_DELAY apart) before declaring failure.
+static constexpr unsigned int S_MAX_CONNECT_ATTEMPTS = 50;
 /// Invalid process id used in return values.
 static constexpr util::process_id_t S_INVALID_PROCESS_ID = -1;
-/// The wait time before retrying the check to observe the test shared memory pool was removed by the client.
-static const chrono::duration S_WAIT_FOR_SHM_POOL_REMOVAL_DURATION = chrono::milliseconds(10);
-/// The number of times to check (pool) that the test shared memory pool was removed by the client.
-static constexpr unsigned int S_MAX_SHM_POOL_REMOVAL_CHECK_RETRIES = 10UL;
 
 /**
- * A sample client application that communicates with a server to obtain an object.
+ * A sample client application that communicates with a Test_shm_session_server to obtain an object. One
+ * instance = one full ipc::session::Client_session against the server (which may be in this process or a
+ * separate one). start() connects the session and blocks until the test completes or times out. The server
+ * opens the SHM channel toward us (we hand it to a Test_shm_session); we then open the app channel and drive
+ * the choreography described in Test_shm_session_server's doc header (START -> borrow_object() and validate
+ * contents plus repository bookkeeping -> RECEIVED -> on CLEANUP release the object and verify the probe
+ * pool got deregistered -> FINISH). An optional Event_listener is notified at the interesting junctures;
+ * the fancier tests (multisession lock-step, disconnect, crash) plug in specialized listeners.
+ * In Operation_mode::S_ALLOCATION_PERFORMANCE the client merely connects and idles (no START), serving as
+ * session-lending load for the server's timed allocation.
  */
 class Test_client :
   public flow::log::Log_context
 {
 public:
   /// Lowest client id to be used by the test.
-  static constexpr unsigned int S_LOWEST_CLIENT_ID = 0UL;
+  static constexpr unsigned int S_LOWEST_CLIENT_ID = 0;
 
   /**
    * The way the client needs to operate, which basically is a test use case.
@@ -279,7 +412,7 @@ public:
      * @param pool_offset The offset within the pool where the object resides.
      */
     virtual void notify_object_received(shared_ptr<void>&& object,
-                                        Collection_id collection_id,
+                                        collection_id_t collection_id,
                                         pool_id_t shm_pool_id,
                                         pool_offset_t pool_offset) = 0;
     /**
@@ -307,6 +440,7 @@ public:
     flow::log::Log_context(logger, Log_component::S_TEST),
     m_client_id(client_id),
     m_started(false),
+    m_expect_abrupt_session_end(false),
     m_task_loop(get_logger(), Test_shm_session_server::S_CLIENT_APP_NAME + "_loop_" + to_string(client_id)),
     m_event_listener(nullptr),
     m_session(get_logger(),
@@ -319,20 +453,17 @@ public:
                   m_task_loop.post([this, ec]()
                                    {
                                      FLOW_LOG_INFO("Session ended with error [" << ec << "]");
-                                     if (m_shm_session != nullptr)
-                                     {
-                                       m_shm_session->set_disconnected();
-                                     }
+                                     // Shm_session handles its own disconnection internally.
                                    });
                 }
               },
-              [&](Shm_channel_base&& channel, Client_session_mdt_reader&& mdt_reader)
+              [&](Shm_channel&& channel, Client_session_mdt_reader&& mdt_reader)
               {
-                auto channel_ptr = make_shared<Shm_channel_base>(std::move(channel));
+                auto channel_ptr = make_shared<Shm_channel>(std::move(channel));
                 EXPECT_EQ(mdt_reader->getPayload().getType(), TestSessionMetadata::ChannelType::SHM);
-                m_task_loop.post([&, shm_channel_base = std::move(channel_ptr)]() mutable
+                m_task_loop.post([&, shm_channel = std::move(channel_ptr)]() mutable
                                  {
-                                   handle_shm_channel(std::move(shm_channel_base));
+                                   handle_shm_channel(std::move(shm_channel));
                                  });
               }),
     m_operation_mode(operation_mode)
@@ -376,6 +507,17 @@ public:
   }
 
   /**
+   * Directs the client to treat abrupt session/SHM-channel death as its *successful* outcome -- for tests
+   * whose server intentionally dies (e.g., Operation_mode::S_CRASH server-side) instead of completing the
+   * normal choreography. Call before start().
+   */
+  void expect_abrupt_session_end()
+  {
+    EXPECT_FALSE(m_started);
+    m_expect_abrupt_session_end = true;
+  }
+
+  /**
    * If they are available, retrieves the test shared memory pool information.
    *
    * @param shm_pool_id If the pool information is available, the shared memory pool id will be populated here.
@@ -399,11 +541,15 @@ public:
   }
 
   /**
-   * Checks that the test shared memory pool has been deregistered from the repository.
+   * Checks that the test shared memory pool is still registered in the repository. "Still," because by the
+   * time this is used the server has already removed the pool on its side: owner-side pool removals are not
+   * propagated to borrowers mid-session (see Shm_session::remove_lender_shm_pool() and the @todo therein);
+   * borrower-side deregistration happens wholesale in ~Shm_session(). The test helpers assert that
+   * post-destruction counterpart separately.
    *
    * @return Whether the check succeeded.
    */
-  bool check_repository_for_test_shm_pool_removal() const
+  bool check_test_shm_pool_still_registered() const
   {
     Lock lock(m_test_shm_pool_data_mutex);
 
@@ -413,31 +559,7 @@ public:
       return false;
     }
 
-    const auto shm_pool_id = m_test_shm_pool_id;
-
-    // If we convert the shared memory pool to the null address, that means the pool doesn't exist
-    bool success = !(Borrower_shm_pool_collection_repository_singleton::to_address(shm_pool_id, 0));
-
-    for (unsigned int i = 1; (!success && (i <= S_MAX_SHM_POOL_REMOVAL_CHECK_RETRIES)); ++i)
-    {
-      size_t wait_us = chrono::duration_cast<chrono::microseconds>(S_WAIT_FOR_SHM_POOL_REMOVAL_DURATION).count();
-      FLOW_LOG_INFO("Shared memory pool was not removed, retrying in [" << wait_us << "] us, retry atttempt [" <<
-                    i << "] / [" << S_MAX_SHM_POOL_REMOVAL_CHECK_RETRIES << "]");
-      usleep(wait_us);
-
-      success = (Borrower_shm_pool_collection_repository_singleton::to_address(shm_pool_id, 0) == nullptr);
-    }
-
-    if (success)
-    {
-      FLOW_LOG_INFO("Test shared memory pool [" << shm_pool_id << "] was removed");
-    }
-    else
-    {
-      FLOW_LOG_WARNING("Test shared memory pool [" << shm_pool_id << "] was not removed");
-    }
-
-    return success;
+    return Borrower_repo::to_address_safe(m_test_shm_pool_id, 0) != nullptr;
   }
 
   /**
@@ -481,27 +603,6 @@ public:
   }
 
   /**
-   * Attempts to remove the borrowed shared memory pool as if the owner had sent a message.
-   *
-   * @param collection_id The identifier for the collection where the object resides.
-   * @param shm_pool_id The identifier of the shared memory pool where the object resides.
-   *
-   * @return Whether the operation was successful.
-   *
-   * @see Shm_session::receive_shm_pool_removal
-   */
-  bool simulate_shm_pool_removal_message(Collection_id collection_id, pool_id_t shm_pool_id)
-  {
-    if (m_shm_session == nullptr)
-    {
-      ADD_FAILURE() << "Shm session not yet established";
-      return false;
-    }
-
-    return m_shm_session->receive_shm_pool_removal(collection_id, shm_pool_id);
-  }
-
-  /**
    * After a session is established, returns the process id on the other end of the session; otherwise,
    * S_INVALID_PROCESS_ID.
    *
@@ -527,8 +628,9 @@ public:
 
     if (m_operation_mode != Operation_mode::S_ALLOCATION_PERFORMANCE)
     {
-      // Ensure the test shared memory pool was removed from the repository
-      EXPECT_TRUE(check_repository_for_test_shm_pool_removal());
+      /* The server has removed the test pool on its side by now; per the deferred-cleanup contract we should
+       * nevertheless still have it registered. See the check's doc header. */
+      EXPECT_TRUE(check_test_shm_pool_still_registered());
     }
 
     m_task_loop.post([this]()
@@ -556,15 +658,30 @@ private:
    */
   void run()
   {
-    // Connect client to server
+    /* Connect client to server. The server may still be starting up -- notably the external-process tests
+     * spawn it concurrently with us -- and per sync_connect() docs the intended idiom for that is simply to
+     * sleep and retry on failure (a failed attempt leaves the session in NULL state, so retrying on the same
+     * object is fine). */
     ipc::Error_code ec;
-    if (!m_session.sync_connect(&ec))
+    bool connected = false;
+    for (unsigned int attempt = 1; attempt <= S_MAX_CONNECT_ATTEMPTS; ++attempt)
     {
-      ADD_FAILURE() << "Could not connect";
-      fail_test();
-      return;
+      if (!m_session.sync_connect(&ec))
+      {
+        ADD_FAILURE() << "Could not connect (session in unexpected state)";
+        fail_test();
+        return;
+      }
+      if (!ec)
+      {
+        connected = true;
+        break;
+      }
+      FLOW_LOG_INFO("Connect attempt [" << attempt << "] / [" << S_MAX_CONNECT_ATTEMPTS << "] failed, error [" <<
+                    ec << "]; server may still be starting up; will retry");
+      flow::util::this_thread::sleep_for(S_CONNECT_RETRY_DELAY);
     }
-    if (ec)
+    if (!connected)
     {
       ADD_FAILURE() << "Error occurred when connecting, error [" << ec << "]";
       fail_test();
@@ -603,19 +720,14 @@ private:
    *
    * @param channel_base The unstructured shared memory channel.
    */
-  void handle_shm_channel(shared_ptr<Shm_channel_base>&& channel_base)
+  void handle_shm_channel(shared_ptr<Shm_channel>&& channel)
   {
-    // Create structured channel
-    m_shm_channel =
-      make_unique<Shm_session::Shm_channel>(get_logger(),
-                                            std::move(*channel_base),
-                                            transport::struc::Channel_base::S_SERIALIZE_VIA_HEAP,
-                                            m_session.session_token());
-
+    /* Unstructured channel: Shm_session subsumes it as-is (upgrading it to a structured channel internally;
+     * hence also no need to start() anything here). */
     m_shm_session =
       Test_shm_session::create(get_logger(),
-                               Borrower_shm_pool_collection_repository_singleton::get_instance(),
-                               *m_shm_channel,
+                               std::move(*channel),
+                               m_session.session_token(),
                                [this](const Error_code& ec) { shm_channel_error_handler(ec); });
     if (m_shm_session == nullptr)
     {
@@ -627,8 +739,6 @@ private:
     {
       m_event_listener->notify_starting_channels(m_shm_session);
     }
-
-    m_shm_channel->start([this](const Error_code& ec) { shm_channel_error_handler(ec); });
 
     FLOW_LOG_INFO("Client SHM channel established");
 
@@ -643,9 +753,15 @@ private:
   void shm_channel_error_handler(const Error_code& ec)
   {
     FLOW_LOG_INFO("Client SHM channel encountered close, error [" << ec << "]");
-    if (m_shm_session != nullptr)
+    // Shm_session handles its own disconnection internally.
+    if (m_expect_abrupt_session_end)
     {
-      m_shm_session->set_disconnected();
+      /* The server dies on purpose in this test mode (e.g., S_CRASH), so losing the session mid-choreography
+       * is the client's expected -- successful -- ending.  (Should the server instead die *prematurely*,
+       * before lending the object, this alone would wrongly report success; but the test body independently
+       * verifies the object was received and correct, so a premature death still fails the test.) */
+      set_result(true);
+      return;
     }
     set_result(false);
   }
@@ -696,8 +812,7 @@ private:
           EXPECT_EQ(m_test_shm_pool_id, pool_id_t(0));
           m_test_shm_pool_id = reader.getShmPoolIdToCheck();
           EXPECT_FALSE(m_test_shm_pool_address);
-          m_test_shm_pool_address =
-            Borrower_shm_pool_collection_repository_singleton::to_address(m_test_shm_pool_id, 0);
+          m_test_shm_pool_address = Borrower_repo::to_address_safe(m_test_shm_pool_id, 0);
           if (*m_test_shm_pool_address == nullptr)
           {
             ADD_FAILURE() << "Could not locate SHM pool [" << m_test_shm_pool_id << "]";
@@ -759,7 +874,7 @@ private:
 
     m_app_channel->start([&](const auto& ec)
                          {
-                           FLOW_LOG_INFO("Client SHM channel encountered close, error [" << ec << "]");
+                           FLOW_LOG_INFO("Client app channel encountered close, error [" << ec << "]");
                          });
 
     if (m_operation_mode != Operation_mode::S_ALLOCATION_PERFORMANCE)
@@ -809,7 +924,7 @@ private:
       case Object_type::S_VECTOR:
       {
         // Deserialize object
-        using Shm_vector = Test_shm_session_server_executor::Vector_type<Borrower_arena_allocator>;
+        using Shm_vector = Test_shm_session_server_executor::Vector_type<Shm_session::Borrower_arena_allocator>;
         auto vec = m_shm_session->borrow_object<Shm_vector>(serialized_object);
         if (vec == nullptr)
         {
@@ -830,7 +945,7 @@ private:
       case Object_type::S_STRING:
       {
         // Deserialize object
-        using Shm_string = Test_shm_session_server_executor::String_type<Borrower_arena_allocator>;
+        using Shm_string = Test_shm_session_server_executor::String_type<Shm_session::Borrower_arena_allocator>;
         auto str = m_shm_session->borrow_object<Shm_string>(serialized_object);
         if (str == nullptr)
         {
@@ -848,7 +963,7 @@ private:
       case Object_type::S_LIST:
       {
         // Deserialize object
-        using Shm_list = Test_shm_session_server_executor::List_type<Borrower_arena_allocator>;
+        using Shm_list = Test_shm_session_server_executor::List_type<Shm_session::Borrower_arena_allocator>;
         auto shm_list = m_shm_session->borrow_object<Shm_list>(serialized_object);
         if (shm_list == nullptr)
         {
@@ -870,16 +985,12 @@ private:
       }
     }
 
-    Collection_id collection_id = 0;
-    pool_id_t shm_pool_id = 0;
-    pool_offset_t pool_offset = 0;
-    if (!m_shm_session->deserialize_handle(serialized_object, collection_id, shm_pool_id, pool_offset))
+    const auto* handle
+      = reinterpret_cast<const Test_shm_session::Shm_object_handle*>(serialized_object.const_data());
+    if ((m_event_listener != nullptr) && (object != nullptr))
     {
-      ADD_FAILURE() << "Deserialization failed";
-    }
-    else if ((m_event_listener != nullptr) && (object != nullptr))
-    {
-      m_event_listener->notify_object_received(std::move(object), collection_id, shm_pool_id, pool_offset);
+      m_event_listener->notify_object_received(std::move(object),
+                                               handle->m_collection_id, handle->m_pool_id, handle->m_pool_offset);
     }
   }
 
@@ -895,7 +1006,7 @@ private:
     message.body_root()->setRequestType(request_type);
 
     ipc::Error_code ec;
-    if (!m_app_channel->send(message, nullptr, &ec))
+    if (!m_app_channel->send(&message, nullptr, &ec))
     {
       FLOW_LOG_WARNING("Could not send message, error [" << ec << "]");
       fail_test();
@@ -942,6 +1053,8 @@ private:
   unsigned int m_client_id;
   /// Whether the client has started.
   bool m_started;
+  /// Whether abrupt session/SHM-channel death counts as the client's *successful* outcome (crash-mode tests).
+  bool m_expect_abrupt_session_end;
   /// The task engine.
   Single_thread_task_loop m_task_loop;
   /// Event listener for test purposes.
@@ -961,13 +1074,11 @@ private:
   /// Synchronizes access to #m_client_result.
   mutable Mutex m_result_mutex;
   /// Stores the client's result.
-  boost::optional<bool> m_result;
+  optional<bool> m_result;
   /// Used to wait until the client result is available or a timeout is reached.
   promise<bool> m_promise;
 
-  /// The shared memory channel from the client perspective.
-  unique_ptr<Shm_session::Shm_channel> m_shm_channel;
-  /// The shared memory session information on the client.
+  /// The shared memory session information on the client.  (Owns the SHM channel.)
   shared_ptr<Test_shm_session> m_shm_session;
   /// The application channel from the client perspective.
   unique_ptr<Client_channel> m_app_channel;
@@ -1020,7 +1131,7 @@ public:
    * @see Event_listener::notify_object_received
    */
   virtual void notify_object_received([[maybe_unused]] shared_ptr<void>&& object,
-                                      [[maybe_unused]] Collection_id collection_id,
+                                      [[maybe_unused]] collection_id_t collection_id,
                                       [[maybe_unused]] pool_id_t shm_pool_id,
                                       [[maybe_unused]] pool_offset_t pool_offset) override
   {
@@ -1118,7 +1229,7 @@ public:
    * @param pool_offset The offset within the pool where the object resides.
    */
   void get_object_data(shared_ptr<void>& object,
-                       Collection_id& collection_id,
+                       collection_id_t& collection_id,
                        pool_id_t& shm_pool_id,
                        pool_offset_t& pool_offset) const
   {
@@ -1141,7 +1252,7 @@ public:
    * @see Event_listener::notify_object_received
    */
   virtual void notify_object_received(shared_ptr<void>&& object,
-                                      Collection_id collection_id,
+                                      collection_id_t collection_id,
                                       pool_id_t shm_pool_id,
                                       pool_offset_t pool_offset) override
   {
@@ -1199,7 +1310,7 @@ private:
   /// The object received from the server.
   shared_ptr<void> m_object;
   /// The shared memory pool collection where the object resides.
-  Collection_id m_object_collection_id;
+  collection_id_t m_object_collection_id;
   /// The shared memory pool id where the object resides.
   pool_id_t m_object_shm_pool_id;
   /// The offset within the pool where the object resides.
@@ -1235,7 +1346,7 @@ public:
    * @see Event_listener::notify_object_received
    */
   virtual void notify_object_received(shared_ptr<void>&& object,
-                                      Collection_id collection_id,
+                                      collection_id_t collection_id,
                                       pool_id_t shm_pool_id,
                                       pool_offset_t pool_offset) override
   {
@@ -1281,7 +1392,7 @@ public:
    * @see Event_listener::notify_object_received
    */
   virtual void notify_object_received(shared_ptr<void>&& object,
-                                      Collection_id collection_id,
+                                      collection_id_t collection_id,
                                       pool_id_t shm_pool_id,
                                       pool_offset_t pool_offset) override
   {
@@ -1326,50 +1437,14 @@ public:
   using Object_event_listener::release_object;
 }; // class Delayed_object_removal_event_listener
 
-class Error_handling_event_listener :
-  public Auto_event_listener
-{
-public:
-  /**
-   * Constructor.
-   *
-   * @param test_harness The test fixture.
-   * @param client The client application.
-   * @param error_handling_collection_id The collection id of the arena to register in advance of the server
-   *                                     attempting to lend it such that it triggers an error.
-   */
-  Error_handling_event_listener(Shm_session_test& test_harness,
-                                Test_client& client,
-                                Collection_id error_handling_collection_id) :
-    Auto_event_listener(test_harness, client),
-    m_error_handling_collection_id(error_handling_collection_id)
-  {
-  }
-
-  /**
-   * Stores the shared memory session object for later use and registers the error handling collection id.
-   *
-   * @param shm_session The shared memory session.
-   */
-  virtual void notify_starting_channels(const shared_ptr<Test_shm_session>& shm_session) override
-  {
-    if (shm_session->receive_arena(m_error_handling_collection_id))
-    {
-      FLOW_LOG_INFO("Successfully registered collection id [" << m_error_handling_collection_id << "]");
-    }
-    else
-    {
-      FLOW_LOG_WARNING("Error occurred in registering collection id [" << m_error_handling_collection_id << "]");
-    }
-  }
-
-private:
-  /// The collection id of the arena that will be preregistered to cause an error on the lender side.
-  const Collection_id m_error_handling_collection_id;
-}; // class Error_handling_event_listener
-
 /**
- * Orchestrates the execution of a test involving multiple clients.
+ * Orchestrates the execution of a test involving multiple concurrent clients. start(N) creates N Test_client
+ * instances (each with an event listener from the create_event_listener() factory, which subclasses
+ * override to install specialized listeners) and runs each client's blocking start() in its own thread;
+ * wait_for_completion() joins those threads -- each client's pass/fail lands via the usual
+ * EXPECT/set_server_result paths, so this class itself only tracks gross lifecycle state. Since all clients
+ * connect to the one server, this is how the multi-session scenarios (N sessions sharing one lent object)
+ * get set up.
  */
 class Test_client_manager
 {
@@ -1448,7 +1523,13 @@ public:
     for (auto& cur_pair : m_client_data_map)
     {
       auto& cur_client = cur_pair.second->get_client();
-      auto cur_thread = make_unique<std::thread>([&cur_client]() { cur_client.start(); });
+      const auto cur_client_id = cur_pair.first;
+      auto cur_thread = make_unique<std::thread>([this, &cur_client, cur_client_id]()
+      {
+        // Nickname this client-running thread, so its log lines are easy to pick out.
+        flow::log::Logger::this_thread_set_logged_nickname("testCliRun" + to_string(cur_client_id), get_logger());
+        cur_client.start();
+      });
       m_threads.emplace_back(std::move(cur_thread));
     }
 
@@ -1604,7 +1685,7 @@ protected:
      * around the same time from main thread. Anyway m_client shutting down its thread first (by being listed
      * second here) avoids that chaos, if only because the thread that would be touching dying stuff simply
      * no longer exists, by the time that stuff begins to die. Other than in that regard (where it appears to
-     * be purely positive, it should be not-worse). I only pontificate this text to make clear it's possible
+     * be purely positive) it should be not-worse. I only pontificate this text to make clear it's possible
      * I am missing some key subtlety (but do feel I understand enough to make this fix reasonably
      * confidently still).
      */
@@ -1784,23 +1865,6 @@ public:
   }
 
   /**
-   * Validates that the test shared memory pool is not in the shared memory pool repository.
-   *
-   * @return Whether validation succeeded.
-   */
-  bool check_repository_for_test_shm_pool_removal() const
-  {
-    // Only use the first client for checking, because if the others didn't match, there would be a failure elsewhere
-    Test_client* client = get_first_client();
-    if (client == nullptr)
-    {
-      return false;
-    }
-
-    return client->check_repository_for_test_shm_pool_removal();
-  }
-
-  /**
    * Returns the object data received from the server. If the object has not yet been received or we're at the
    * clean up stage, the object will be a nullptr.
    *
@@ -1811,7 +1875,7 @@ public:
    * @return Whether the object data was found.
    */
   bool get_object_data(shared_ptr<void>& object,
-                       Collection_id& collection_id,
+                       collection_id_t& collection_id,
                        pool_id_t& shm_pool_id,
                        pool_offset_t& pool_offset) const
   {
@@ -1978,8 +2042,8 @@ private:
 void execute_general_tests(Shm_session_test& test_harness,
                            unique_ptr<Test_shm_session_server>& server)
 {
-  Owner_id object_owner_id = {};
-  Collection_id object_collection_id = {};
+  owner_id_t object_owner_id = {};
+  collection_id_t object_collection_id = {};
   pool_id_t object_shm_pool_id = {};
   pool_offset_t object_pool_offset = {};
   {
@@ -1997,8 +2061,7 @@ void execute_general_tests(Shm_session_test& test_harness,
       event_listener.get_object_data(generic_object, object_collection_id, object_shm_pool_id, object_pool_offset);
       EXPECT_EQ(generic_object, nullptr);
       // Shared memory pool should most likely still be registered
-      EXPECT_NE(Borrower_shm_pool_collection_repository_singleton::to_address(object_shm_pool_id, object_pool_offset),
-                nullptr);
+      EXPECT_NE(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), nullptr);
 
       object_owner_id = client.get_remote_process_id();
       EXPECT_NE(object_owner_id, S_INVALID_PROCESS_ID);
@@ -2007,6 +2070,11 @@ void execute_general_tests(Shm_session_test& test_harness,
     client.stop();
   }
 
+  /* Client -- and with it the borrower-side Shm_session -- is now destroyed; ~Shm_session() performs the
+   * wholesale borrower-side cleanup, so the object's pool must now be deregistered. (Mid-session it stayed
+   * registered even after owner-side removal; see check_test_shm_pool_still_registered().) */
+  EXPECT_EQ(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), nullptr);
+
   // Stop and destroy server
   if (server != nullptr)
   {
@@ -2014,12 +2082,6 @@ void execute_general_tests(Shm_session_test& test_harness,
     server.reset();
   }
 
-  // Check that all borrowed entities have been deregistered
-  auto& collection_repository = Borrower_shm_pool_collection_repository_singleton::get_instance();
-  EXPECT_EQ(collection_repository.to_address(object_shm_pool_id, object_pool_offset), nullptr);
-  EXPECT_FALSE(collection_repository.deregister_shm_pool(object_owner_id, object_collection_id, object_shm_pool_id));
-  EXPECT_FALSE(collection_repository.deregister_collection(object_owner_id, object_collection_id));
-  EXPECT_FALSE(collection_repository.deregister_owner(object_owner_id));
 }
 
 /**
@@ -2048,8 +2110,8 @@ void execute_general_tests(Shm_session_test& test_harness)
 void execute_multisession_tests(Shm_session_test& test_harness,
                                 unique_ptr<Test_shm_session_server>& server)
 {
-  Owner_id object_owner_id = {};
-  Collection_id object_collection_id = {};
+  owner_id_t object_owner_id = {};
+  collection_id_t object_collection_id = {};
   pool_id_t object_shm_pool_id = {};
   pool_offset_t object_pool_offset = {};
   {
@@ -2073,8 +2135,7 @@ void execute_multisession_tests(Shm_session_test& test_harness,
                                                  object_pool_offset));
       EXPECT_EQ(generic_object, nullptr);
       // Shared memory pool backing object should most likely still be registered
-      EXPECT_NE(Borrower_shm_pool_collection_repository_singleton::to_address(object_shm_pool_id, object_pool_offset),
-                nullptr);
+      EXPECT_NE(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), nullptr);
 
       object_owner_id = client_manager.get_remote_process_id();
       EXPECT_NE(object_owner_id, S_INVALID_PROCESS_ID);
@@ -2099,16 +2160,12 @@ void execute_multisession_tests(Shm_session_test& test_harness,
     }
 
     // Shared memory pool should still be registered
-    EXPECT_NE(Borrower_shm_pool_collection_repository_singleton::to_address(object_shm_pool_id, object_pool_offset),
-              nullptr);
+    EXPECT_NE(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), nullptr);
   }
 
-  // Check that all borrowed entities have been deregistered
-  auto& collection_repository = Borrower_shm_pool_collection_repository_singleton::get_instance();
-  EXPECT_EQ(collection_repository.to_address(object_shm_pool_id, object_pool_offset), nullptr);
-  EXPECT_FALSE(collection_repository.deregister_shm_pool(object_owner_id, object_collection_id, object_shm_pool_id));
-  EXPECT_FALSE(collection_repository.deregister_collection(object_owner_id, object_collection_id));
-  EXPECT_FALSE(collection_repository.deregister_owner(object_owner_id));
+  /* All clients -- and with them their borrower-side Shm_sessions -- are now destroyed: the pool's
+   * registration ref-count reached zero, so it must now be deregistered. */
+  EXPECT_EQ(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), nullptr);
 }
 
 /**
@@ -2125,11 +2182,17 @@ void execute_multisession_tests(Shm_session_test& test_harness)
 }
 
 /**
- * Executes a series of tests that include the server lending an object to a client, but the client does
- * not return the object back to the server before the server exits. We then attempt to remove the shared
- * memory pool that backs the object but it is still registered, so it should fail. After releasing all
- * the handles to the object, we ensure that the object does not trigger communication to the server as
- * the session is disconnected. Lastly, the attempt to remove the shared memory pool should succeed.
+ * Executes a series of tests wherein the server lends an object to a client, and the session then ends --
+ * by simulated disconnect -- while the client still holds the borrowed object. The server, having lent
+ * arena + pool + object, marks the session disconnected and attempts further lending operations (lend a new
+ * arena; create -- and thus lend -- a pool in the already-lent arena; lend another object), verifying on its
+ * side that each fails gracefully with the expected log phrase. The server is then destroyed -- in the
+ * external-process variant its whole process exits -- and the client verifies the post-owner-death contract:
+ * the borrowed pool remains registered borrower-side, and the object's memory remains mapped (readable),
+ * while the handle is held; but content is no longer guaranteed (the arena's destruction moots the
+ * outstanding borrow); and releasing the handle with the owner gone quietly no-ops. In the external-process
+ * variant we additionally assert -- via log phrase -- that the release took the tolerant slow path
+ * (lend-tracker pool discovered removed => object moot => no-op).
  *
  * After the client is cleaned up, we make sure that the global shared memory pool collection repository
  * contains proper data in that the borrowed data from the server is no longer registered.
@@ -2140,8 +2203,9 @@ void execute_multisession_tests(Shm_session_test& test_harness)
 void execute_disconnect_tests(Shm_session_test& test_harness,
                               unique_ptr<Test_shm_session_server>& server)
 {
-  Owner_id object_owner_id = {};
-  Collection_id object_collection_id = {};
+  const bool server_is_external = (server == nullptr);
+  owner_id_t object_owner_id = {};
+  collection_id_t object_collection_id = {};
   pool_id_t object_shm_pool_id = {};
   pool_offset_t object_pool_offset = {};
   {
@@ -2164,8 +2228,7 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
     if (object != nullptr)
     {
       // The object should be the same as the address in the repository
-      EXPECT_EQ(Borrower_shm_pool_collection_repository_singleton::to_address(object_shm_pool_id, object_pool_offset),
-                object.get());
+      EXPECT_EQ(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), object.get());
     }
     else
     {
@@ -2175,22 +2238,12 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
     object_owner_id = client.get_remote_process_id();
     EXPECT_NE(object_owner_id, S_INVALID_PROCESS_ID);
 
-    // The shared memory pool backing the object should not be removed as the object still exists
-    bool return_value;
-    EXPECT_TRUE(
-      check_output([&]()
-                   {
-                     return_value = client.simulate_shm_pool_removal_message(object_collection_id, object_shm_pool_id);
-                   },
-                   std::cerr,
-                   "Could not deregister non-empty SHM pool"));
-    EXPECT_FALSE(return_value);
-
-    // For external server, the server already exited, so we don't perform this check as the object's memory will
-    // be zeroed (see below)
-    if ((server != nullptr) && (object != nullptr))
+    if ((object != nullptr) && (!server_is_external))
     {
-      // Object should still be intact
+      /* In-process server: it -- and with it the arena and hence the object -- is still alive here; and while
+       * the arena lives, our borrowed handle's nonzero use-count prevents the object's reclamation. So its
+       * content must be intact. (In the external-process variant no such check is possible even at this
+       * early point: the server process has already exited; see the next check.) */
       string_view message = object->m_message;
       EXPECT_EQ(message, Test_shm_session_server_executor::S_MESSAGE);
     }
@@ -2204,36 +2257,53 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
 
     if (object != nullptr)
     {
-      // Object is zeroed out due to shared memory pool removal (purging the pools) by server
-      string_view message = object->m_message;
-      EXPECT_EQ(message, string(message.size(), '\0'));
+      /* The server -- and with it the arena -- is destroyed (in-process: just above; external: its process
+       * exited even before the preceding checks). Our un-returned borrowed handle does not prevent that: by
+       * contract an arena's destruction moots all use-counts, and its objects get force-reclaimed (possibly
+       * deferred, but as late as owner-process exit). What *is* still guaranteed: the pool stays mapped in our
+       * (borrower) process while we hold the handle, so reading through it cannot crash -- but the content is
+       * indeterminate (in practice: zeroed, if the owner-side pool teardown ran by now; unchanged otherwise,
+       * as nothing scrubs it). So: perform the read -- its not-crashing is the assertable thing -- and log,
+       * but do not assert, what we saw. */
+      FLOW_LOG_SET_CONTEXT(test_harness.get_logger(), Log_component::S_TEST);
+      const auto& raw_message = object->m_message;
+      const string message{raw_message, ::strnlen(raw_message, sizeof(raw_message))};
+      FLOW_LOG_INFO("Borrowed object content after server destruction (indeterminate by contract; "
+                    "informational only): [" << message << "].");
     }
 
-    // Check release of object does not send message to server; match prefix of message in
-    // Shm_session::return_object()
-    object.reset();
-    // Configure logger for log output checks
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_TRACE;
-    EXPECT_TRUE(check_output([&]() { event_listener.release_object(); },
-                             std::cout,
-                             Test_shm_session_server::S_SESSION_DISCONNECTION_PHRASE));
-    // Reset log severity override
-    *flow::log::Config::this_thread_verbosity_override() = flow::log::Sev::S_END_SENTINEL;
-
-    // Ensure that the object's shared memory pool can be removed now
-    EXPECT_TRUE((object == nullptr) ||
-                client.simulate_shm_pool_removal_message(object_collection_id, object_shm_pool_id)) <<
-      "Shared memory pool removal yielded unexpected failure after object was released";
+    /* Release the object despite the disconnected (and by now destroyed) session and server. Object return
+     * involves no messaging (a use-count atomic in SHM is decremented in-place), so no session is needed; and
+     * with the arena gone the decrement itself is moot -- the owner side already force-reclaimed the object.
+     * In the external-process variant we can be more specific: the owner process' exit removed the
+     * lend-tracker pool (which holds the use-count) from the file-system, and this thread has never opened
+     * that pool; so this release must take the tolerant slow path -- discover the pool is gone, conclude the
+     * object is moot, quietly no-op -- and we assert exactly that via its log phrase. (In-process, the timing
+     * of the owner-side teardown steps is not deterministic enough to predict which path the release takes;
+     * there we settle for its not blowing up.) */
+    object.reset(); // (Not the last handle: the event listener holds another. So this much is unremarkable.)
+    if (server_is_external)
+    {
+      const auto open_fail_ct_pre
+        = Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load();
+      EXPECT_TRUE(check_output([&]() { event_listener.release_object(); },
+                               std::cout,
+                               "lend-tracker-pool has been removed from the file-system"));
+      // The benign-open-failure stat must reflect the same event the log phrase just showed.
+      EXPECT_EQ(Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load(),
+                open_fail_ct_pre + 1);
+    }
+    else
+    {
+      event_listener.release_object();
+    }
 
     client.stop();
   }
 
-  // Check that all borrowed entities have been deregistered
-  auto& collection_repository = Borrower_shm_pool_collection_repository_singleton::get_instance();
-  EXPECT_EQ(collection_repository.to_address(object_shm_pool_id, object_pool_offset), nullptr);
-  EXPECT_FALSE(collection_repository.deregister_shm_pool(object_owner_id, object_collection_id, object_shm_pool_id));
-  EXPECT_FALSE(collection_repository.deregister_collection(object_owner_id, object_collection_id));
-  EXPECT_FALSE(collection_repository.deregister_owner(object_owner_id));
+  /* Client -- and with it the borrower-side Shm_session -- is now destroyed; ~Shm_session() performs the
+   * wholesale borrower-side cleanup, so the object's pool must now be deregistered. */
+  EXPECT_EQ(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), nullptr);
 }
 
 /**
@@ -2248,6 +2318,331 @@ void execute_disconnect_tests(Shm_session_test& test_harness)
   unique_ptr<Test_shm_session_server> empty_server;
   execute_disconnect_tests(test_harness, empty_server);
 }
+
+/// Returns how many test-suite-created SHM pool files currently sit in the SHM file-system dir.
+size_t count_test_shm_object_files()
+{
+  using ipc::shm::arena_lend::test::S_SHM_OBJECT_NAME_PREFIX;
+  using ipc::shm::arena_lend::test::S_SHM_OBJECT_DIR;
+
+  size_t count = 0;
+  for (const auto& dir_entry : std::filesystem::directory_iterator(S_SHM_OBJECT_DIR))
+  {
+    if (dir_entry.path().filename().string().rfind(S_SHM_OBJECT_NAME_PREFIX, 0) == 0)
+    {
+      ++count;
+    }
+  }
+  return count;
+}
+
+/**
+ * Executes the owner-crash test: necessarily external-process -- the server process SIGKILLs itself, at the
+ * moment the client provably holds the borrowed object (see Operation_mode::S_CRASH). What this verifies --
+ * contrast each item with execute_disconnect_tests(), where the server side ends *civilizedly* with the
+ * borrow outstanding:
+ * 1. The borrowed object's content survives the owner's crash fully intact -- and, unlike after a civilized
+ *    owner-process exit (whose teardown purges pool contents, leaving them indeterminate), here that is
+ *    guaranteed and asserted: the crashed owner ran zero teardown, so nothing scrubbed anything.
+ * 2. Releasing the borrowed handle afterward works via the *normal* path: the crash never unlinked the
+ *    lend-tracker pool, so the disposer's use-count decrement lands in the orphaned-but-openable pool
+ *    (asserted via the *absence* of the tolerant-disposer log phrase; contrast with the civilized variant,
+ *    where the pool is gone and the disposer detects that and quietly no-ops). Both endings must be -- and
+ *    with this test, are -- crash-proof for the borrower.
+ * 3. The owner's SHM pool files leak into the file-system: documented/expected on owner crash. (In
+ *    ipc::session-land the next server-app instance's kernel-persistent cleanup sweeps such leftovers;
+ *    standalone, it is the user's responsibility.) The test asserts the leak occurred, then sweeps it.
+ *
+ * Intentionally not tested: crashing *mid-message* (torn channel frames -- the receiver would treat it as
+ * channel-hosing); provoking that deterministically is impractical here; it is soak-test territory.
+ *
+ * @param test_harness The outer scope of the tests.
+ */
+void execute_crash_tests(Shm_session_test& test_harness)
+{
+  using ipc::shm::arena_lend::test::S_SHM_OBJECT_NAME_PREFIX;
+  using ipc::shm::arena_lend::test::remove_shm_objects_filesystem;
+
+  /* Pre-clean any leftover test SHM pool files (e.g., pools known to be leaked by earlier tests' owner
+   * processes at exit), so that the post-crash leak check below is attributable to our crashed server alone.
+   * (Like the rest of this suite, this assumes no concurrent test runs on the machine.)  Ditto the server's
+   * kernel-persistent run-dir (see remove_kernel_persistent_state() doc header) -- e.g., an earlier crashed
+   * run may have left a stale CNS (PID) file; a connect attempt reading it merely fails and gets retried,
+   * so this is not strictly required -- but starting from a known-clean state reduces entropy. */
+  remove_shm_objects_filesystem(S_SHM_OBJECT_NAME_PREFIX);
+  Test_shm_session_server::remove_kernel_persistent_state();
+
+  owner_id_t object_owner_id = {};
+  collection_id_t object_collection_id = {};
+  pool_id_t object_shm_pool_id = {};
+  pool_offset_t object_pool_offset = {};
+  {
+    Test_client client(test_harness.get_logger());
+    Delayed_object_removal_event_listener event_listener(test_harness, client);
+    client.set_event_listener(&event_listener);
+    client.expect_abrupt_session_end(); // The server will die mid-choreography; that is this test's point.
+
+    client.start();
+    /* The server self-SIGKILLs once we confirm receiving the object; the launcher observes the death and
+     * reports it (the TEST_F body inverts the usual success expectation accordingly), unblocking this. */
+    test_harness.wait_for_server_completion();
+
+    shared_ptr<Simple_object> object;
+    {
+      shared_ptr<void> generic_object;
+      event_listener.get_object_data(generic_object, object_collection_id, object_shm_pool_id, object_pool_offset);
+      object = static_pointer_cast<Simple_object>(generic_object);
+    }
+    if (object == nullptr)
+    {
+      ADD_FAILURE() << "Object is nullptr";
+      client.stop();
+      return;
+    }
+    EXPECT_EQ(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), object.get());
+    object_owner_id = client.get_remote_process_id();
+    EXPECT_NE(object_owner_id, S_INVALID_PROCESS_ID);
+
+    {
+      // Doc header item 1: content must be fully intact -- the crashed owner ran zero teardown.
+      string_view message = object->m_message;
+      EXPECT_EQ(message, Test_shm_session_server_executor::S_MESSAGE);
+    }
+
+    /* Doc header item 2: release must work, and via the normal path -- assert the tolerant-disposer
+     * pool-is-gone phrase did *not* appear (the crash never unlinked the lend-tracker pool), and neither
+     * did the benign-open-failure stat budge. */
+    object.reset(); // (Not the last handle: the event listener holds another.)
+    const auto open_fail_ct_pre
+      = Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load();
+    EXPECT_FALSE(check_output([&]() { event_listener.release_object(); },
+                              std::cout,
+                              "lend-tracker-pool has been removed from the file-system"));
+    EXPECT_EQ(Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load(),
+              open_fail_ct_pre);
+
+    client.stop();
+  }
+
+  /* Client -- and with it the borrower-side Shm_session -- is now destroyed; ~Shm_session() performs the
+   * wholesale borrower-side cleanup, so the object's pool must now be deregistered. */
+  EXPECT_EQ(Borrower_repo::to_address_safe(object_shm_pool_id, object_pool_offset), nullptr);
+
+  // Doc header item 3: the crashed owner's pool files leaked; assert that, then sweep them.
+  EXPECT_GT(count_test_shm_object_files(), 0u);
+  EXPECT_TRUE(remove_shm_objects_filesystem(S_SHM_OBJECT_NAME_PREFIX));
+  EXPECT_EQ(count_test_shm_object_files(), 0u);
+
+  /* Similarly the crashed server orphaned its kernel-persistent run-dir (CNS/PID file); remove it. (A
+   * subsequent test's client reading the stale CNS would merely waste a connect attempt and retry; still,
+   * not leaving junk behind for others = less entropy.) */
+  Test_shm_session_server::remove_kernel_persistent_state();
+}
+
+/**
+ * Body of the `Allocation_performance_*` trio.  What this tests:
+ *
+ * It is a cheap smoke-benchmark of in-SHM allocation -- not a benchmark with a pass/fail threshold.
+ * The server allocates a 1-million-node list in SHM
+ * (Test_shm_session_server_executor::many_objects_creator_functor()) under a `flow::perf::Checkpointing_timer`,
+ * which *logs* the elapsed time for eyeballing; the only actual assertions are that everything completes,
+ * cleanly, within a timeout. So functionally it is a sanity check ("mass allocation under N live sessions
+ * works and does not take absurdly long"), with the logged timing available when one cares to look.
+ * It is not intended as a formal benchmark, but as a quick assessment it can be helpful when making changes.
+ *
+ * How this is tested: Everything is in-process (no server executable is spawned; contrast with the
+ * `External_*` tests elsewhere in this file). A Test_shm_session_server runs in S_ALLOCATION_PERFORMANCE
+ * mode; `n_clients` real clients connect via full ipc::session sessions, each getting the usual two channels
+ * (internal SHM-lend channel + app channel) -- but in this mode clients never request the test object: they
+ * connect and wait. Once all `n_clients` app channels are up (immediately, if zero), the server runs the
+ * timed allocation. The point of nonzero `n_clients`: each new SHM pool the allocation forces into
+ * existence is lent (`lend_shm_pool` message) to every live session -- so this exercises allocation *under
+ * session-lending load*, versus the zero-client baseline.  Afterward the server broadcasts CLEANUP, the
+ * clients finish, and both sides report success.
+ *
+ * @param test_harness The outer scope of the tests.
+ * @param n_clients Number of concurrent (idle) client sessions during the allocation; 0 = pure baseline.
+ */
+void execute_allocation_performance_test(Shm_session_test& test_harness, size_t n_clients)
+{
+  /* The allocation takes ~1 sec with decent hardware and full optimization; allow for much worse
+   * (unoptimized/instrumented builds). */
+  constexpr chrono::duration<size_t> TIMEOUT = chrono::seconds(10);
+
+  auto server = make_unique<Test_shm_session_server>(
+    test_harness.get_logger(),
+    ipc::test::get_process_creds().process_id(),
+    Test_shm_session_server_executor::many_objects_creator_functor(),
+    [&](bool result) { test_harness.set_server_result(result); },
+    Server_operation_mode::S_ALLOCATION_PERFORMANCE,
+    n_clients);
+  if (!server->start())
+  {
+    ADD_FAILURE() << "Could not start server";
+    return;
+  }
+
+  if (n_clients == 0)
+  {
+    test_harness.wait_for_server_completion(TIMEOUT);
+    return;
+  }
+
+  Test_client_manager client_manager(test_harness);
+  // Start clients
+  client_manager.start(n_clients, Client_operation_mode::S_ALLOCATION_PERFORMANCE);
+  // Wait for clients to finish
+  EXPECT_TRUE(client_manager.wait_for_completion());
+  // Wait for server to finish
+  test_harness.wait_for_server_completion(TIMEOUT);
+}
+
+/* In-SHM payload for the Standalone_* tests below: carries a canary value; counts its destructions, so a test
+ * can assert exactly when the owner-side reclamation machinery ran (the dtor runs owner-side, which in those
+ * tests is this same process). Reminder: tests must reset s_dtor_ct -- after flushing any prior test's
+ * leftovers via Ipc_arena::this_thread_gc() -- before relying on it. */
+struct Reclaim_probe
+{
+  /// Total ~Reclaim_probe() invocations in this process.
+  inline static std::atomic<unsigned int> s_dtor_ct{0};
+
+  /// The canary payload.
+  int m_value;
+
+  explicit Reclaim_probe(int value) : m_value(value) {}
+  ~Reclaim_probe() { ++s_dtor_ct; }
+}; // struct Reclaim_probe
+
+/* Rig for tests of Shm_session used in *standalone* fashion (no ipc::session anywhere): a pair of production
+ * Shm_sessions connected by a fresh Unix-domain-socket pair within this same process -- plus one owner-side
+ * Ipc_arena. Self-borrowing (process X borrowing from process X) is explicitly allowed and unremarkable per
+ * Shm_session docs; it lets these tests exercise both sides' behavior deterministically, with no helper
+ * process. By convention side A (index 0) is the owner/lender side; side B (index 1) the borrower side.
+ *
+ * The error handler given to each side's create() records its firings: a count and the first Error_code,
+ * awaitable via await_first_fire() (the handler fires from the session's internal thread). Per Shm_session
+ * contract it must fire at most once, and only upon channel-hosing (opposing trigger); locally-triggered
+ * destruction must not fire it. Tests reset/drop the public m_arena / m_session_a / m_session_b handles at
+ * will; whatever remains is destroyed at rig destruction (in safe order: sessions before arena). */
+class Standalone_session_pair :
+  public flow::log::Log_context
+{
+public:
+  explicit Standalone_session_pair(flow::log::Logger* logger) :
+    flow::log::Log_context(logger, Log_component::S_TEST)
+  {
+    using ipc::shm::arena_lend::test::create_test_pool_name_base;
+    namespace local_ns = transport::asio_local_stream_socket::local_ns;
+    using flow::util::Task_engine;
+    using boost::uuids::random_generator;
+
+    // The arena (owner-side). Nothing session-specific about it.
+    m_arena = Ipc_arena::create(get_logger(),
+                                make_shared<Memory_manager>(),
+                                create_test_pool_name_base("shmSessionStandalone"),
+                                util::shared_resource_permissions(util::Permissions_level::S_GROUP_ACCESS));
+    EXPECT_NE(m_arena, nullptr);
+
+    // A pre-connected local-socket pair; each end becomes one side's (subsumed) Shm_channel.
+    Task_engine asio_engine; // Formally required to construct asio sockets; unused otherwise.
+    using Peer_socket = transport::asio_local_stream_socket::Peer_socket<transport::Native_socket_stream_cfg::Protocol>;
+    Peer_socket asio_sock_a(asio_engine);
+    Peer_socket asio_sock_b(asio_engine);
+    ipc::Error_code sys_err_code;
+    local_ns::connect_pair(asio_sock_a, asio_sock_b, sys_err_code);
+    EXPECT_FALSE(sys_err_code) << "connect_pair() failed: [" << sys_err_code.message() << "].";
+
+    // Same (random) token on both sides, as prescribed by Shm_session::create() docs for standalone use.
+    const auto token = random_generator()();
+
+    const auto make_session
+      = [&](Peer_socket& asio_sock, unsigned int side_idx, const string& nickname)
+    {
+      Shm_channel shm_channel{get_logger(), nickname,
+                              transport::sync_io::Native_socket_stream
+                                {get_logger(), nickname, util::Native_handle{asio_sock.release()}}};
+      /* A connect_pair()ed socket lacks the normally-auto-detected opposing-process info; per
+       * Shm_session::create() docs set it explicitly. Both sides are this process. */
+      shm_channel.blob_snd()->remote_peer_process_credentials(ipc::test::get_process_creds());
+      return Shm_session::create(get_logger(), std::move(shm_channel), token,
+                                 [this, side_idx](const ipc::Error_code& err_code)
+                                   { on_channel_hosed(side_idx, err_code); });
+    };
+    m_session_a = make_session(asio_sock_a, 0, "shmStandaloneA");
+    m_session_b = make_session(asio_sock_b, 1, "shmStandaloneB");
+    EXPECT_NE(m_session_a, nullptr);
+    EXPECT_NE(m_session_b, nullptr);
+  } // Standalone_session_pair()
+
+  /**
+   * How many times the given side's channel-hosing error handler has fired so far (contract: 0 or 1).
+   *
+   * @param side_idx 0 for side A, 1 for side B.
+   * @return See above.
+   */
+  unsigned int fire_count(unsigned int side_idx) const
+  {
+    Lock lock(m_fire_mutex);
+    return m_fire_counts[side_idx];
+  }
+
+  /**
+   * Awaits (a few seconds max) the given side's first error-handler firing; returns its Error_code, or empty
+   * optional on timeout.
+   *
+   * @param side_idx 0 for side A, 1 for side B.
+   * @return See above.
+   */
+  optional<ipc::Error_code> await_first_fire(unsigned int side_idx)
+  {
+    // Poll (test-code simplicity) with a generous deadline; the detection itself is typically ~instant.
+    for (unsigned int attempt_idx = 0; attempt_idx != 500; ++attempt_idx)
+    {
+      {
+        Lock lock(m_fire_mutex);
+        if (m_fire_counts[side_idx] != 0)
+        {
+          return m_first_codes[side_idx];
+        }
+      }
+      std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    return {};
+  }
+
+private:
+  /**
+   * The sessions' error handler: records the firing (thread: the respective session's internal thread W).
+   *
+   * @param side_idx 0 for side A, 1 for side B.
+   * @param err_code The reported channel-hosing reason.
+   */
+  void on_channel_hosed(unsigned int side_idx, const ipc::Error_code& err_code)
+  {
+    Lock lock(m_fire_mutex);
+    if (m_fire_counts[side_idx]++ == 0)
+    {
+      m_first_codes[side_idx] = err_code;
+    }
+  }
+
+  /// Guards the handler-firing records below.
+  mutable Mutex m_fire_mutex;
+  /// Per-side count of error-handler firings.
+  std::array<unsigned int, 2> m_fire_counts{};
+  /// Per-side first-firing Error_code (meaningful once the respective count is nonzero).
+  std::array<ipc::Error_code, 2> m_first_codes;
+
+public:
+  // Public and reset()able at will by tests. Declared after the handler state (which they may touch at death).
+
+  /// The owner-side arena. Hold-edge tests drop this deliberately.
+  shared_ptr<Ipc_arena> m_arena;
+  /// Side A = owner/lender-side session.
+  shared_ptr<Shm_session> m_session_a;
+  /// Side B = borrower-side session. Hold-edge tests drop this deliberately.
+  shared_ptr<Shm_session> m_session_b;
+}; // class Standalone_session_pair
 
 } // Anonymous namespace
 
@@ -2273,15 +2668,21 @@ void execute_disconnect_tests(Shm_session_test& test_harness)
  * 8. Client converts the serialized object into an object and compares versus expected
  * 9. Client notifies server of object received
  * 10. Server instructs client to perform cleanup
- * 11. Client releases object (i.e., handles reach zero., which will internally notify server of object return
+ * 11. Client releases object (i.e., handles reach zero); the cross-process GC machinery (use-count atomics
+ *     in SHM) leads to the owner-side destructor running, whereby the server detects the object's return
  * 12. Client sends a notification to server indicating test completion
  * 13. Server receives test completion notification and ensures the object was removed successfully
- * 14. Client checks that the test shared memory pool was deregistered from the repository
+ * 14. Client checks that the test shared memory pool is *still* registered in the borrower repository despite
+ *     the server-side removal (mid-session removals are not propagated to borrowers; borrower-side cleanup
+ *     happens wholesale at session end -- and step 17 checks exactly that counterpart)
  * 15. Client checks that the object's shared memory pool was properly registered in the repository
  * 16. Server and client are destroyed
  * 17. Client checks that the object's shared memory pool was properly deregistered from the repository
  *
  * This test has the client and server in the same process as the unit test execution.
+ *
+ * Covers, per the master list at the top of this file: B1, B2, B3, C1. (The External_* and
+ * other-object-type sibling tests below cover the same, varying the process split and the object shape.)
  */
 TEST_F(Shm_session_test, In_process_array)
 {
@@ -2312,14 +2713,11 @@ TEST_F(Shm_session_test, External_process_array)
                        set_server_result(result == Test_shm_session_server_launcher::Result::S_SUCCESS);
                      });
 
-  // Delay execution of client so that server has sufficient cycles to start up
-  usleep(chrono::duration_cast<chrono::microseconds>(S_WAIT_FOR_SERVER_START_DURATION).count());
-
   execute_general_tests(*this);
 }
 
 /**
- * See "In_process_array" test above.  This test has the client receiving an object with offset pointer handles,
+ * See "In_process_array" test above. This test has the client receiving an object with offset pointer handles,
  * meaning that the object is stored in shared memory.
  */
 TEST_F(Shm_session_test, In_process_vector_offset_ptr)
@@ -2351,14 +2749,11 @@ TEST_F(Shm_session_test, External_process_vector_offset_ptr)
                        set_server_result(result == Test_shm_session_server_launcher::Result::S_SUCCESS);
                      });
 
-  // Delay execution of client so that server has sufficient cycles to start up
-  usleep(chrono::duration_cast<chrono::microseconds>(S_WAIT_FOR_SERVER_START_DURATION).count());
-
   execute_general_tests(*this);
 }
 
 /**
- * See "In_process_array" test above.  This test has the client receiving a large object with offset pointer handles,
+ * See "In_process_array" test above. This test has the client receiving a large object with offset pointer handles,
  * meaning that the object is stored in shared memory.
  */
 TEST_F(Shm_session_test, In_process_string_offset_ptr)
@@ -2390,14 +2785,11 @@ TEST_F(Shm_session_test, External_process_string_offset_ptr)
                        set_server_result(result == Test_shm_session_server_launcher::Result::S_SUCCESS);
                      });
 
-  // Delay execution of client so that server has sufficient cycles to start up
-  usleep(chrono::duration_cast<chrono::microseconds>(S_WAIT_FOR_SERVER_START_DURATION).count());
-
   execute_general_tests(*this);
 }
 
 /**
- * See "In_process_array" test above.  This test has the client receiving an object containing offset pointer
+ * See "In_process_array" test above. This test has the client receiving an object containing offset pointer
  * handles to fixed sized structures. The object and the structures are stored in shared memory.
  */
 TEST_F(Shm_session_test, In_process_list_offset_ptr)
@@ -2429,9 +2821,6 @@ TEST_F(Shm_session_test, External_process_list_offset_ptr)
                        set_server_result(result == Test_shm_session_server_launcher::Result::S_SUCCESS);
                      });
 
-  // Delay execution of client so that server has sufficient cycles to start up
-  usleep(chrono::duration_cast<chrono::microseconds>(S_WAIT_FOR_SERVER_START_DURATION).count());
-
   execute_general_tests(*this);
 }
 
@@ -2448,6 +2837,8 @@ TEST_F(Shm_session_test, External_process_list_offset_ptr)
  *    the client is destroyed.
  *
  * This test has the clients and server in the same process as the unit test execution.
+ *
+ * Covers, per the master list at the top of this file: B4, B5, C1.
  */
 TEST_F(Shm_session_test, Multisession_in_process)
 {
@@ -2468,7 +2859,7 @@ TEST_F(Shm_session_test, Multisession_in_process)
 }
 
 /**
- * See "Multisession_in_process" test above.  This test has clients in the same process as the unit test
+ * See "Multisession_in_process" test above. This test has clients in the same process as the unit test
  * execution and the server in a separate process.
  */
 TEST_F(Shm_session_test, Multisession_external_process)
@@ -2479,22 +2870,21 @@ TEST_F(Shm_session_test, Multisession_external_process)
                      {
                        set_server_result(result == Test_shm_session_server_launcher::Result::S_SUCCESS);
                      });
-  // Delay execution of client so that server has sufficient cycles to start up
-  usleep(chrono::duration_cast<chrono::microseconds>(S_WAIT_FOR_SERVER_START_DURATION).count());
-
   execute_multisession_tests(*this);
 }
 
 /**
- * See "In_process_array" test above.  This test has the following differences:
- * 1. The server simulates session disconnection with the client and attempts to lend shared memory data (i.e.,
- *    arena, shared memory pool, shared memory object) as well as remove a shared memory pool after disconnection.
- * 2. The server is destroyed before the client.
- * 3. The client attempts to remove a borrowed shared memory pool while an object that is backed by it is still
- *    registered.
- * 4. The client does not release the borrowed object until after the server is destroyed and attempts to return
- *    the object back to the owner.
- * 5. The client removes a borrowed shared memory pool after a borrowed object that is backed by it is deregistered.
+ * See "In_process_array" test above. This test has the following differences:
+ * 1. The server simulates session disconnection with the client and then attempts to lend shared memory data
+ *    (i.e., arena, shared memory pool, shared memory object), verifying each attempt fails gracefully.
+ * 2. The server is destroyed before the client, while the client still holds the borrowed object.
+ * 3. The client verifies the borrowed object's memory remains mapped (readable) -- though its content is no
+ *    longer guaranteed, the arena's destruction having mooted the outstanding borrow.
+ * 4. The client releases the borrowed object with the owner gone, which must quietly no-op.
+ *
+ * See execute_disconnect_tests() doc header for the full discussion.
+ *
+ * Covers, per the master list at the top of this file: A4, C2, C3, C6.
  */
 TEST_F(Shm_session_test, Disconnected_in_process)
 {
@@ -2516,16 +2906,12 @@ TEST_F(Shm_session_test, Disconnected_in_process)
 /**
  * See "Disconnected_in_process" test above. This test has the client in the same process as the unit test execution
  * and the server in a separate process.
+ *
+ * Covers, per the master list at the top of this file: the same as its in-process sibling, plus C7 (only
+ * here does the owner *process* exit, unlinking the use-count pool before the client's release).
  */
 TEST_F(Shm_session_test, Disconnected_external_process)
 {
-  // Configure logger for log output checks
-  auto* so_logger = static_cast<Test_logger*>(get_logger());
-  if (so_logger != nullptr)
-  {
-    so_logger->get_config().configure_default_verbosity(flow::log::Sev::S_TRACE, false);
-  }
-
   Test_shm_session_server_launcher launcher(get_logger());
   launcher.async_run(Object_type::S_ARRAY,
                      [&](Test_shm_session_server_launcher::Result result)
@@ -2534,119 +2920,205 @@ TEST_F(Shm_session_test, Disconnected_external_process)
                      },
                      Server_operation_mode::S_DISCONNECT);
 
-  // Delay execution of client so that server has sufficient cycles to start up
-  usleep(chrono::duration_cast<chrono::microseconds>(S_WAIT_FOR_SERVER_START_DURATION).count());
-
   execute_disconnect_tests(*this);
 }
 
 /**
- * Tests error handling situations.
+ * The owner-crash (uncivilized-ending) test: the server, in a separate process, SIGKILLs itself at the
+ * moment the client holds the borrowed object; the client then verifies the post-owner-crash contract
+ * (content intact; release works via the normal path; pool files leaked, swept). See
+ * execute_crash_tests() doc header for the full discussion including the intentional exclusions.
+ * Necessarily external-process-only: a process cannot crash itself and go on testing.
+ *
+ * Covers, per the master list at the top of this file: D1, D3.
  */
-TEST_F(Shm_session_test, Error_handling)
+TEST_F(Shm_session_test, Crash_external_process)
 {
-  auto server = make_unique<Test_shm_session_server>(
-    get_logger(),
-    ipc::test::get_process_creds().process_id(),
-    Test_shm_session_server_executor::char_array_creator_functor(),
-    [&](bool result) { set_server_result(result); },
-    Server_operation_mode::S_ERROR_HANDLING);
-  if (!server->start())
-  {
-    ADD_FAILURE() << "Could not start server";
-    return;
-  }
+  Test_shm_session_server_launcher launcher(get_logger());
+  launcher.async_run(Object_type::S_ARRAY,
+                     [&](Test_shm_session_server_launcher::Result result)
+                     {
+                       /* Death by SIGKILL maps to no Result enum value, so the launcher classifies it as
+                        * S_UNKNOWN_FAILURE (its WARNING will show the killing signal, 9). Uniquely among
+                        * these tests, that *is* the expected outcome. */
+                       set_server_result(result == Test_shm_session_server_launcher::Result::S_UNKNOWN_FAILURE);
+                     },
+                     Server_operation_mode::S_CRASH);
 
-  {
-    Test_client client(get_logger());
-    Error_handling_event_listener event_listener(*this, client, server->get_error_handling_collection_id());
-    client.set_event_listener(&event_listener);
-
-    // Start client and execute test
-    client.start();
-    wait_for_server_completion();
-
-    client.stop(); // Stop background processing before destroying event_listener, then client.
-    /* Without the previous line TSAN detected `client` was invoking stuff in its m_task_loop thread including
-     * set_result() which was accessing its m_event_listener -- while here that same guy `event_listener` was
-     * being destroyed (before `client` dtor). I (ygoldfel, not original test author) chose client.stop() simply
-     * as a way to ensure that doesn't happen. There's still arguably the issue of what should have the longer
-     * lifetime; or maybe there should be a reset_event_listener(); or... it's just test code, so it's not a major
-     * problem. Anyway at the moment we're fine. */
-  }
+  execute_crash_tests(*this);
 }
 
-/// Allocation_performance testing with zero clients.
+/// Allocation-performance smoke-benchmark, zero clients (pure-allocation baseline).  See helper's doc header.
 TEST_F(Shm_session_test, Allocation_performance_zero)
 {
-  auto server = make_unique<Test_shm_session_server>(
-    get_logger(),
-    ipc::test::get_process_creds().process_id(),
-    Test_shm_session_server_executor::many_objects_creator_functor(),
-    [&](bool result) { set_server_result(result); },
-    Server_operation_mode::S_ALLOCATION_PERFORMANCE);
-  if (!server->start())
-  {
-    ADD_FAILURE() << "Could not start server";
-    return;
-  }
-
-  // Wait for server to finish
-  wait_for_server_completion(Test_shm_session_server_executor::S_PERFORMANCE_TEST_TIMEOUT);
+  execute_allocation_performance_test(*this, 0);
 }
 
-/// Allocation_performance testing with one client.
+/// Allocation-performance smoke-benchmark, one live (idle) client session.  See helper's doc header.
 TEST_F(Shm_session_test, Allocation_performance_one)
 {
-  size_t NUM_CLIENTS = 1;
-
-  auto server = make_unique<Test_shm_session_server>(
-    get_logger(),
-    ipc::test::get_process_creds().process_id(),
-    Test_shm_session_server_executor::many_objects_creator_functor(),
-    [&](bool result) { set_server_result(result); },
-    Server_operation_mode::S_ALLOCATION_PERFORMANCE,
-    NUM_CLIENTS);
-  if (!server->start())
-  {
-    ADD_FAILURE() << "Could not start server";
-    return;
-  }
-
-  Test_client_manager client_manager(*this);
-  // Start clients
-  client_manager.start(NUM_CLIENTS, Client_operation_mode::S_ALLOCATION_PERFORMANCE);
-  // Wait for clients to finish
-  EXPECT_TRUE(client_manager.wait_for_completion());
-  // Wait for server to finish
-  wait_for_server_completion(Test_shm_session_server_executor::S_PERFORMANCE_TEST_TIMEOUT);
+  execute_allocation_performance_test(*this, 1);
 }
 
-/// Allocation_performance testing with five clients.
+/// Allocation-performance smoke-benchmark, five live (idle) client sessions.  See helper's doc header.
 TEST_F(Shm_session_test, Allocation_performance_five)
 {
-  size_t NUM_CLIENTS = 5;
+  execute_allocation_performance_test(*this, 5);
+}
 
-  auto server = make_unique<Test_shm_session_server>(
-    get_logger(),
-    ipc::test::get_process_creds().process_id(),
-    Test_shm_session_server_executor::many_objects_creator_functor(),
-    [&](bool result) { set_server_result(result); },
-    Server_operation_mode::S_ALLOCATION_PERFORMANCE,
-    NUM_CLIENTS);
-  if (!server->start())
+/**
+ * Standalone-mode (no ipc::session) probe of the two documented hold-edges:
+ * 1. Session->arena: lend_arena() stores its own arena handle (there is deliberately no unlend API), so
+ *    dropping the user's arena handle mid-session must change nothing observable -- reads, further
+ *    lend/borrow round-trips, and reclamation all keep working.
+ * 2. Borrowed-handle->session: each borrow_object()-returned handle's disposer holds the borrower-side
+ *    Shm_session, so dropping the user's session handle while borrowed handles live must likewise change
+ *    nothing observable; the session truly dies -- borrower-side wholesale cleanup and all -- only once the
+ *    last borrowed handle is dropped.
+ * Additionally asserts the reclamation contract at the end: with all borrower handles released and the owner
+ * handle dropped, the (piggy-backed) owner-side GC destroys the object -- observed via ~Reclaim_probe().
+ *
+ * Covers, per the master list at the top of this file: A2, A3.
+ */
+TEST_F(Shm_session_test, Standalone_hold_edges)
+{
+  /* Flush any prior test's deferred owner-side reclamations (queued for this thread), so s_dtor_ct can't get
+   * spuriously bumped by a piggy-backed scan mid-test; then zero it. */
+  Ipc_arena::this_thread_gc();
+  Reclaim_probe::s_dtor_ct = 0;
+
+  Standalone_session_pair rig(get_logger());
+  auto& session_a = rig.m_session_a;
+  auto& session_b = rig.m_session_b;
+
+  ASSERT_TRUE(session_a->lend_arena(rig.m_arena));
+  auto owner_handle = rig.m_arena->construct<Reclaim_probe>(1337);
+  ASSERT_NE(owner_handle, nullptr);
+  auto blob = session_a->lend_object(owner_handle);
+  ASSERT_FALSE(blob.empty());
+  auto borrowed_handle = session_b->borrow_object<Reclaim_probe>(blob);
+  ASSERT_NE(borrowed_handle, nullptr);
+  EXPECT_EQ(borrowed_handle->m_value, 1337);
+
+  // Hold-edge 1 (see doc header): drop our arena handle; nothing observable may change.
+  rig.m_arena.reset();
+  EXPECT_EQ(owner_handle->m_value, 1337);
+  auto blob_2 = session_a->lend_object(owner_handle); // Re-lending through the lent arena still works.
+  ASSERT_FALSE(blob_2.empty());
+  auto borrowed_handle_2 = session_b->borrow_object<Reclaim_probe>(blob_2);
+  ASSERT_NE(borrowed_handle_2, nullptr);
+  EXPECT_EQ(borrowed_handle_2->m_value, 1337);
+
+  // Hold-edge 2 (see doc header): drop our borrower-side session handle; nothing observable may change.
+  session_b.reset();
+  EXPECT_EQ(borrowed_handle->m_value, 1337);
+  EXPECT_EQ(borrowed_handle_2->m_value, 1337);
+
+  /* Unwind. Borrower handles first (the 2nd reset is the borrower-side session's true death, wholesale
+   * borrower-side cleanup included); no reclamation may occur while the owner handle is held. */
+  borrowed_handle.reset();
+  borrowed_handle_2.reset();
+  EXPECT_EQ(Reclaim_probe::s_dtor_ct.load(), 0u);
+  /* Now the owner handle: use-count reaches zero with the arena alive => the owner-side GC must reclaim.
+   * (The same-thread dispose typically reclaims right then; the explicit GC call makes it deterministic.) */
+  owner_handle.reset();
+  Ipc_arena::this_thread_gc();
+  EXPECT_EQ(Reclaim_probe::s_dtor_ct.load(), 1u);
+
+  /* Rig destruction cleans up the rest. Note side A's error handler may fire during all this (the borrower
+   * session's death above hoses side A's channel); that is contractual and harmless -- the Standalone
+   * session-end test asserts the specifics. */
+} // TEST_F(Shm_session_test, Standalone_hold_edges)
+
+/**
+ * Standalone-mode (no ipc::session) test of the advertised Shm_session session-end/error contract, in both
+ * directions. Specifically, per create() + class doc headers:
+ * - Local trigger: destroying one's Shm_session is the entire end-of-session procedure; one's own error
+ *   handler must never fire for that.
+ * - Opposing trigger: the surviving side's error handler must fire -- with a truthy Error_code, at most once
+ *   (even across its own subsequent destruction) -- upon detecting the channel-hosing.
+ * - Post-hosing: lend_arena() returns false; lend_object() returns an empty blob; but borrow_object() (of a
+ *   pre-hosing-obtained blob) works normally -- a deliberate, documented asymmetry.
+ * (Not tested intentionally: garbage blob contents of the correct size -- documented as undefined behavior;
+ * wrong-size/misaligned blobs -- covered by Lend_borrow_test's sabotage_shm_level_* cases.)
+ *
+ * Covers, per the master list at the top of this file: C5 (and D2, by the equivalence explained there).
+ */
+TEST_F(Shm_session_test, Standalone_session_end_errors)
+{
+  // Phase 1: borrower side ends locally; owner side detects. Post-hosing lend behavior asserted.
   {
-    ADD_FAILURE() << "Could not start server";
-    return;
+    Ipc_arena::this_thread_gc(); // See Standalone_hold_edges.
+    Reclaim_probe::s_dtor_ct = 0;
+
+    Standalone_session_pair rig(get_logger());
+    auto& session_a = rig.m_session_a;
+
+    ASSERT_TRUE(session_a->lend_arena(rig.m_arena));
+    auto owner_handle = rig.m_arena->construct<Reclaim_probe>(42);
+    ASSERT_NE(owner_handle, nullptr);
+    auto blob = session_a->lend_object(owner_handle);
+    ASSERT_FALSE(blob.empty());
+
+    // Local trigger on side B: destroy it (no borrowed handles exist); its own handler must never fire.
+    rig.m_session_b.reset();
+    EXPECT_EQ(rig.fire_count(1), 0u);
+
+    // Opposing trigger on side A: exactly one firing, truthy code.
+    const auto err_code_or_none = rig.await_first_fire(0);
+    ASSERT_TRUE(err_code_or_none.has_value()) << "Side A failed to detect opposing session end in time.";
+    EXPECT_TRUE(bool(*err_code_or_none));
+    EXPECT_EQ(rig.fire_count(0), 1u);
+
+    // Advertised post-hosing behavior.
+    EXPECT_FALSE(session_a->lend_arena(rig.m_arena));
+    EXPECT_TRUE(session_a->lend_object(owner_handle).empty());
+
+    // Destroying the hosed session must not re-fire the handler (at-most-once).
+    session_a.reset();
+    EXPECT_EQ(rig.fire_count(0), 1u);
+
+    /* (The lent-but-never-borrowed lend above means the object's use-count stays elevated: dropping
+     * owner_handle here does *not* reclaim it -- that happens only via arena-death mooting at rig
+     * destruction. So, deliberately, no s_dtor_ct assertion in this phase.) */
   }
 
-  Test_client_manager client_manager(*this);
-  // Start clients
-  client_manager.start(NUM_CLIENTS, Client_operation_mode::S_ALLOCATION_PERFORMANCE);
-  // Wait for clients to finish
-  EXPECT_TRUE(client_manager.wait_for_completion());
-  // Wait for server to finish
-  wait_for_server_completion(Test_shm_session_server_executor::S_PERFORMANCE_TEST_TIMEOUT);
-}
+  // Phase 2: owner side ends locally; borrower side detects -- and borrow_object() still works post-hosing.
+  {
+    Ipc_arena::this_thread_gc(); // See Standalone_hold_edges.
+    Reclaim_probe::s_dtor_ct = 0;
+
+    Standalone_session_pair rig(get_logger());
+
+    ASSERT_TRUE(rig.m_session_a->lend_arena(rig.m_arena));
+    auto owner_handle = rig.m_arena->construct<Reclaim_probe>(1943);
+    ASSERT_NE(owner_handle, nullptr);
+    auto blob = rig.m_session_a->lend_object(owner_handle);
+    ASSERT_FALSE(blob.empty());
+
+    // Local trigger on side A. The arena and object live on: we hold handles, and lending already occurred.
+    rig.m_session_a.reset();
+    EXPECT_EQ(rig.fire_count(0), 0u);
+
+    // Opposing trigger on side B.
+    const auto err_code_or_none = rig.await_first_fire(1);
+    ASSERT_TRUE(err_code_or_none.has_value()) << "Side B failed to detect opposing session end in time.";
+    EXPECT_TRUE(bool(*err_code_or_none));
+    EXPECT_EQ(rig.fire_count(1), 1u);
+
+    /* borrow_object() of the pre-hosing-obtained blob must work normally on the hosed side: the pool-lend
+     * messages all completed back when lend_object() succeeded, so everything needed is on hand. */
+    auto borrowed_handle = rig.m_session_b->borrow_object<Reclaim_probe>(blob);
+    ASSERT_NE(borrowed_handle, nullptr);
+    EXPECT_EQ(borrowed_handle->m_value, 1943);
+
+    // Full civilized unwind works despite the dead session: release, then owner drop => reclamation.
+    borrowed_handle.reset();
+    EXPECT_EQ(Reclaim_probe::s_dtor_ct.load(), 0u);
+    owner_handle.reset();
+    Ipc_arena::this_thread_gc();
+    EXPECT_EQ(Reclaim_probe::s_dtor_ct.load(), 1u);
+  }
+} // TEST_F(Shm_session_test, Standalone_session_end_errors)
 
 } // namespace ipc::session::shm::arena_lend::jemalloc::test

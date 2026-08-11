@@ -27,6 +27,8 @@
 #include <string>
 #include <iostream>
 #include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
+#include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
+#include "ipc/util/shared_name.hpp"
 #include <flow/test/test_common_util.hpp>
 
 namespace ipc::shm::arena_lend::test
@@ -37,20 +39,10 @@ extern const std::string S_SHM_OBJECT_NAME_PREFIX;
 /// Location of shared memory objects.
 extern const std::string S_SHM_OBJECT_DIR;
 
+Shared_name shm_object_generate_name(const Shared_name& pool_name_base);
 /**
- * Returns a new shared memory object name, which should be unique. The format is:
- * object name = [prefix] + "_" + [process id] + "_" + [monotonically increasing counter starting from 1]
- * prefix = S_SHM_OBJECT_NAME_PREFIX + "_" + [use case id]
- *
- * Typically the use case id is the test or application name.
- *
- * @param prefix The prefix of the name to use.
- *
- * @return See above.
- */
-std::string generate_shm_object_name(const std::string& prefix);
-/**
- * Creates a functor to generate shared memory object names for use in tests using a specific test prefix.
+ * Creates a SHM pool name base (prefix) for use in tests.  The resulting `Shared_name` encodes
+ * a test-specific prefix, the GTest suite name (or the supplied `use_case_id`), and the PID.
  *
  * @param use_case_id Typically the test or application name, which will be used as a trailing part of the
  *                    shared object name prefix. If this value is empty, the application must be running
@@ -58,11 +50,8 @@ std::string generate_shm_object_name(const std::string& prefix);
  *                    a context, an exception will be thrown.
  *
  * @return See above.
- *
- * @see generate_shm_object_name
  */
-Owner_shm_pool_collection::Shm_object_name_generator create_shm_object_name_generator(
-  const std::string& use_case_id = "");
+Shared_name create_test_pool_name_base(const std::string& use_case_id = "");
 
 /**
  * Removes shared memory objects directly via the filesystem.

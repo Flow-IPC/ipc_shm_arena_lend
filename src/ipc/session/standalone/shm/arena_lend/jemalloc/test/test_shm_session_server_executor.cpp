@@ -27,12 +27,11 @@
 #include "ipc/shm/stl/stateless_allocator.hpp"
 #include "ipc/test/test_logger.hpp"
 #include <flow/test/test_common_util.hpp>
-#include <future>
 
-namespace chrono = std::chrono;
-using std::future_status;
+namespace chrono = boost::chrono;
+using boost::promise;
+using boost::future_status;
 using std::make_unique;
-using std::promise;
 using std::shared_ptr;
 using std::size_t;
 using std::string;
@@ -41,8 +40,6 @@ using std::vector;
 
 using ipc::test::Test_logger;
 using ipc::shm::arena_lend::jemalloc::Ipc_arena;
-using ipc::shm::arena_lend::jemalloc::Ipc_arena_activator;
-using ipc::shm::arena_lend::jemalloc::Ipc_arena_allocator;
 
 namespace ipc::session::shm::arena_lend::jemalloc::test
 {
@@ -59,8 +56,6 @@ const chrono::duration<size_t> Test_shm_session_server_executor::S_TEST_TIMEOUT 
 /* ^-- 5 sec is plenty with decent hardware with full optimization, but even 10 is pushing it when built unoptimized.
  * Increasing to 60 to avoid misleading failure. @todo This can all probably be fine-tuned more cleverly with enough
  * effort. */
-const chrono::duration<size_t> Test_shm_session_server_executor::S_PERFORMANCE_TEST_TIMEOUT =
-  chrono::seconds(10);
 const string Test_shm_session_server_executor::S_MESSAGE("Server says hello");
 
 // Static method
@@ -97,12 +92,12 @@ Object_creation_callback Test_shm_session_server_executor::vector_char_creator_f
     [](const shared_ptr<Ipc_arena>& shm_arena,
        Destructor_callback&& destructor_callback) -> std::pair<Object_type, shared_ptr<void>>
     {
-      using Shm_vector = Vector_type<Ipc_arena_allocator>;
+      using Shm_vector = Vector_type<Ipc_arena::Allocator>;
       auto v = shm_arena->construct<Owner_object_wrapper<Shm_vector>>(std::move(destructor_callback));
 
       {
         // Scoped specification of arena to use in the allocator
-        Ipc_arena_activator ctx(shm_arena.get());
+        Ipc_arena::Activator ctx(shm_arena.get());
 
         // Add more values
         for (size_t i = 0; i < S_MESSAGE.size(); ++i)
@@ -122,7 +117,7 @@ Object_creation_callback Test_shm_session_server_executor::string_creator_functo
     [](const shared_ptr<Ipc_arena>& shm_arena,
        Destructor_callback&& destructor_callback) -> std::pair<Object_type, shared_ptr<void>>
     {
-      using Shm_string = String_type<Ipc_arena_allocator>;
+      using Shm_string = String_type<Ipc_arena::Allocator>;
       auto s = shm_arena->construct<Owner_object_wrapper<Shm_string,
                                                          const Shm_string::size_type&,
                                                          const char&>>(std::move(destructor_callback),
@@ -139,12 +134,12 @@ Object_creation_callback Test_shm_session_server_executor::list_creator_functor(
     [](const shared_ptr<Ipc_arena>& shm_arena,
        Destructor_callback&& destructor_callback) -> std::pair<Object_type, shared_ptr<void>>
     {
-      using Shm_list = List_type<Ipc_arena_allocator>;
+      using Shm_list = List_type<Ipc_arena::Allocator>;
       auto shm_list = shm_arena->construct<Owner_object_wrapper<Shm_list>>(std::move(destructor_callback));
 
       {
         // Scoped specification of arena to use in the allocator
-        Ipc_arena_activator ctx(shm_arena.get());
+        Ipc_arena::Activator ctx(shm_arena.get());
 
         for (size_t i = 0; i < S_LIST_SIZE; ++i)
         {
@@ -187,12 +182,12 @@ Object_creation_callback Test_shm_session_server_executor::many_objects_creator_
       clock_types.set(to_underlying(Clock_type::S_REAL_HI_RES));
       Timer perf_timer(&logger, "Jemalloc allocation perf timer", clock_types, 1);
 
-      using Shm_list = List_type<Ipc_arena_allocator>;
+      using Shm_list = List_type<Ipc_arena::Allocator>;
       auto shm_list = shm_arena->construct<Owner_object_wrapper<Shm_list>>(std::move(destructor_callback));
 
       {
         // Scoped specification of arena to use in the allocator
-        Ipc_arena_activator ctx(shm_arena.get());
+        Ipc_arena::Activator ctx(shm_arena.get());
 
         for (size_t i = 0; i < S_PERFORMANCE_LIST_SIZE; ++i)
         {

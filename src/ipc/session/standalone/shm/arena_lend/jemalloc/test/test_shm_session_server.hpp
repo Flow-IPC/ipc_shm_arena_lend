@@ -27,8 +27,8 @@
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_message.capnp.h"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_session_metadata.capnp.h"
+#include "ipc/shm/arena_lend/detail/owner_spc_impl.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
-#include "ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.hpp"
 #include "ipc/session/session_server.hpp"
 #include <flow/test/test_file_util.hpp>
 #include <boost/filesystem.hpp>
@@ -39,9 +39,31 @@ namespace ipc::session::shm::arena_lend::jemalloc::test
 class Test_shm_session;
 
 /**
- * Server utilizing Shm_session class, sessions and structured channels.
+ * Server harness utilizing Shm_session, sessions and structured channels; the counterpart of one or more
+ * Test_client (see shm_session_test.cpp). What it sets up:
+ * 1. An ipc::session::Session_server accepts sessions from Test_client(s) -- which run in the same process
+ *    or, via Test_shm_session_server_launcher, with this server in a separate child process.
+ * 2. Per accepted session, the server actively opens the *SHM channel* (session metadata type SHM) and hands
+ *    it to a new Test_shm_session (thin Shm_session subclass), then lends its jemalloc SHM arena through it.
+ *    From then on SHM pools created in the arena are automatically lent to that session's peer.
+ * 3. The client then opens the *app channel* (metadata type APP) -- a structured channel of TestMessage --
+ *    over which the test choreography runs: client sends START -> server responds with a lend_object()ed
+ *    object (created once, via the Object_creation_callback, and shared by all sessions) plus the id of a
+ *    separately created probe SHM pool (which the client uses to verify borrower-side pool registration) ->
+ *    client sends RECEIVED -> server removes the probe pool and responds CLEANUP -> client releases the
+ *    borrowed object and sends FINISH.
+ * 4. The server tracks per-session state (Session_data, Channel_state) and reports overall success exactly
+ *    once via the Result_callback: every session must reach FINISH, and the lent object must get
+ *    garbage-collected (its Owner_object_wrapper destructor fires the destructor callback).
  *
- * @see ipc::session::test::Shm_session_test
+ * Operation_mode selects the use case: S_NORMAL as above; S_DISCONNECT and S_CRASH layer negative
+ * checks on top (see the enum doc headers); S_ALLOCATION_PERFORMANCE skips the object exchange entirely and
+ * instead runs a timed mass allocation once all expected clients' app channels are up (see
+ * execute_allocation_performance_test() in shm_session_test.cpp for the full story).
+ *
+ * Client/server discovery is path- and PID-based, with no config files: the Server_app/Client_app specs are
+ * derived from the current (or given) process's binary path, and /tmp/<class name> serves as the
+ * kernel-persistent run dir (created in ctor, removed in dtor).
  */
 class Test_shm_session_server :
   public flow::log::Log_context
@@ -71,10 +93,10 @@ public:
     S_NORMAL = 0,
     /// Mark the session as disconnected to exercise lending and communication stoppage.
     S_DISCONNECT,
-    /// Performs tasks that lead to API errors.
-    S_ERROR_HANDLING,
     /// Performs tasks to measure shared memory object allocation performance.
-    S_ALLOCATION_PERFORMANCE
+    S_ALLOCATION_PERFORMANCE,
+    /// Once the client confirms receiving the lent object: crash (SIGKILL self) to exercise uncivilized ending.
+    S_CRASH
   }; // enum class Operation_mode
 
   /// Alias for functor to be executed when the object's destructor is called.
@@ -127,6 +149,16 @@ public:
   ~Test_shm_session_server();
 
   /**
+   * Removes the kernel-persistent run-time state a server instance maintains outside its process (namely the
+   * run-dir holding the CNS a/k/a PID file). A civilized server does this itself at destruction; a crashed
+   * (e.g., Operation_mode::S_CRASH) server cannot, leaving a stale CNS behind -- which costs a subsequent
+   * session's client a wasted (retried) connect attempt and leaves junk in the file-system. Tests that kill
+   * the server should therefore call this afterward (and defensively beforehand): not strictly required,
+   * but it reduces entropy. Best-effort: errors ignored.
+   */
+  static void remove_kernel_persistent_state();
+
+  /**
    * Returns the path to the server application with the assumption that the server application is in the same
    * directory as the process that is running.
    *
@@ -147,15 +179,6 @@ public:
    */
   static const Client_app& get_client_app();
   /**
-   * Returns whether the weak pointer has been set.
-   *
-   * @param weak The weak pointer.
-   *
-   * @return See above.
-   */
-  static bool is_weak_ptr_initialized(const std::weak_ptr<void>& weak);
-
-  /**
    * Starts the server, namely its task engine and acceptor.
    *
    * @return Whether the server was not previously started.
@@ -164,26 +187,11 @@ public:
   /// Stops the server, namely its task engine and acceptor.
   void stop();
 
-  /**
-   * Retrieves the collection id of the arena that will be used for testing error handling. In particular,
-   * this collection id will already be registered in the borrower when the owner lends the arena.
-   *
-   * @return See above.
-   */
-  inline Collection_id get_error_handling_collection_id() const;
-  /**
-   * Retrieves the shared memory pool that will be used for testing error handling. In particular, this
-   * shared memory pool is invalid and cannot be opened by the borrower.
-   *
-   * @return See above.
-   */
-  inline const std::shared_ptr<ipc::shm::arena_lend::Shm_pool>& get_error_handling_shm_pool() const;
-
 private:
   /// Alias for ajemalloc-based memory manager.
   using Memory_manager = ipc::shm::arena_lend::jemalloc::Memory_manager;
   /// Alias for a shared memory pool.
-  using Shm_pool = ipc::shm::arena_lend::Shm_pool;;
+  using Shm_pool = ipc::shm::arena_lend::Shm_pool;
 
   // Session aliases
   /// Convenience alias for MqType.
@@ -202,9 +210,7 @@ private:
   using App_channel_base = Server_session::Channel_obj;
   /// Convenience alias for a structured application channel.
   using App_channel = Server_session::Structured_channel<TestMessage>;
-  /// Convenience alias for a shared memory channel.
-  using Shm_channel_base = Shm_session::Shm_channel_base;
-  /// Convenience alias for a structured shared memory channel.
+  /// Convenience alias for a (SHM-session-internal, unstructured) shared memory channel.
   using Shm_channel = Shm_session::Shm_channel;
 
   /// The mutex type.
@@ -244,18 +250,18 @@ private:
      *
      * @param logger Used for logging purposes.
      * @param memory_manager The memory allocator.
-     * @param name_generator Shared object name generator.
+     * @param pool_name_base Pool-name prefix.
      *
-     * @return Upon success, a shared pointer to an instance of this class; otherwise, an empty shared pointer.
+     * @return A shared pointer to an instance of this class; not null.
      */
     static std::shared_ptr<Test_ipc_arena> create(
       flow::log::Logger* logger,
       const std::shared_ptr<Memory_manager>& memory_manager,
-      Shm_object_name_generator&& name_generator);
+      Shared_name&& pool_name_base);
 
     // Make public
-    using Shm_pool_collection::create_shm_pool;
-    using Shm_pool_collection::remove_shm_pool;
+    using Ipc_arena::create_shm_pool;
+    using Ipc_arena::remove_shm_pool;
 
   private:
     /**
@@ -263,11 +269,11 @@ private:
      *
      * @param logger Used for logging purposes.
      * @param memory_manager The memory allocator.
-     * @param name_generator Shared object name generator.
+     * @param pool_name_base Pool-name prefix.
      */
     Test_ipc_arena(flow::log::Logger* logger,
                    const std::shared_ptr<Memory_manager>& memory_manager,
-                   Shm_object_name_generator&& name_generator);
+                   Shared_name&& pool_name_base);
   }; // class Test_ipc_arena
 
   /**
@@ -277,27 +283,14 @@ private:
   {
   public:
     /**
-     * Constructor.
+     * Constructor.  (The SHM channel is not stored here: the Shm_session subsumes and owns it.)
      *
-     * @param shm_channel The channel used for transmitting shared memory information.
      * @param shm_session Shared memory information for the session.
      */
-    Session_data(std::shared_ptr<Shm_session::Shm_channel>&& shm_channel,
-                 std::shared_ptr<Test_shm_session>&& shm_session) :
-      m_shm_channel(std::move(shm_channel)),
+    explicit Session_data(std::shared_ptr<Test_shm_session>&& shm_session) :
       m_shm_session(std::move(shm_session)),
       m_app_channel_state(Channel_state::S_RESET)
     {
-    }
-
-    /**
-     * Returns the channel used for transmitting shared memory information (e.g., shared arenas, shared memory pools).
-     *
-     * @return See above.
-     */
-    const std::shared_ptr<Shm_channel>& get_shm_channel() const
-    {
-      return m_shm_channel;
     }
 
     /**
@@ -350,8 +343,6 @@ private:
     }
 
   private:
-    /// The channel used for transmitting shared memory information.
-    std::shared_ptr<Shm_session::Shm_channel> m_shm_channel;
     /// Shared memory management for the session.
     std::shared_ptr<Test_shm_session> m_shm_session;
     /// The channel used for transmitting application information.
@@ -441,13 +432,11 @@ private:
    * Registers a shared memory information with a session.
    *
    * @param session The session to register the information with.
-   * @param shm_channel The channel used for transmitting shared memory information.
    * @param shm_session The shared memory information.
    *
    * @return Whether the operation succeeded, which would only fail if the session was already registered.
    */
   bool register_session(const std::shared_ptr<Server_session>& session,
-                        std::shared_ptr<Shm_channel>&& shm_channel,
                         std::shared_ptr<Test_shm_session>&& shm_session);
   /**
    * Handles receiving an opened application-based channel by the client.
@@ -505,6 +494,12 @@ private:
    * @return See above.
    */
   bool check_test_completed();
+  /**
+   * Returns whether every registered session's application channel has reached the S_FINISH state.
+   *
+   * @return See above.
+   */
+  bool all_app_channels_finished() const;
   /**
    * Executes a series of tests demonstrating that simulated session disconnection will prevent further messages and
    * lending via the session.
@@ -566,9 +561,6 @@ private:
   Client_app::Master_set m_allowed_client_apps;
   /// The acceptor for connections.
   std::unique_ptr<Session_server> m_session_server;
-  /// The listener for shared memory pool events that places it in a global repository for offset_ptr use.
-  ipc::shm::arena_lend::Owner_shm_pool_listener_for_repository m_arena_shm_pool_listener;
-
   /// The memory manager on the server.
   std::shared_ptr<Memory_manager> m_memory_manager;
   /// The shared memory arena on the server.
@@ -580,11 +572,29 @@ private:
   /// The type of the object that was created.
   Object_type m_test_object_type;
   /**
-   * The object that was created. Use #is_weak_ptr_initialized to check if it was ever historically set.
-   * We use a weak pointer here so that the object can be auto-deleted on last reference and we can validate
-   * that it was deleted if the conversion (e.g., lock operation) fails.
+   * Strong handle to the object that was created (null until then): the owner must hold its handle in order
+   * to (re)lend the object to further sessions. Dropped -- allowing garbage collection -- once every session
+   * has FINISHed; see process_request().
    */
-  std::weak_ptr<void> m_test_object_weak;
+  std::shared_ptr<void> m_test_object;
+  /**
+   * Relay through which the lent object's destructor callback (see send_object()) notifies `*this` of the
+   * object's deletion -- without touching `*this` if it is already destroyed. That is a real possibility:
+   * when the arena is torn down with the object still lent out (e.g., S_DISCONNECT mode: the borrower holds
+   * it past our destruction), the object is reclaimed on the object-DB's own schedule -- via the
+   * degraded-mode thread once our constructing thread exits, at the latest at process exit via the atexit
+   * machinery -- in any case after this server, and its task loop, are gone.
+   * The destructor callback shares ownership of this relay; our destructor nulls #m_server within it.
+   */
+  struct Object_deleted_relay
+  {
+    /// Synchronizes access to #m_server (destruction of the server versus the destructor callback firing).
+    Mutex m_mutex;
+    /// The server to notify of object deletion; null once that server is destroyed.
+    Test_shm_session_server* m_server = nullptr;
+  }; // struct Object_deleted_relay
+  /// See Object_deleted_relay.
+  const std::shared_ptr<Object_deleted_relay> m_object_deleted_relay;
   /// Whether the test object was deleted.
   bool m_test_object_deleted;
   /// Associates session to session data.
@@ -602,10 +612,6 @@ private:
   const Object_creation_callback m_object_creation_callback;
   /// The callback to be executed when the test result is determined.
   const Result_callback m_result_callback;
-  /// The arena used to test arena lending errors.
-  const std::shared_ptr<Test_ipc_arena> m_error_handling_shm_arena;
-  /// The shared memory pool used to test shared memory pool lending errors.
-  const std::shared_ptr<Shm_pool> m_error_handling_shm_pool;
   /// The expected clients to establish a session during performance tests.
   const size_t m_performance_expected_clients;
 
@@ -619,22 +625,6 @@ private:
   static const std::string S_SERVER_PROGRAM_NAME;
   /// The directory (no trailing slash) to put server information at runtime.
   static const Fs_path S_KERNEL_PERSISTENT_RUN_DIR;
-  /// The timeout to process a response for a shared memory channel request.
-  static const ipc::util::Fine_duration S_SHM_CHANNEL_RESPONSE_TIMEOUT;
-  /// Message phrase of a failed operation on the remote peer for a synchronized request.
-  static const std::string S_ERROR_HANDLING_REMOTE_PEER_FAILED_PHRASE;
-  /// Message phrase emitted during an attempt to register a duplicate entry.
-  static const std::string S_ERROR_HANDLING_DUPLICATE_MESSAGE_PHRASE;
-  /// Message phrase emitted during an attempt to remove a unregistered entry.
-  static const std::string S_ERROR_HANDLING_UNREGISTERED_MESSAGE_PHRASE;
-  /// Message phrase emitted during an attempt to register an entry in an unregistered collection.
-  static const std::string S_ERROR_HANDLING_UNREGISTERED_COLLECTION_MESSAGE_PHRASE;
-  /// The (arbitrary) address of the shared memory pool to test lending errors.
-  static void* S_ERROR_HANDLING_SHM_POOL_ADDRESS;
-  /// The (arbitrary) pool size of the shared memory pool to test lending errors.
-  static constexpr size_t S_ERROR_HANDLING_SHM_POOL_SIZE = 4096;
-  /// The (arbitrary) file descriptor of the shared memory pool to test lending errors.
-  static constexpr int S_ERROR_HANDLING_SHM_POOL_FD = 1;
 
   friend std::ostream& operator<<(std::ostream& os, Test_shm_session_server::Channel_state channel_state);
 }; // class Test_shm_session_server
@@ -666,18 +656,5 @@ std::ostream& operator<<(std::ostream& os, TestMessage::RequestType request_type
  * @return The output stream parameter.
  */
 std::ostream& operator<<(std::ostream& os, Test_shm_session_server::Channel_state channel_state);
-
-Collection_id Test_shm_session_server::get_error_handling_collection_id() const
-{
-  assert(m_error_handling_shm_arena != nullptr);
-  return m_error_handling_shm_arena->get_id();
-}
-
-const std::shared_ptr<ipc::shm::arena_lend::Shm_pool>&
-Test_shm_session_server::get_error_handling_shm_pool() const
-{
-  assert(m_error_handling_shm_pool != nullptr);
-  return m_error_handling_shm_pool;
-}
 
 } // namespace ipc::session::shm::arena_lend::jemalloc::test

@@ -22,36 +22,26 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #include "ipc/shm/arena_lend/memory_manager.hpp"
-#include "ipc/common.hpp"
-#include <sys/mman.h>
-#include <string.h>
+#include <cstdlib>
 #include <errno.h>
 
 using std::size_t;
-using flow::log::Logger;
 
 namespace ipc::shm::arena_lend
 {
 
-Memory_manager::Memory_manager(Logger* logger) :
-  Log_context(logger, Log_component::S_SHM)
-{
-}
-
-void* Memory_manager::allocate(size_t size)
+void* Memory_manager::allocate(size_t size) const
 {
   assert(size > 0);
-  void* address = ::malloc(size);
-  FLOW_LOG_DATA("Allocated size " << size << ", address " << address);
-  return address;
+  return std::malloc(size);
 }
 
-void Memory_manager::deallocate(void* address)
+void Memory_manager::deallocate(void* address) const
 {
-  assert(address != nullptr);
-  FLOW_LOG_DATA("Deallocating address at " << address);
-  ::free(address);
+  assert(address);
+  std::free(address);
 }
 
 } // namespace ipc::shm::arena_lend

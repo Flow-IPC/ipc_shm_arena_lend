@@ -169,16 +169,15 @@ private:
 
 /// Death tests - suffixed with DeathTest per Googletest conventions, aliased to fixture.
 using Jemalloc_pages_DeathTest = Jemalloc_pages_test;
-#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
-TEST_F(Jemalloc_pages_DeathTest, DISABLED_Interface)
-#else
 TEST_F(Jemalloc_pages_DeathTest, Interface)
-#endif
 {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Death tests rely on assert()s which are disabled in this (NDEBUG) build.";
+#endif
   bool commit;
 
-  Owner_shm_pool_collection::Shm_object_name_generator name_generator = create_shm_object_name_generator();
-  string shm_object_name = name_generator(0 /* ignored anyway by our generator */);
+  auto pool_name_base = create_test_pool_name_base();
+  string shm_object_name = shm_object_generate_name(pool_name_base).str();
   Test_shm_pool_collection& collection = get_collection();
   int fd = collection.create_shm_object(shm_object_name, S_PAGE_SIZE);
   EXPECT_NE(fd, S_NO_FD);
@@ -339,8 +338,8 @@ TEST_F(Jemalloc_pages_test, Interface)
   EXPECT_EQ(Jemalloc_pages::get_page_mask(), (S_PAGE_SIZE - 1));
 
   Test_shm_pool_collection& collection = get_collection();
-  Owner_shm_pool_collection::Shm_object_name_generator name_generator = create_shm_object_name_generator();
-  string shm_object_name = name_generator(0 /* ignored anyway by our generator */);
+  auto pool_name_base = create_test_pool_name_base();
+  string shm_object_name = shm_object_generate_name(pool_name_base).str();
   int fd = collection.create_shm_object(shm_object_name, S_HUGE_PAGE_SIZE);
   EXPECT_NE(fd, S_NO_FD);
 

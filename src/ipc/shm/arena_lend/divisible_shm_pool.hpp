@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
 #include "ipc/shm/arena_lend/shm_pool.hpp"
@@ -91,7 +92,7 @@ Divisible_shm_pool::size_t Divisible_shm_pool::get_remaining_size() const
 
 bool Divisible_shm_pool::is_completely_removed() const
 {
-  return (m_remaining_size == 0);
+  return m_remaining_size == 0;
 }
 
 bool Divisible_shm_pool::remove_size(size_t size)

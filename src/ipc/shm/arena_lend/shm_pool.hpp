@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
 #include "ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp"
@@ -38,7 +39,7 @@ class Shm_pool
 {
 public:
   /// Short-hand for pool ID type.
-  using pool_id_t = detail::Shm_pool_offset_ptr_data_base::pool_id_t;
+  using pool_id_t = detail::pool_id_t;
   /// Short-hand for pool offset type a/k/a size type in this context.
   using size_t = detail::Shm_pool_offset_ptr_data_base::pool_offset_t;
 
@@ -109,14 +110,13 @@ public:
   inline bool is_subset(const void* address, std::size_t size, size_t* offset = nullptr) const;
   /**
    * Converts an offset to a pointer. Note that `offset` can be `>= get_size()` or negative in which case an
-   * out-of-bounds address will still (intentionally) be returned. See explanation in
-   * Shm_pool_repository_singleton::to_address() doc header.
+   * out-of-bounds address will still (intentionally) be returned.
    *
    * @param offset The byte offset from the base of the pool.
    *
    * @return See above.
    */
-  void* to_address(size_t offset) const;
+  inline void* to_address(size_t offset) const;
   /**
    * Compares against another SHM pool for equality.
    *
@@ -198,6 +198,12 @@ bool Shm_pool::is_subset(const void* address, std::size_t size, size_t* offset) 
   return determine_offset(address, offset_ref) && (static_cast<decltype(size)>(m_size - offset_ref) >= size);
 }
 
+void* Shm_pool::to_address(size_t offset) const
+{
+  // Intentional/as promised: no check against get_size() nor 0.  And yes, as of this writing, our size_t is signed.
+  return m_address + offset;
+}
+
 bool Shm_pool::operator!=(const Shm_pool& other) const
 {
   return !operator==(other);
@@ -206,8 +212,8 @@ bool Shm_pool::operator!=(const Shm_pool& other) const
 // Static method
 bool Shm_pool::is_adjacent(const void* address_a, size_t size_a, const void* address_b, size_t size_b)
 {
-  return (((static_cast<const uint8_t*>(address_a) + size_a) == address_b) ||
-          ((static_cast<const uint8_t*>(address_b) + size_b) == address_a));
+  return ((static_cast<const uint8_t*>(address_a) + size_a) == address_b) ||
+         ((static_cast<const uint8_t*>(address_b) + size_b) == address_a);
 }
 
 inline std::ostream& operator<<(std::ostream& os, const Shm_pool& shm_pool)

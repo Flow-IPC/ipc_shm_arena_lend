@@ -553,7 +553,7 @@ namespace
     EXPECT_FALSE(detached.is_handle_in_arena(h));
   }
 
-  /* One TEST per (template test body, SHM flavor). */
+  // One TEST per (template test body, SHM-provider).
 #define SHM_TEST(name) \
   TEST(Lend_borrow_test, name##_ShmClassic) { name<ShmType::CLASSIC>(); } \
   TEST(Lend_borrow_test, name##_ShmJemalloc) { name<ShmType::JEMALLOC>(); }

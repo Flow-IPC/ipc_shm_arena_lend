@@ -30,7 +30,7 @@ your code, one will simply gain the properties of SHM-jemalloc.
     the commercial-grade memory allocation provider, jemalloc (which powers Meta, FreeBSD, and many other
     huge things).  You get thread caching, fragmentation avoidance -- all that good stuff that regular-heap
     `malloc()` and `new` gets you.  By contrast SHM-classic (from `ipc_shm`) uses a reasonable but basic
-    Boost-supplied allocation algorithm with few to no such perfomance-oriented features.  (One can replace
+    Boost-supplied allocation algorithm with few to no such performance-oriented features.  (One can replace
     that algorithm, but it's not easy to do better: that's why things like jemalloc and tcmalloc exist and
     are no joke.)
   - The owner-segregated (a/k/a "arena-lending," hence the name) design of SHM-jemalloc enables a greater

@@ -24,6 +24,7 @@
 
 #include "common.hpp"
 #include "schema.capnp.h"
+#include <ipc/shm/arena_lend/util.hpp>
 #include <ipc/transport/bipc_mq_handle.hpp>
 #include <ipc/session/shm/arena_lend/jemalloc/client_session.hpp>
 
@@ -48,9 +49,9 @@ int main(int argc, char const * const * argv)
   setup_logging(&std_logger, &log_logger, argc, argv, false);
   FLOW_LOG_SET_CONTEXT(&(*std_logger), Flow_log_component::S_UNCAT);
 
-  ipc::session::shm::arena_lend::Borrower_shm_pool_collection_repository_singleton::get_instance()
-    .set_logger(&(*log_logger));
+  ipc::shm::arena_lend::set_logger(&(*log_logger));
 
+  bool ok = true;
   try
   {
     ensure_run_env(argv[0], false);
@@ -97,8 +98,10 @@ int main(int argc, char const * const * argv)
     FLOW_LOG_WARNING("Caught exception: [" << exc.what() << "].");
     FLOW_LOG_WARNING("(Perhaps you did not execute session-server executable in parallel, or "
                      "you executed one or both of us oddly?)");
-    return 1;
+    ok = false;
   }
 
-  return 0;
+  ipc::shm::arena_lend::set_logger(nullptr);
+
+  return ok ? 0 : 1;
 } // main()

@@ -22,32 +22,31 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
-#include "ipc/util/use_counted_object.hpp"
-#include "ipc/shm/arena_lend/shm_pool_holder.hpp"
-#include <memory>
+#include "ipc/shm/arena_lend/jemalloc/detail/jemalloc_fwd.hpp"
+#include "ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp"
+#include <jemalloc/jemalloc.h>
+#include <cstddef>
 
-namespace ipc::shm::arena_lend::detail
+namespace ipc::shm::arena_lend::jemalloc::detail::stat
 {
 
-/**
- * Tracks utilization of a shared memory pool.
- */
-class Shm_pool_use_tracker :
-  public util::Use_counted_object,
-  public Shm_pool_holder
-{
-public:
-  /**
-   * Constructor.
-   *
-   * @param shm_pool The shared memory pool.
-   */
-  Shm_pool_use_tracker(const std::shared_ptr<Shm_pool>& shm_pool) :
-    Shm_pool_holder(shm_pool)
-  {
-  }
-}; // class Shm_pool_use_tracker
+// Template implementations.
 
-} // namespace ipc::shm::arena_lend::detail
+template<typename T>
+bool mallctl_read(const char* name, T* val)
+{
+  auto val_size = sizeof(T);
+  return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)(name, val, &val_size, nullptr, 0) == 0;
+}
+
+template<typename T>
+bool mallctl_read_mib(const size_t* mib, size_t mib_len, T* val)
+{
+  auto val_size = sizeof(T);
+  return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctlbymib)(mib, mib_len, val, &val_size, nullptr, 0) == 0;
+}
+
+} // namespace ipc::shm::arena_lend::jemalloc::detail::stat

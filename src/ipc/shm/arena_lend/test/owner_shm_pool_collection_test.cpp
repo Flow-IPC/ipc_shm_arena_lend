@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 #include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
+#include "ipc/util/util.hpp"
 #include "ipc/shm/arena_lend/memory_manager.hpp"
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
@@ -144,7 +145,7 @@ public:
    */
   Test_owner_shm_pool_collection_2(flow::log::Logger* logger,
                                    std::shared_ptr<Memory_manager> memory_manager,
-                                   Collection_id id = Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID) :
+                                   collection_id_t id = Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID) :
     Test_owner_shm_pool_collection(logger, id, memory_manager)
   {
   }
@@ -203,23 +204,27 @@ public:
    */
   shared_ptr<Shm_pool> simulate_create_shm_pool_address_collision(size_t size)
   {
-    string name = generate_shm_object_name(0 /* ignored by us anyway */);
-    shared_ptr<Shm_pool> actual_shm_pool;
     const auto id = detail::Shm_pool_offset_ptr_data_base::generate_pool_id();
-    shared_ptr<Shm_pool> result =
-      Owner_shm_pool_collection::create_shm_pool(detail::Shm_pool_offset_ptr_data_base::generate_pool_id(),
-                                                 name,
-                                                 size,
-                                                 nullptr,
-                                                 [&](int fd, size_t size, void*) -> void*
-                                                 {
-                                                   void* address = map_shm(size, true, true, fd);
-                                                   // Register the SHM pool to get the collision
-                                                   actual_shm_pool = make_shared<Shm_pool>(id, name, address, size, fd);
-                                                   EXPECT_TRUE(register_shm_pool(actual_shm_pool));
-                                                   return address;
-                                                 });
-    EXPECT_TRUE(deregister_shm_pool(actual_shm_pool));
+    const auto name = generate_shm_object_name(id).str();
+    shared_ptr<Shm_pool> collided_shm_pool;
+
+    /* The memory-map functor sneakily registers *another* pool at the very address it is about to report;
+     * the outer create_shm_pool()'s own registration then hits a duplicate address, which is fatal
+     * (production assert "Duplicate SHM pool address").  Hence, in the intended (death-test) use, control
+     * never returns from the following call; the tail below exists for well-formedness only. */
+    auto result
+      = Owner_shm_pool_collection::create_shm_pool(id, name, size, nullptr,
+                                                   [&](int fd, size_t mapped_size, void*) -> void*
+    {
+      void* const address = map_shm(mapped_size, true, true, fd);
+      collided_shm_pool
+        = make_shared<Shm_pool>(detail::Shm_pool_offset_ptr_data_base::generate_pool_id(),
+                                name + "_collided", address, mapped_size, fd);
+      EXPECT_TRUE(register_shm_pool(collided_shm_pool));
+      return address;
+    });
+
+    EXPECT_TRUE(deregister_shm_pool(collided_shm_pool));
     return result;
   }
 
@@ -265,7 +270,6 @@ public:
       unmapped_memory_pool);
   }
 
-
   /**
    * Performs an allocation backed by shared memory, uses the allocation to construct an object and returns a shared
    * pointer to this object. When the shared pointer has no more references, it will be destructed by this pool
@@ -280,7 +284,23 @@ public:
   template <typename T, typename... Args>
   std::shared_ptr<T> construct(Args&&... args)
   {
-    return construct_helper<T>(allocate(sizeof(T)), Object_deleter(this), std::forward<Args>(args)...);
+    auto* const addr = allocate(sizeof(T));
+    if (!addr) { return nullptr; }
+    auto* const obj = static_cast<T*>(addr);
+    util::construct_at(obj, std::forward<Args>(args)...);
+    return std::shared_ptr<T>(obj, Object_deleter(this));
+  }
+
+  void set_test_event_listener(Test_event_listener* listener) { m_test_event_listener = listener; }
+
+protected:
+  void on_shm_pool_created(const std::shared_ptr<Shm_pool>& shm_pool) override
+  {
+    if (m_test_event_listener) { m_test_event_listener->notify_created_shm_pool(shm_pool); }
+  }
+  void on_shm_pool_removed(const std::shared_ptr<Shm_pool>& shm_pool, bool removed_shared_memory) override
+  {
+    if (m_test_event_listener) { m_test_event_listener->notify_removed_shm_pool(shm_pool, removed_shared_memory); }
   }
 
 private:
@@ -288,7 +308,7 @@ private:
    * Handles callback from shared pointer destruction. The result should be a destruction of the object and return
    * of the underlying memory back to the memory manager.
    */
-  class Object_deleter 
+  class Object_deleter
   {
   public:
     /**
@@ -332,6 +352,8 @@ private:
   void* m_last_address_allocated = nullptr;
   /// The last address deallocated or nullptr, if there was none.
   void* m_last_address_deallocated = nullptr;
+  /// Optional test event listener for capturing notifications.
+  Test_event_listener* m_test_event_listener = nullptr;
 }; // class Test_owner_shm_pool_collection_2
 
 /// Google test fixture
@@ -342,7 +364,7 @@ public:
   /// Constructor
   Owner_shm_pool_collection_test() :
     m_test_logger(flow::log::Sev::S_TRACE),
-    m_memory_manager(make_shared<Memory_manager>(&m_test_logger)),
+    m_memory_manager(make_shared<Memory_manager>()),
     m_collection(&m_test_logger, m_memory_manager)
   {
   }
@@ -398,12 +420,11 @@ private:
 
 /// Death tests - suffixed with DeathTest per Googletest conventions, which allows aliasing.
 using Owner_shm_pool_collection_DeathTest = Owner_shm_pool_collection_test;
-#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
-TEST_F(Owner_shm_pool_collection_DeathTest, DISABLED_Interface_death)
-#else
 TEST_F(Owner_shm_pool_collection_DeathTest, Interface_death)
-#endif
 {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Death tests rely on assert()s which are disabled in this (NDEBUG) build.";
+#endif
   auto& collection = get_collection();
 
   // Bad size
@@ -422,7 +443,7 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
   auto& collection = get_collection();
 
   EXPECT_EQ(collection.get_id(), Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID);
-  
+
   // Basic allocation (memory manager is really doing the work)
   {
     void* p = collection.allocate(100);
@@ -489,7 +510,7 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
       Test_owner_shm_pool_collection collection_2(get_logger(),
                                                   Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID,
                                                   get_memory_manager(),
-                                                  create_shm_object_name_generator(),
+                                                  create_test_pool_name_base(),
                                                   util::Permissions_level::S_USER_ACCESS);
       auto pool_2 = collection_2.create_shm_pool(get_pool_size());
       EXPECT_NE(pool_2, nullptr);
@@ -502,11 +523,13 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
 
     // Map failure
     {
-      const string name = collection.generate_shm_object_name(0 /* ignored by us anyway */);
+      const string name
+        = collection.generate_shm_object_name(detail::Shm_pool_offset_ptr_data_base::generate_pool_id()).str();
       shared_ptr<Shm_pool> pool = collection.simulate_create_shm_pool_map_failure(name, get_pool_size());
       EXPECT_EQ(pool, nullptr);
       // Make sure we didn't have residual object
-      EXPECT_NE(shm_unlink(name.c_str()), 0);
+      const string shm_name = '/' + name;
+      EXPECT_NE(shm_unlink(shm_name.c_str()), 0);
     }
 
     // Successful unmap
@@ -539,11 +562,7 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
   // Notifications
   {
     Test_event_listener event_listener;
-
-    // Add/remove tests
-    EXPECT_FALSE(collection.remove_event_listener(&event_listener));
-    EXPECT_TRUE(collection.add_event_listener(&event_listener));
-    EXPECT_FALSE(collection.add_event_listener(&event_listener));
+    collection.set_test_event_listener(&event_listener);
 
     // Create/delete tests
     // Normal creation should yield a notification
@@ -615,8 +634,7 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
     }
     event_listener.reset_notifications();
 
-    EXPECT_TRUE(collection.remove_event_listener(&event_listener));
-    EXPECT_FALSE(collection.remove_event_listener(&event_listener));
+    collection.set_test_event_listener(nullptr);
   }
 }
 
@@ -999,7 +1017,7 @@ TEST_F(Owner_shm_pool_collection_test, Multithread_remove)
 
   // Decrease severity to get more output as necessary for debugging
   Test_logger logger(flow::log::Sev::S_INFO);
-  Test_owner_shm_pool_collection_2 collection(&logger, make_shared<Memory_manager>(&logger));
+  Test_owner_shm_pool_collection_2 collection(&logger, make_shared<Memory_manager>());
 
   /**
    * Creates a shared memory pool and puts it into the pool list.

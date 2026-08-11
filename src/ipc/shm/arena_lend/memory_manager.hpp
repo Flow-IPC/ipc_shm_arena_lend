@@ -22,10 +22,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
 #include <cstddef>
-#include <flow/log/log.hpp>
+#include <flow/util/util.hpp>
 
 namespace ipc::shm::arena_lend
 {
@@ -34,18 +35,9 @@ namespace ipc::shm::arena_lend
  * Manages memory allocations and deallocations.
  */
 class Memory_manager :
-  public flow::log::Log_context
+  public flow::util::Null_interface
 {
 public:
-  /**
-   * Constructor.
-   *
-   * @param logger For logging purposes.
-   */
-  Memory_manager(flow::log::Logger* logger);
-  /// Destructor.
-  virtual ~Memory_manager() = default;
-
   /**
    * Allocates uninitialized memory using the system allocator.
    *
@@ -53,13 +45,13 @@ public:
    *
    * @return Upon success, a non-null pointer to the base address of the allocation.
    */
-  virtual void* allocate(std::size_t size);
+  virtual void* allocate(std::size_t size) const;
   /**
    * Deallocates previously allocated memory using the system deallocator.
    *
    * @param address The address to be deallocated, which must be non-null.
    */
-  virtual void deallocate(void* address);
+  virtual void deallocate(void* address) const;
 }; // class Memory_manager
 
 } // namespace ipc::shm::arena_lend

@@ -28,6 +28,8 @@
 #include "ipc/session/detail/shm/arena_lend/jemalloc/session_impl.hpp"
 #include "ipc/session/detail/server_session_impl.hpp"
 #include "ipc/session/error.hpp"
+#include "ipc/transport/native_socket_stream_cfg.hpp"
+#include "ipc/transport/struc/struc_fwd.hpp"
 #include <boost/move/make_unique.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc
@@ -42,17 +44,17 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * @see shm::arena_lend::jemalloc::Server_session doc header which covers both its public behavior/API and a
  *      detailed sketch of the entire implementation.
  *
- * @tparam S_MQ_TYPE_OR_NONE
+ * @tparam MQ_TYPE_OR_NONE
  *         See shm::arena_lend::jemalloc::Server_session counterpart.
- * @tparam S_TRANSMIT_NATIVE_HANDLES
+ * @tparam TRANSMIT_NATIVE_HANDLES
  *         See shm::arena_lend::jemalloc::Server_session counterpart.
  * @tparam Mdt_payload
  *         See shm::arena_lend::jemalloc::Server_session counterpart.
  */
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 class Server_session_impl :
   public Session_impl
-           <session::Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
+           <session::Server_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload,
                                          session::schema::ShmType::JEMALLOC,
                                          transport::struc::shm::Builder_base::S_MAX_SERIALIZATION_SEGMENT_SZ,
                                          // Session_base::Graceful_finisher doc header explains why true here:
@@ -63,7 +65,7 @@ public:
 
   /// Short-hand for our non-`virtual` base.
   using Base = Session_impl
-                 <session::Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
+                 <session::Server_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload,
                                                session::schema::ShmType::JEMALLOC,
                                                transport::struc::shm::Builder_base::S_MAX_SERIALIZATION_SEGMENT_SZ,
                                                true>>;
@@ -142,9 +144,12 @@ public:
 
   /**
    * See shm::arena_lend::jemalloc::Server_session_mv counterpart.
+   *
+   * @param segment1_sz
+   *        See shm::arena_lend::jemalloc::Server_session_mv counterpart.
    * @return See shm::arena_lend::jemalloc::Server_session_mv counterpart.
    */
-  Structured_msg_builder_config app_shm_builder_config();
+  Structured_msg_builder_config app_shm_builder_config(size_t segment1_sz);
 
   /**
    * See shm::arena_lend::jemalloc::Session_mv counterpart.
@@ -169,10 +174,10 @@ private:
 
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define TEMPLATE_JEM_SRV_SESSION_IMPL \
-  template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+  template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define CLASS_JEM_SRV_SESSION_IMPL \
-  Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>
+  Server_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>
 
 TEMPLATE_JEM_SRV_SESSION_IMPL
 CLASS_JEM_SRV_SESSION_IMPL::~Server_session_impl()
@@ -206,7 +211,7 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
   using util::Native_handle;
   namespace asio_local = transport::asio_local_stream_socket::local_ns;
   using asio_local::connect_pair;
-  using transport::asio_local_stream_socket::Peer_socket;
+  using Peer_socket = transport::asio_local_stream_socket::Peer_socket<transport::Native_socket_stream_cfg::Protocol>;
   using boost::movelib::make_unique;
 
   // The extra stuff to do on top of the base vanilla Server_session_impl.
@@ -248,7 +253,7 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
      * for that yet: the log-in is not yet complete.  We can't do other master_channel() traffic yet (and we need
      * to for init_shm() purposes).  See below for the post-vanilla-async_accept_log_in() handler steps. */
 
-    return err_code; // == Error_code().
+    return err_code; // == Error_code{}.
   }; // auto real_pre_rsp_setup_func =
 
   Base::Base::async_accept_log_in(srv,
@@ -281,8 +286,8 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
                     "SHM-provider; and set up local SHM objects synchronously.  If it all succeeds we will "
                     "complete the accept-log-in.");
 
-      Peer_socket local_hndl_asio(*(Base::async_worker()->task_engine()));
-      Peer_socket remote_hndl_asio(std::move(local_hndl_asio));
+      Peer_socket local_hndl_asio{*(Base::Base::async_worker()->task_engine())};
+      Peer_socket remote_hndl_asio{std::move(local_hndl_asio)};
       Error_code sys_err_code;
       connect_pair(local_hndl_asio, remote_hndl_asio, sys_err_code);
       if (sys_err_code)
@@ -294,8 +299,8 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
       }
       else // if (!sys_err_code)
       {
-        auto local_hndl = Native_handle(local_hndl_asio.release());
-        auto remote_hndl = Native_handle(remote_hndl_asio.release());
+        auto local_hndl = Native_handle{local_hndl_asio.release()};
+        auto remote_hndl = Native_handle{remote_hndl_asio.release()};
 
         /* Before we do our local stuff we should enable the other side to do the complementary thing:
          * send them (with return ack) `remote_hndl`. */
@@ -303,7 +308,7 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
         msg.body_root()->initJemallocShmSetup();
         msg.store_native_handle_or_null(std::move(remote_hndl));
         // We don't care about contents of the ack (it's just an ack).
-        if ((!Base::master_channel()->sync_request(msg, nullptr, &err_code)) // @todo Consider using finite timeout.
+        if ((!Base::master_channel()->sync_request(&msg, nullptr, &err_code)) // @todo Consider using finite timeout.
             && (!err_code))
         {
           /* Annoying corner case.  Incoming-direction error occurred on master_channel() before we could
@@ -318,25 +323,10 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
 
         if (!err_code)
         {
-          err_code = Base::init_shm(std::move(local_hndl), Shared_name(), app_shm_ptr());
+          err_code = Base::init_shm(std::move(local_hndl), Shared_name{}, app_shm_ptr());
           /* If that returned falsy: Fantastic.  To quote our mission from earlier:
            * "Now session_shm(), shm_session(), and registering of the former (and of app_shm()) into shm_session().
            *  Base::init_shm() takes care of all of it."  It INFO-logged too. */
-
-          if (!err_code)
-          {
-            /* One last thing.  We also need to do this for each arena (we have the two; but Session_server takes care
-             * of it for app_shm() upon creating it; which -- reminder -- occurs only the first time a session for
-             * that Client_app appears; we may be the 2nd/3rd/... one).
-             * Need this for arena->construct<T>(), where T is allocator-compliant thing such as STL containers,
-             * to work. */
-#ifndef NDEBUG
-            const bool ok =
-#endif
-            Base::session_shm()->add_shm_pool_listener(srv->shm_arena_pool_listener());
-            assert(ok && "Maintenance bug?  It should only fail if already registered.");
-          }
-
         } // if (!err_code) (but it may have become truthy inside)
       } // if (!sys_err_code)
     } // if (!err_code) (but it may have become truthy inside)
@@ -350,6 +340,17 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
     }
 
     on_done_func(err_code);
+
+    if (!err_code)
+    {
+      /* See its doc header.  Formally speaking: we are in thread W, just reached almost-PEER state;
+       * supposed to call it.
+       *
+       * Informally: This tickling-for-stats is something to start doing once the per-session arena is up, and
+       * the Session has successfully started; and then it'll self-perpetuate/eventually stop as appropriate.
+       * What it actually does is explained in its doc header in Base (Session_impl). */
+      Base::session_shm_stats_tickle_and_schedule();
+    }
   }); // Base::Base::async_accept_log_in()
 } // Server_session_impl::async_accept_log_in()
 
@@ -367,9 +368,20 @@ std::shared_ptr<typename CLASS_JEM_SRV_SESSION_IMPL::Arena> CLASS_JEM_SRV_SESSIO
 
 TEMPLATE_JEM_SRV_SESSION_IMPL
 typename CLASS_JEM_SRV_SESSION_IMPL::Structured_msg_builder_config
-  CLASS_JEM_SRV_SESSION_IMPL::app_shm_builder_config()
+  CLASS_JEM_SRV_SESSION_IMPL::app_shm_builder_config(size_t segment1_sz)
 {
-  return Structured_msg_builder_config{ get_logger(), 0, 0, app_shm() };
+  using transport::struc::shm::stat::Outer_serializer_global_stats;
+  using transport::struc::shm::stat::Core_serializer_global_stats;
+  using Arena = typename Structured_msg_builder_config::Builder::Arena;
+
+  return Structured_msg_builder_config{ get_logger(), segment1_sz,
+                                        transport::struc::BUILDER_CONFIG_FRAME_PREFIX_SZ_VIA_STRUC_CHANNEL,
+                                        app_shm(),
+                                        // Default snd-stats targets: per-Arena SHM-msg-{inner,outer} globals.
+                                        &Core_serializer_global_stats<Arena>::get()
+                                          .stats_mutable_default().m_snd,
+                                        &Outer_serializer_global_stats<Arena>::get()
+                                          .stats_mutable_default().m_snd };
 }
 
 TEMPLATE_JEM_SRV_SESSION_IMPL

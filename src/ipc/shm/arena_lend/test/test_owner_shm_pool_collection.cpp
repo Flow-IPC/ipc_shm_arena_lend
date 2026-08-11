@@ -33,14 +33,14 @@ namespace ipc::shm::arena_lend::test
 {
 
 Test_owner_shm_pool_collection::Test_owner_shm_pool_collection(flow::log::Logger* logger,
-                                                               Collection_id id,
+                                                               collection_id_t id,
                                                                const shared_ptr<Memory_manager>& memory_manager,
-                                                               Shm_object_name_generator&& name_generator,
+                                                               Shared_name&& pool_name_base,
                                                                util::Permissions_level permissions_level) :
   Owner_shm_pool_collection(logger,
                             id,
                             memory_manager,
-                            std::move(name_generator),
+                            std::move(pool_name_base),
                             util::shared_resource_permissions(permissions_level)),
   m_memory_map_functor([this](int fd, size_t size, [[maybe_unused]] void* new_address) -> void*
                        {
@@ -48,7 +48,7 @@ Test_owner_shm_pool_collection::Test_owner_shm_pool_collection(flow::log::Logger
                        }),
   m_memory_unmap_functor([](const std::shared_ptr<Shm_pool>& shm_pool) -> bool
                          {
-                           return (::munmap(shm_pool->get_address(), shm_pool->get_size()) == 0);
+                           return ::munmap(shm_pool->get_address(), shm_pool->get_size()) == 0;
                          })
 {
   FLOW_LOG_TRACE("Constructed with id [" << id << "]");

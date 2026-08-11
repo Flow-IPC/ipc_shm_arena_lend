@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/memory_manager.hpp"
 #include "ipc/util/util_fwd.hpp"
@@ -42,15 +43,59 @@ namespace ipc::shm::arena_lend
 {
 
 Owner_shm_pool_collection::Owner_shm_pool_collection(Logger* logger,
-                                                     Collection_id id,
+                                                     collection_id_t id,
                                                      const shared_ptr<Memory_manager>& memory_manager,
-                                                     Shm_object_name_generator&& name_generator,
+                                                     Shared_name&& pool_name_base,
                                                      const util::Permissions& permissions) :
   Shm_pool_collection(logger, id),
   m_memory_manager(memory_manager),
-  m_name_generator(std::move(name_generator)),
+  m_pool_name_base(std::move(pool_name_base)),
   m_permissions(permissions)
 {
+}
+
+Owner_shm_pool_collection::~Owner_shm_pool_collection()
+{
+  using std::vector;
+
+#ifndef FLOW_OS_LINUX
+  static_assert(false, "The straggler-pool sweep just below (::munmap() et al) has only been designed-for/tested "
+                       "in Linux as of this writing; check this area when porting.");
+#endif
+
+  /* Remove any still-registered pools; normally the stragglers described in our doc header (SHM-jemalloc:
+   * the native arena's base/metadata block pools), if any.  Mechanics notes:
+   *   - for_each_shm_pool() holds the lock across its callbacks, while remove_shm_pool() write-locks;
+   *     hence snapshot first, remove after.
+   *   - remove_shm_pool() invokes virtual on_shm_pool_removed(); executing as we are within our own destructor,
+   *     that dispatches to *our* (default no-op) implementation -- subclass overrides are unreachable by C++
+   *     rules, the subclass object no longer existing.  That is as desired: any subclass-level bookkeeping was
+   *     handled during the subclass's own destruction steps (e.g., jemalloc::Ipc_arena bulk-deregisters its pools from
+   *     the process-wide repository at the start of its destruction sequence).  Corollary: if this sweep is ever
+   *     relocated outside the destructor, reconsider -- overrides *would* fire then.
+   *   - Ditto any subclass-level pool-removal stats: that layer is already destroyed; these removals go
+   *     uncounted.  In any case user can't access *this stats, as they can't access *this; if they could then
+   *     *this would not be undergoing destruction now.  At least that is how jemalloc::Ipc_arena's ownership
+   *     semantics work; probably hypothetical other arena-lending SHM-providers would use the same semantics.
+   *     (As of this writing jemalloc::Ipc_arena <=> SHM-jemalloc is the only arena-lending SHM-provider.) */
+  vector<shared_ptr<Shm_pool>> shm_pools;
+  for_each_shm_pool([&](shared_ptr<Shm_pool>&& shm_pool) { shm_pools.emplace_back(std::move(shm_pool)); });
+
+  for (const auto& shm_pool : shm_pools)
+  {
+    FLOW_LOG_INFO("Owner pool collection [" << get_id() << "]: removing straggler SHM pool [" << *shm_pool << "] "
+                  "left registered through the memory manager's native teardown.");
+    bool ignored;
+    remove_shm_pool(shm_pool,
+                    [](const shared_ptr<Shm_pool>& pool) -> bool
+                      { return ::munmap(pool->get_address(), pool->get_size()) == 0; },
+                    ignored);
+    /* Subtlety: The little unmap functor is correct and all; jemalloc::Ipc_arena elsewhere does something that
+     * looks different -- it uses Jemalloc_pages utilities -- but in actual fact, at least in Linux, that
+     * reduces to the same thing we do here.  For maintainability w/r/t future porting, though, we added
+     * the static_assert() above.  @todo Arguably a totally proper impl would do some kind of polymorphic thing
+     * so that the same unmap-functor is used in both/all places. */
+  }
 }
 
 void Owner_shm_pool_collection::deallocate(void* object)
@@ -58,32 +103,14 @@ void Owner_shm_pool_collection::deallocate(void* object)
   m_memory_manager->deallocate(object);
 }
 
-bool Owner_shm_pool_collection::add_event_listener(Event_listener* listener)
+void Owner_shm_pool_collection::on_shm_pool_created(const shared_ptr<Shm_pool>&)
 {
-  Write_lock write_lock(m_event_listeners_mutex);  
-
-  if (!m_event_listeners.emplace(listener).second)
-  {
-    // Duplicate listener
-    FLOW_LOG_WARNING("Failed to add duplicate listener [" << listener << "]");
-    return false;
-  }
-
-  return true;
+  // Default no-op.
 }
 
-bool Owner_shm_pool_collection::remove_event_listener(Event_listener* listener)
+void Owner_shm_pool_collection::on_shm_pool_removed(const shared_ptr<Shm_pool>&, bool)
 {
-  Write_lock write_lock(m_event_listeners_mutex);  
-
-  size_t num_removed = m_event_listeners.erase(listener);
-  if (num_removed <= 0)
-  {
-    // Event_listener not found
-    FLOW_LOG_WARNING("Failed to remove unknown listener [" << listener << "]");
-    return false;
-  }
-  return true;
+  // Default no-op.
 }
 
 shared_ptr<Shm_pool> Owner_shm_pool_collection::create_shm_pool(pool_id_t id,
@@ -99,7 +126,7 @@ shared_ptr<Shm_pool> Owner_shm_pool_collection::create_shm_pool(pool_id_t id,
   }
 
   void* actual_address = memory_map_functor(fd, size, address);
-  if (actual_address == nullptr)
+  if (!actual_address)
   {
     FLOW_LOG_WARNING("Could not map shared memory object [" << name << "], size [" << size << "]");
     ::close(fd);
@@ -107,7 +134,7 @@ shared_ptr<Shm_pool> Owner_shm_pool_collection::create_shm_pool(pool_id_t id,
     return nullptr;
   }
 
-  // @todo - Make fd list cache?
+  // @todo Make fd list cache?
   shared_ptr<Shm_pool> shm_pool
     = make_shared<Lockable_shm_pool>(id, name, actual_address, size, fd);
   if (!register_shm_pool_and_notify(shm_pool))
@@ -133,8 +160,12 @@ int Owner_shm_pool_collection::create_shm_object(const string& name, size_t size
             "did memory allocator algorithm (e.g., jemalloc) demand a shockingly gigantic pool? "
             "See Shm_pool_offset_ptr_data_base::pool_offset_t docs.");
 
+  /* shm_open() requires a leading '/' per POSIX; Shared_name uses '_' as separator, so we prepend it here.
+   * On Linux (glibc) it works without, but POSIX portability demands it. */
+  const string shm_name = '/' + name;
+
   // Create shared memory pool
-  int fd = ::shm_open(name.c_str(), (O_RDWR | O_CREAT | O_EXCL), m_permissions.get_permissions());
+  int fd = ::shm_open(shm_name.c_str(), (O_RDWR | O_CREAT | O_EXCL), m_permissions.get_permissions());
   if (fd == -1)
   {
     if (errno == EEXIST)
@@ -152,13 +183,13 @@ int Owner_shm_pool_collection::create_shm_object(const string& name, size_t size
 
   // Set proper permissions on the file handle due to potential conflict with umask when opening
   Error_code ec;
-  util::set_resource_permissions(get_logger(), util::Native_handle(fd), m_permissions, &ec);
+  util::set_resource_permissions(get_logger(), util::Native_handle{fd}, m_permissions, &ec);
   if (ec)
   {
-    FLOW_LOG_WARNING("Could not change permissions to [" << std::oct << m_permissions.get_permissions() << 
+    FLOW_LOG_WARNING("Could not change permissions to [" << std::oct << m_permissions.get_permissions() <<
                      "] for object name [" << name << "], error [" << ec << "]");
     ::close(fd);
-    ::shm_unlink(name.c_str());
+    ::shm_unlink(shm_name.c_str());
     return -1;
   }
 
@@ -170,7 +201,7 @@ int Owner_shm_pool_collection::create_shm_object(const string& name, size_t size
     FLOW_LOG_WARNING("Error occurred when setting size for shm name '" << name << "': " << strerror(errno) << "(" <<
                      errno << ")");
     ::close(fd);
-    ::shm_unlink(name.c_str());
+    ::shm_unlink(shm_name.c_str());
     return -1;
   }
 
@@ -194,7 +225,7 @@ bool Owner_shm_pool_collection::remove_range_and_pool_if_empty(const void* addre
   }
 
   shared_ptr<Lockable_shm_pool> shm_pool = static_pointer_cast<Lockable_shm_pool>(lookup_shm_pool(address));
-  if (shm_pool == nullptr)
+  if (!shm_pool)
   {
     FLOW_LOG_WARNING("Specified address " << address << " is not within a pool");
     return false;
@@ -259,6 +290,18 @@ bool Owner_shm_pool_collection::remove_shm_pool(const shared_ptr<Shm_pool>& shm_
     return false;
   }
 
+  const bool shm_object_removed = remove_shm_object(shm_pool->get_name());
+
+  /* Notify -- which notably erases the pool from Owner_shm_pool_repository (see jemalloc::Ipc_arena
+   * override) -- strictly *before* the unmap below.  Invariant at stake: the pool's vaddr range must not
+   * become OS-reusable (a future `mmap()` can land on any free range) while repositories still list this
+   * pool at that range; otherwise a concurrently-created pool -- from any arena in the process -- could land
+   * there and clash with the stale entry.  (Arena-teardown pool-removal maintains the same order: there the
+   * repository erasure happens in bulk, before arena destruction triggers the unmaps; see
+   * jemalloc::Ipc_arena teardown-sequence comments.  Also: the name-unlink above is fine pre-unmap; POSIX
+   * destroys the object only once all unmaps/closes have occurred.) */
+  on_shm_pool_removed(shm_pool, shm_object_removed);
+
   unmapped_pool = unmap_functor(shm_pool);
 
   // Close pool
@@ -269,18 +312,6 @@ bool Owner_shm_pool_collection::remove_shm_pool(const shared_ptr<Shm_pool>& shm_
                      strerror(errno) << " (" << errno << ")]");
   }
 
-  bool shm_object_removed = remove_shm_object(shm_pool->get_name());
-
-  {
-    Read_lock read_lock(m_event_listeners_mutex);
-
-    // Send notification
-    for (auto& cur_listener : m_event_listeners)
-    {
-      cur_listener->notify_removed_shm_pool(shm_pool, shm_object_removed);
-    }
-  }
-
   return true;
 }
 
@@ -288,12 +319,13 @@ bool Owner_shm_pool_collection::remove_shm_object(const string& name)
 {
   assert(!name.empty());
 
-  if (::shm_unlink(name.c_str()) != 0)
+  const string shm_name = '/' + name;
+  if (::shm_unlink(shm_name.c_str()) != 0)
   {
     // Error occurred - possibly nonexistent
     FLOW_LOG_WARNING("Error occurred when removing shared memory name '" << name << "': " << strerror(errno) << "(" <<
                      errno << ")");
-    // @todo - Handle
+    // @todo Handle
     return false;
   }
 
@@ -307,19 +339,19 @@ bool Owner_shm_pool_collection::register_shm_pool_and_notify(const shared_ptr<Sh
     return false;
   }
 
-  {
-    Read_lock read_lock(m_event_listeners_mutex);
-
-    // Send notification
-    for (auto& cur_listener : m_event_listeners)
-    {
-      cur_listener->notify_created_shm_pool(shm_pool);
-    }
-  }
+  on_shm_pool_created(shm_pool);
 
   return true;
 }
 
-Owner_shm_pool_collection::Event_listener::~Event_listener() = default;
+const Shared_name& Owner_shm_pool_collection::get_pool_name_base() const
+{
+  return m_pool_name_base;
+}
+
+const util::Permissions& Owner_shm_pool_collection::get_permissions() const
+{
+  return m_permissions;
+}
 
 } // namespace ipc::shm::arena_lend

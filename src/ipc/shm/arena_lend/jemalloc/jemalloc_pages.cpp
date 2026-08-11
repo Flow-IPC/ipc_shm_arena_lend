@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 // echan - This file is taken from src/pages.c from jemalloc source, namely version 5.2.1. (See more notes below.)
 
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"

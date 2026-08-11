@@ -25,6 +25,7 @@
 #pragma once
 
 #include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
+#include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 
 namespace ipc::shm::arena_lend::test
 {
@@ -38,7 +39,7 @@ class Test_shm_pool_collection :
 {
 public:
   /// Default collection identifier.
-  static constexpr Collection_id S_DEFAULT_COLLECTION_ID = 10;
+  static constexpr collection_id_t S_DEFAULT_COLLECTION_ID = 10;
   // Make public
   using Shm_pool_collection::close_shm_pool;
   using Shm_pool_collection::register_shm_pool;
@@ -50,7 +51,8 @@ public:
    * @param logger For logging purposes.
    * @param id The identifier for the collection.
    */
-  Test_shm_pool_collection(flow::log::Logger* logger, Collection_id id = S_DEFAULT_COLLECTION_ID);
+  Test_shm_pool_collection(flow::log::Logger* logger, collection_id_t id = S_DEFAULT_COLLECTION_ID,
+                           Shared_name&& pool_name_base = create_test_pool_name_base());
 
   /**
    * Creates a shared memory object with a generated name and maps it in the process' address space.
@@ -60,6 +62,16 @@ public:
    * @return Upon success, a shared pointer to the created shared memory pool; otherwise, an empty shared pointer.
    */
   std::shared_ptr<Shm_pool> create_shm_pool(std::size_t size);
+  /**
+   * Returns the pool-name-base from which create_shm_pool() computes SHM-object names (base + pool ID);
+   * a borrower needs it to open this collection's pools.
+   *
+   * @return See above.
+   */
+  const Shared_name& get_pool_name_base() const
+  {
+    return m_pool_name_base;
+  }
   /**
    * Creates a shared memory object and maps it in the process' address space.
    *
@@ -107,8 +119,8 @@ public:
   bool remove_shm_object(const std::string& name) const;
 
 private:
-  /// Generates shared memory object names.
-  Owner_shm_pool_collection::Shm_object_name_generator m_name_generator;
+  /// Pool names will be this + separator + real globally unique pool ID.
+  Shared_name m_pool_name_base;
 }; // class Test_shm_pool_collection
 
 } // namespace ipc::shm::arena_lend::test

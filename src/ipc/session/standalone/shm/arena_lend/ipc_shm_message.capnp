@@ -28,56 +28,56 @@ using Cxx = import "/capnp/c++.capnp";
 
 $Cxx.namespace("ipc::session::shm::arena_lend::schema");
 
-using PoolId = UInt32; # Should match detail::Shm_pool_offset_ptr_data_base::pool_id_t.
-using PoolSize = UInt32; # Should match detail::Shm_pool_offset_ptr_data_base::pool_offset_t.
+using PoolId = UInt32; # Should match detail::pool_id_t.
+using PoolSize = UInt32; # Should match detail::pool_offset_t.
 
-# Operational communication messages between a lender and borrower in a shared memory system.
 struct IpcShmMessage
 {
+  # Operational communication messages between a lender and borrower in an arena-lending shared memory system.
+
   union
   {
     lendArena @0 :LendArena;
     lendPool @1 :LendPool;
-    removePool @2 :RemovePool;
-    returnObject @3 :ReturnObject;
-    response @4 :Response;
+    response @3 :Response;
+
+    removePool @2 :Void;
+    # Was RemovePool; removed for now. See @todo in Shm_session re. restoring it.
   }
 
-  # Sent by a lender to lend a shared memory pool collection (arena) to a borrower. This is performed in
-  # a request-response manner due to potential ordering conflicts.
   struct LendArena
   {
-    collectionId @0 :UInt32;
+    # Sent by a lender to lend a shared memory pool collection (arena) to a borrower.  This is performed in
+    # a request-response manner (`Response` ack required before proceeding) due to potential ordering conflicts.
+
+    collectionId @0 :UInt32; # Ordinal (1, 2, ...) collection (arena) ID, unique given an owner process (PID).
+    poolNameBase @1 :Text;
+    # Root of a SHM-pool's file-system name (add globally unique pool ID => get full name).
+    # Borrower must be able to compute that full name in a few different contexts.  (For such a computation
+    # it needs: pool ID; and owner ID (PID) + collection ID, to look up this poolNameBase where
+    # borrower stores it.  As of this writing: Pool ID comes from LendPool below (for actual buffer-storing
+    # pools) or on a per-constructed/lent-object basis via the SHM-handle serialization (for the
+    # Lend_tracker_pool aux pools).
   }
 
-  # Sent by a lender to lend a shared memory pool within a collection to a borrower. The collection should have
-  # already been borrowed. This is performed in a request-response manner due to potential ordering conflicts.
   struct LendPool
   {
+    # Sent by a lender to lend a shared memory pool within a collection to a borrower.  The collection (arena)
+    # should have already been borrowed.  This is performed in a request-response manner (`Response` ack required
+    # before proceeding) due to potential ordering conflicts.  Specifically we do LendPool request/response like so:
+    # (1) user calls SHM-allocate API, (2) memory manager (let's say jemalloc) is asked to in fact do that,
+    # (3) memory manager determines a new pool (vaddr area; extent) is required, (4) it tells Flow-IPC internals
+    # via hook that it needs this, so we create/map SHM-pool, do the request-response, and give control back
+    # to memory manager (which completes the malloc()-y op then returns through Flow-IPC back into end user-land).
+
     collectionId @0 :UInt32;
-    poolId @1 :PoolId;
-    poolName @2 :Text;
-    poolSize @3 :PoolSize;
+    poolId @1 :PoolId; # Globally unique (until reboot).
+    poolSize @2 :PoolSize;
+    # Among other things, we at least need this to know how much vaddr space to memory-map (mmap() in Linux et al)
+    # upon opening SHM-pool via computed pool name.  See comment on poolNameBase above about that computation.
   }
 
-  # Sent by a lender to deregister a shared memory pool within a collection from a borrower. The collection and
-  # pool should have already been borrowed.
-  struct RemovePool
-  {
-    collectionId @0 :UInt32;
-    poolId @1 :PoolId;
-  }
-
-  # Sent by a borrower to return an object that was previously borrowed.
-  struct ReturnObject
-  {
-    collectionId @0 :UInt32;
-    poolId @1 :PoolId;
-    poolOffset @2 :PoolSize;
-  }
-
-  # Sent by a borrower to indicate whether a request was completed successfully. This includes lend arena and
-  # lend pool.
+  # Ack for LendArena, LendPool.
   struct Response
   {
     success @0 :Bool;

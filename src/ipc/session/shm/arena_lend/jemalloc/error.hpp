@@ -54,7 +54,7 @@ enum class Code
    * reporting just success-versus-failure, then ipc::session::error::Code::S_SHM_ARENA_CREATION_FAILED should go
    * away.
    */
-  S_SHM_ARENA_CREATION_FAILED,
+  S_SHM_ARENA_CREATION_FAILED = S_CODE_LOWEST_INT_VALUE,
 
   /**
    * Session opening: While registering the session's locally-managed SHM-arena(s) of an arena-lending SHM-provider
@@ -101,7 +101,7 @@ Error_code make_error_code(Code err_code);
  * @return See above.
  */
 std::istream& operator>>(std::istream& is, Code& val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 /**
  * Analogous to transport::error::operator<<().
@@ -113,7 +113,7 @@ std::istream& operator>>(std::istream& is, Code& val);
  * @return See above.
  */
 std::ostream& operator<<(std::ostream& os, Code val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 } // namespace ipc::session::shm::arena_lend::jemalloc::error
 

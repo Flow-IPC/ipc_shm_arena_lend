@@ -42,26 +42,20 @@ namespace ipc::shm::arena_lend::test
 {
 
 // Static constants
-const string S_SHM_OBJECT_NAME_PREFIX("shm_test_");
+const string S_SHM_OBJECT_NAME_PREFIX("shmTest");
 const string S_SHM_OBJECT_DIR("/dev/shm");
 
-// Static method
-string generate_shm_object_name(const string& prefix)
+Shared_name shm_object_generate_name(const Shared_name& pool_name_base)
 {
-  static std::atomic<size_t> object_index = 0;
-  static pid_t pid = getpid();
-  stringstream ss;
-  ss << '/' << prefix << '_' << to_string(pid) << '_' << to_string(++object_index);
-  return ss.str();
+  static std::atomic<uint32_t> object_index = 0;
+  return pool_name_base / Shared_name::ct_from_int(++object_index);
 }
 
-Owner_shm_pool_collection::Shm_object_name_generator create_shm_object_name_generator(const string& use_case_id)
+Shared_name create_test_pool_name_base(const string& use_case_id)
 {
-  string actual_use_case_id = (use_case_id.empty() ? flow::test::get_test_suite_name() : use_case_id);
-  return [actual_use_case_id = std::move(actual_use_case_id)](auto&&)
-         {
-           return generate_shm_object_name(S_SHM_OBJECT_NAME_PREFIX + actual_use_case_id);
-         };
+  return Shared_name::ct(S_SHM_OBJECT_NAME_PREFIX)
+         / Shared_name::ct(use_case_id.empty() ? flow::test::get_test_suite_name() : use_case_id)
+         / Shared_name::ct_from_int(getpid());
 }
 
 bool remove_shm_objects_filesystem(const string& prefix)

@@ -136,26 +136,17 @@ public:
   using Borrower_allocator
     = ipc::shm::stl::Stateless_allocator<T, ipc::shm::Arena_to_borrower_allocator_arena_t<Arena>>;
 
-  /**
-   * Implements Session API per contract.
-   * @see Session::Structured_channel: implemented concept.
-   */
+  /// Implements Session API per contract.
   template<typename Message_body>
   using Structured_channel
     = typename transport::struc::shm::arena_lend::jemalloc::Channel
                  <typename Base::Base::Impl::Session_base_obj::Channel_obj,
                   Message_body>;
 
-  /**
-   * Implements Session API per contract.
-   * @see Session::Structured_msg_builder_config: implemented concept.
-   */
+  /// Implements Session API per contract.
   using Structured_msg_builder_config = typename Base::Base::Impl::Structured_msg_builder_config;
 
-  /**
-   * Implements Session API per contract.
-   * @see Session::Structured_msg_reader_config: implemented concept.
-   */
+  /// Implements Session API per contract.
   using Structured_msg_reader_config = typename Base::Base::Impl::Structured_msg_reader_config;
 
   /// Alias for a light-weight blob used in borrow_object() and lend_object().
@@ -248,14 +239,18 @@ public:
    * @return See above.  On success, non-null pointer; otherwise a null pointer.
    */
   template<typename T>
-  typename Arena::template Handle<T> borrow_object(const Blob& serialization);
+  typename Arena::template Handle<T> borrow_object(const Blob& serialization) const;
 
   /**
    * Returns builder config suitable for capnp-serializing out-messages in SHM arena session_shm().
    *
+   * @param segment1_sz
+   *        See eponymous arg to, say, transport::struc::sync_io::Channel ctor with `Serialize_via_session_shm` tag.
    * @return See above.
    */
-  Structured_msg_builder_config session_shm_builder_config();
+  Structured_msg_builder_config
+    session_shm_builder_config(size_t segment1_sz
+                                        = sizeof(::capnp::word) * ::capnp::SUGGESTED_FIRST_SEGMENT_WORDS);
 
   /**
    * When transmitting items originating in #Arena session_shm() via
@@ -377,7 +372,7 @@ typename CLASS_JEM_SESSION_MV::Blob
 TEMPLATE_JEM_SESSION_MV
 template<typename T>
 typename CLASS_JEM_SESSION_MV::Arena::template Handle<T>
-  CLASS_JEM_SESSION_MV::borrow_object(const Blob& serialization)
+  CLASS_JEM_SESSION_MV::borrow_object(const Blob& serialization) const
 {
   assert(Base::Base::impl() && "Do not call this on as-if-default-cted Session.");
   return Base::Base::impl()->template borrow_object<T>(serialization);
@@ -385,10 +380,10 @@ typename CLASS_JEM_SESSION_MV::Arena::template Handle<T>
 
 TEMPLATE_JEM_SESSION_MV
 typename CLASS_JEM_SESSION_MV::Structured_msg_builder_config
-  CLASS_JEM_SESSION_MV::session_shm_builder_config()
+  CLASS_JEM_SESSION_MV::session_shm_builder_config(size_t segment1_sz)
 {
   assert(Base::Base::impl() && "Do not call this on as-if-default-cted Session.");
-  return Base::Base::impl()->session_shm_builder_config();
+  return Base::Base::impl()->session_shm_builder_config(segment1_sz);
 }
 
 TEMPLATE_JEM_SESSION_MV

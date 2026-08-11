@@ -22,32 +22,16 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
-#pragma once
-
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
-#include <memory>
 
 namespace ipc::shm::arena_lend
 {
 
-/**
- * Interface to listen for shared memory pool events that occur on the borrower side.
- */
-class Borrower_shm_pool_listener
+// Implementations.
+
+void set_logger(flow::log::Logger* logger_ptr)
 {
-public:
-  /**
-   * This method will be called after opening a shared memory pool.
-   *
-   * @param shm_pool The shared memory pool that was opened.
-   */
-  virtual void notify_opened_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool) = 0;
-  /**
-   * This method will be called after a shared memory pool was closed.
-   *
-   * @param shm_pool_id The identifier of the shared memory pool that was closed.
-   */
-  virtual void notify_closed_shm_pool(Shm_pool::pool_id_t shm_pool_id) = 0;
-}; // class Borrower_shm_pool_listener
+  Set_logger_registry::execute(logger_ptr);
+}
 
 } // namespace ipc::shm::arena_lend

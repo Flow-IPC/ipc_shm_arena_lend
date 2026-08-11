@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #include "ipc/shm/arena_lend/shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 #include "ipc/common.hpp"
@@ -35,14 +36,23 @@ using std::map;
 namespace ipc::shm::arena_lend
 {
 
-Shm_pool_collection::Shm_pool_collection(flow::log::Logger* logger, Collection_id id) :
+Shm_pool_collection::Shm_pool_collection(flow::log::Logger* logger, collection_id_t id) :
   Log_context(logger, Log_component::S_SHM),
+  /* Snapshot the verbose-logging skip-flag once, now.  `*this` is not user-set_logger()-able, so the logger
+   * (hence this flag) is fixed henceforth; see skip_fast_path_verbose_logging() doc header. */
+  m_skip_fast_path_verbose_logging(!(logger
+                                     && logger->should_log(flow::log::Sev::S_TRACE, get_log_component()))),
   m_id(id)
 {
+  // Nothing further (logger + skip-flag set above).
 }
 
 Shm_pool_collection::~Shm_pool_collection()
 {
+  /* Owner-side collections should show empty here: ~Owner_shm_pool_collection(), which has already run, removes
+   * any pools its memory manager's native teardown left registered.  Borrower-side collections may legitimately
+   * still show pools (their cleanup belongs to higher layers -- e.g., session teardown -- and in some paths
+   * happens only then). */
   FLOW_LOG_TRACE("Remaining pools:");
   print_shm_pool_map();
 }
@@ -88,7 +98,7 @@ void* Shm_pool_collection::memory_map(void* address, size_t size, int memory_pro
   {
     FLOW_LOG_WARNING("Error occurred when memory mapping size " << size << ": " <<
                      strerror(errno) << "(" << errno << ")");
-    // @todo - Fill in, alert
+    // @todo Fill in, alert
     return nullptr;
   }
 
@@ -101,7 +111,7 @@ bool Shm_pool_collection::memory_unmap(void* address, size_t size)
   {
     FLOW_LOG_WARNING("Error occurred when memory unmapping address " << address << ", size " << size << ": " <<
                      strerror(errno) << "(" << errno << ")");
-    // @todo - Fill in, alert
+    // @todo Fill in, alert
     return false;
   }
 
@@ -121,7 +131,7 @@ bool Shm_pool_collection::close_shm_pool(const shared_ptr<Shm_pool>& shm_pool)
     // Error occurred - possibly nonexistent
     FLOW_LOG_WARNING("Error occurred when closing shared memory name '" << shm_pool->get_name() << "': " <<
                      strerror(errno) << "(" << errno << ")");
-    // @todo - Handle
+    // @todo Handle
     return false;
   }
 
@@ -151,7 +161,7 @@ shared_ptr<Shm_pool> Shm_pool_collection::lookup_shm_pool(const void* address) c
   Read_lock read_lock(m_shm_pool_map_mutex);
 
   shared_ptr<Shm_pool> shm_pool;
-  auto iter = m_shm_pool_map.lower_bound(address);
+  auto iter = m_shm_pool_map.lower_bound(const_cast<void*>(address));
   if (iter == m_shm_pool_map.end())
   {
     // Address > all entries, so last entry may be holding the address
@@ -197,7 +207,7 @@ shared_ptr<Shm_pool> Shm_pool_collection::lookup_shm_pool_exact(const void* addr
 {
   Read_lock read_lock(m_shm_pool_map_mutex);
 
-  const auto iter = m_shm_pool_map.find(address);
+  const auto iter = m_shm_pool_map.find(const_cast<void*>(address));
   if (iter == m_shm_pool_map.end())
   {
     // No pool matches

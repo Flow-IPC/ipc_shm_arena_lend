@@ -23,37 +23,31 @@
  * THE SOFTWARE. */
 
 #include <gtest/gtest.h>
-#include "ipc/test/test_logger.hpp"
 #include "ipc/shm/arena_lend/memory_manager.hpp"
 #include <sys/mman.h>
-
-using ipc::test::Test_logger;
 
 namespace ipc::shm::arena_lend::test
 {
 
 /// Class interface death tests.
-#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
-TEST(Memory_manager_DeathTest, DISABLED_Interface)
-#else
 TEST(Memory_manager_DeathTest, Interface)
-#endif
 {
-  Test_logger test_logger;
-  Memory_manager memory_manager(&test_logger);
+#ifdef NDEBUG
+  GTEST_SKIP() << "Death tests rely on assert()s which are disabled in this (NDEBUG) build.";
+#endif
+  Memory_manager memory_manager;
 
   // Allocation and deallocation
   {
     EXPECT_DEATH(memory_manager.allocate(0UL), "size > 0");
-    EXPECT_DEATH(memory_manager.deallocate(nullptr), "address != nullptr");
+    EXPECT_DEATH(memory_manager.deallocate(nullptr), "address");
   }
 }
 
 /// Class interface tests.
 TEST(Memory_manager_test, Interface)
 {
-  Test_logger test_logger(flow::log::Sev::S_TRACE);
-  Memory_manager memory_manager(&test_logger);
+  Memory_manager memory_manager;
 
   // Allocation and deallocation
   {

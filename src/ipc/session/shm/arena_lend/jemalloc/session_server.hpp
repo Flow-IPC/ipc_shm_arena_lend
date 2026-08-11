@@ -28,9 +28,12 @@
 #include "ipc/session/shm/arena_lend/jemalloc/jemalloc_fwd.hpp"
 #include "ipc/session/shm/arena_lend/jemalloc/server_session.hpp"
 #include "ipc/session/detail/session_server_impl.hpp"
-#include "ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.hpp"
 #include "ipc/shm/classic/pool_arena.hpp"
+#include "ipc/transport/struc/struc_fwd.hpp"
+#include "ipc/util/util_fwd.hpp"
 #include <boost/move/make_unique.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
+#include <string>
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {
@@ -44,6 +47,7 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * #Server_session_obj that are shm::arena_lend::jemalloc::Server_session and not vanilla #Server_session.
  *
  * @internal
+ *
  * ### Implementation ###
  * See similar section of session::Session_server.  It explains why we sub-class Session_server_impl and even how
  * how that's used for this SHM-jemalloc scenario.  To reiterate:
@@ -57,35 +61,36 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *
  * shm::arena_lend::jemalloc::Server_session doc header delves deeply into the entire impl strategy for setting up
  * these arenas.  If you read/grok that, then the present class's impl should be straightforward to follow.
+ *
  * @endinternal
  *
- * @tparam S_MQ_TYPE_OR_NONE
+ * @tparam MQ_TYPE_OR_NONE
  *         See vanilla #Session_server.
- * @tparam S_TRANSMIT_NATIVE_HANDLES
+ * @tparam TRANSMIT_NATIVE_HANDLES
  *         See vanilla #Session_server.
  * @tparam Mdt_payload
  *         See vanilla #Session_server.
  */
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 class Session_server :
   private Session_server_impl // Attn!  Emit `shm::arena_lend::jemalloc::Server_session`s (impl customization point).
-            <Session_server<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>,
-             Server_session<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>>
+            <Session_server<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>,
+             Server_session<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>>
 {
 private:
   // Types.
 
   /// Short-hand for our base/core impl.
   using Impl = Session_server_impl
-                 <Session_server<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>,
-                  Server_session<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>>;
+                 <Session_server<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>,
+                  Server_session<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>>;
 
 public:
   // Types.
 
   /// Short-hand for the concrete `Server_session`-like type emitted by async_accept().
   using Server_session_obj
-    = shm::arena_lend::jemalloc::Server_session<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>;
+    = shm::arena_lend::jemalloc::Server_session<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>;
 
   /// Short-hand for Session_mv::Mdt_reader_ptr.
   using Mdt_reader_ptr = typename Impl::Mdt_reader_ptr;
@@ -110,6 +115,10 @@ public:
   /**
    * Constructor: identical to session::Session_server ctor.  See its doc header.
    *
+   * @warning See same-named section of session::Session_server ctor doc header.  In short: `srv_app_ref`
+   *          and `cli_app_master_set_ref` (and its `Client_app`s) must outlive `*this` and any yielded
+   *          `Server_session`.
+   *
    * @param logger_ptr
    *        See above.
    * @param srv_app_ref
@@ -121,7 +130,7 @@ public:
    */
   explicit Session_server(flow::log::Logger* logger_ptr, const Server_app& srv_app_ref,
                           const Client_app::Master_set& cli_app_master_set_ref,
-                          Error_code* err_code = 0);
+                          Error_code* err_code = nullptr);
 
   // Methods.
 
@@ -177,6 +186,19 @@ public:
                     N_init_channels_by_srv_req_func&& n_init_channels_by_srv_req_func,
                     Mdt_load_func&& mdt_load_func,
                     Task_err&& on_done_func);
+
+  /**
+   * Identical to eponymous accessor in session::Session_server.
+   * @return See above.
+   */
+  size_t mq_msg_size_limit() const;
+
+  /**
+   * Identical to eponymous mutator in session::Session_server.
+   * @param limit
+   *        See above.
+   */
+  void mq_msg_size_limit(size_t limit);
 
   /**
    * Returns pointer to the per-`app` SHM-arena, whose lifetime extends until `*this` is destroyed;
@@ -247,42 +269,14 @@ public:
    *
    * @param app
    *        See app_shm().
+   * @param segment1_sz
+   *        See eponymous arg to, say, transport::struc::sync_io::Channel ctor with `Serialize_via_app_shm` tag.
    * @return See above.
    */
-  Structured_msg_builder_config app_shm_builder_config(const Client_app& app);
-
-  /**
-   * In short, what app_shm_builder_config() is to shm::arena_lend::jemalloc::Session_mv::app_shm_builder_config(),
-   * this is to shm::arena_lend::jemalloc::app_shm_lender_session().  Notes in app_shm_builder_config() doc header apply
-   * here.
-   *
-   * @param app
-   *        See app_shm().
-   * @return See above.
-   */
-  typename Structured_msg_builder_config::Builder::Session app_shm_lender_session(const Client_app& app);
-
-  /**
-   * Returns reader config counterpart to app_shm_builder_config() for a given `Client_app app`.
-   *
-   * @param app
-   *        See app_shm().
-   * @return See above.
-   */
-  Structured_msg_reader_config app_shm_reader_config(const Client_app& app);
-
-  /**
-   * Returns the arena-pool listener maintained throughout `*this` Session_server's life.
-   * One must register it with any arena `A`, if one wants to do `A.construct<T>()`, where `T` is
-   * an allocator-compliant data structure type with shm::stl::Stateless_allocator.  (Session_server does so
-   * automatically for any #Arena it maintains out of the box, namely Session_mv::session_shm() and
-   * the ones returned by app_shm().)  This may be useful if creating your own custom-purpose #Arena; instead
-   * you can create your own `Owner_shm_pool_listener_for_repository`, but it is generally encouraged to not
-   * do so unnecessarily.
-   *
-   * @return See above.
-   */
-  ipc::shm::arena_lend::Owner_shm_pool_listener_for_repository* shm_arena_pool_listener();
+  Structured_msg_builder_config
+    app_shm_builder_config(const Client_app& app,
+                           size_t segment1_sz
+                                    = sizeof(::capnp::word) * ::capnp::SUGGESTED_FIRST_SEGMENT_WORDS);
 
   /**
    * Prints string representation to the given `ostream`.
@@ -316,8 +310,50 @@ private:
    */
   Error_code init_app_shm_as_needed(const Client_app& app);
 
-  /// Invoked on #m_async_cleanup_worker, performs a round of the SHM-pool cleanup algorithm and schedules same.
+  /// Invoked on #m_async_periodic_worker, performs a round of the SHM-pool cleanup algorithm and schedules same.
   void cleanup();
+
+  /**
+   * Performs `A->sample_hi_wmarks()`, where `A = m_app_shm_by_name[app_name]` is looked-up based on the
+   * caller-supplied `app_name`; and schedules for this to occur again in some regular period
+   * of time.  Call this upon adding `app_name` to #m_app_shm_by_name; it will then self-perpetuate.
+   *
+   * Pre-condition: #m_app_shm_mutex must be locked (it will remain locked throughout).
+   *
+   * ### Rationale / Background ###
+   * See Session_impl::session_shm_stats_tickle_and_schedule() doc header.  See how it mentions that `app_shm()`
+   * is `Session_server`'s responsibility, since `app_shm()` arena lifetime is orthogonal to individual session?
+   * This is our handling that responsibility.
+   *
+   * ### Corner case / defensive behavior / maintenance notes ###
+   * Method does not tickle/stops ticklings if `app_name` is not in #m_app_shm_by_name
+   * (or that entry is null; same treatment).  We are not saying that removal of non-null entry is
+   * even possible... in fact as of this writing it is not; we are being defensive here.  So: if it were possible
+   * and happened, then the stat-tickling and scheduling thereof would stop.  In that case, if there is such a
+   * thing as re-adding it to #m_app_shm_by_name, one can invoke the method to start the ticklings again.
+   * That said: As currently written, it is not really totally robust: If, in particular, `app_name` were
+   * erased and then re-added during the "rest" period of this method's last invocation with `app_name`, then
+   * it would just keep going with the ticklings, which would probably be wrong -- as one would re-invoke it
+   * upon re-adding `m_app_shm_by_name[app_name]`; so there would now be two in-phase periodic ticklings going
+   * instead of the appropriate one tickling.
+   *
+   * To avoid this silliness: Add a mechanism for canceling the currently-scheduled tickling of `app_name`, whenever
+   * `app_name` is erased from `m_app_shm_by_name`.  Would just need to save a handle from `.schedule_from_now()`
+   * and do the flow.async cancel op on that.
+   *
+   * Reminder: This whole premise is currently not a thing; the above is in case it becomes true in the future.
+   * Oh, also, be sure in that case to not mess-up the thing where `app_name` is in the map but the "arena"
+   * is a null handle.  (As of this writing a failed `init_app_shm_as_needed` leaves null in the map for simplicity,
+   * so just make sure all that is properly handled still, if conceptual remove from `m_app_shm_by_name` becomes
+   * possible.)
+   *
+   * @param app_name
+   *        App::m_name, a key into #m_app_shm_by_name.  If not present there, then there is no arena to tickle,
+   *        and scheduling thereof stops.  (See above discussion of that corner case.  We could take a
+   *        `shared_ptr<Arena>`, or at least a `const Client_app&`, instead; but again we're trying to keep this
+   *        little mechanism as simple and self-contained/resilient as possible.)
+   */
+  void app_shm_stats_tickle_and_schedule(const std::string& app_name);
 
   // Data.
 
@@ -325,36 +361,19 @@ private:
   const Server_app& m_srv_app_ref;
 
   /// Identical Session_base::m_srv_namespace.  Used in init_app_shm_as_needed() name calc.
-  const Shared_name m_srv_namespace;
+  Shared_name m_srv_namespace;
 
   /// Protects #m_app_shm_by_name.
   mutable Mutex m_app_shm_mutex;
 
   /**
-   * This guy needs to be around, with each arena (in our case, out of the box, `session_shm()`s and `app_shm()`s)
-   * registered against it, for shm::stl::Arena_allocator (and thus STL/allocator-compliant data structures, including
-   * containers like our own transport::struc::shm::Capnp_message_builder::Segments_in_shm) to work properly with that
-   * arena.
-   *
-   * Details:
-   *   - It is recommended there are not tons of these lying around, but in a production application there
-   *     should be one session::Session_server around at a time at most.  So keeping this here makes sense.
-   *     Note we didn't, say, put one in each Server_session_impl.
-   *   - It is *not* a problem if there is more than one per process; so if there are more sessions around
-   *     in the process, it won't cause any problem.  It's not a singleton situation.
-   *
-   * There is also one in each Client_session_impl.
-   */
-  ipc::shm::arena_lend::Owner_shm_pool_listener_for_repository m_shm_arena_pool_listener;
-
-  /**
    * The per-app-scope SHM arenas by App::m_name.  If it's not in the map, it has not been needed yet.
    * If it is but is null, it has but error caused it to not be set-up successfully.
    */
-  boost::unordered_map<std::string, std::shared_ptr<Arena>> m_app_shm_by_name;
+  boost::unordered_flat_map<std::string, std::shared_ptr<Arena>> m_app_shm_by_name;
 
-  /// Thread used for low-priority periodic low-priority cleanup work.  See cleanup().
-  flow::async::Single_thread_task_loop m_async_cleanup_worker;
+  /// Thread used for low-priority periodic work.  See: cleanup(), app_shm_stats_tickle_and_schedule().
+  flow::async::Single_thread_task_loop m_async_periodic_worker;
 }; // class Session_server
 
 // Free functions: in *_fwd.hpp.
@@ -363,10 +382,10 @@ private:
 
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define TEMPLATE_JEM_SESSION_SRV \
-  template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+  template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define CLASS_JEM_SESSION_SRV \
-  Session_server<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>
+  Session_server<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>
 
 TEMPLATE_JEM_SESSION_SRV
 CLASS_JEM_SESSION_SRV::Session_server(flow::log::Logger* logger_ptr, const Server_app& srv_app_ref_arg,
@@ -376,16 +395,14 @@ CLASS_JEM_SESSION_SRV::Session_server(flow::log::Logger* logger_ptr, const Serve
        [this](const Client_app& app) -> Error_code
          { return init_app_shm_as_needed(app); }), // Impl customization point: create *(app_shm()) for the `app`.
   m_srv_app_ref(Impl::m_srv_app_ref),
-  m_srv_namespace
-    (Server_session_dtl<Server_session_obj>(nullptr, m_srv_app_ref, transport::sync_io::Native_socket_stream())
-       .base().srv_namespace()),
-  m_shm_arena_pool_listener(get_logger()),
-  m_async_cleanup_worker(get_logger(),
-                         /* (Linux) OS thread name will truncate the this-addr snippet to 15-5=10 chars here;
-                          * which should actually just fit.  Nothing else seems particularly useful;
-                          * like in non-exotic setups our srv-name is pretty much known. */
-                         flow::util::ostream_op_string("SSvJ-", this))
+  // (m_srv_namespace: initialized just below.)
+  m_async_periodic_worker(get_logger(),
+                          /* (Linux) OS thread name will truncate the this-addr snippet to 15-5=10 chars here;
+                           * which should actually just fit.  Nothing else seems particularly useful;
+                           * like in non-exotic setups our srv-name is pretty much known. */
+                          flow::util::ostream_op_string("SSvJ-", this))
 {
+  using transport::sync_io::Native_socket_stream;
   using flow::async::reset_this_thread_pinning;
 
   // Before we continue: handle that Impl ctor may have thrown (then we don't get here) or emitted error via *err_code.
@@ -395,10 +412,16 @@ CLASS_JEM_SESSION_SRV::Session_server(flow::log::Logger* logger_ptr, const Serve
   }
   // else Impl ctor executed fine.
 
-  m_async_cleanup_worker.start(reset_this_thread_pinning);
+  {
+    auto empty_session_public
+      = Server_session_dtl<Server_session_obj>::ct_base(nullptr, m_srv_app_ref, Native_socket_stream{});
+    m_srv_namespace = Server_session_dtl<Server_session_obj>{ empty_session_public }.base().srv_namespace();
+  }
+
+  m_async_periodic_worker.start(reset_this_thread_pinning);
   // Don't inherit any strange core-affinity!  ^-- Worker must float free.
 
-  m_async_cleanup_worker.post([this]() { cleanup(); });
+  m_async_periodic_worker.post([this]() { cleanup(); });
 } // Session_server::Session_server()
 
 TEMPLATE_JEM_SESSION_SRV
@@ -413,51 +436,36 @@ Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
   /* We are in some unspecified thread; actually *a* Session_server_impl thread Ws (a Server_session_impl thread W).
    * Gotta lock at least to protect from concurrent calls to ourselves on behalf of other async_accept()s. */
 
-  Lock_guard app_shm_lock(m_app_shm_mutex);
+  Lock_guard app_shm_lock{m_app_shm_mutex};
 
   auto& app_shm = m_app_shm_by_name[app.m_name]; // Find; insert if needed.
   if (app_shm)
   {
     // Cool; already exists, as app.m_name seen already (and successfully set-up, as seen below) by us.
-    return Error_code();
+    return {};
   }
   // else
 
   // Below should INFO-log already; let's not litter logs explaining why this is being created; context = sufficient.
 
-  /* Arena needs a pool namer it will invoke each time the memory manager decides it wants a new mmap()ped vaddr
-   * space (in the SHM context, <-> SHM-pool).  We use our standard semantics for per-session items.  To save some
-   * compute cycles pre-compute the prefix and remember it via capture.
+  /* Arena needs a pool name prefix it will use each time the memory manager decides it wants a new mmap()ped vaddr
+   * space (in the SHM context, <-> SHM-pool).  We use our standard semantics for per-session items.  Arena will
+   * append whatever pool ID stuff after this prefix.
    *
    * This is the same as Session_mv::init_shm() but simpler due to being a server-side thing (as opposed to possibly
    * client-side) and thus not needing to add any client-PID for cleanup purposes (server-PID is already
    * the srv_namespace baked into every Shared_name).  Also it's per-app, not per-session, hence cli_namespace is
    * not needed. */
-  auto pool_naming_func = [shm_pool_name_prefix
-                             = build_conventional_shared_name(Shared_name::S_RESOURCE_TYPE_ID_SHM,
-                                                              Shared_name::ct(m_srv_app_ref.m_name), m_srv_namespace,
-                                                              Shared_name::ct(app.m_name))
-                               / SHM_SUBTYPE_PREFIX / ""] // Might as well remember the last separator too.
-                            (auto pool_id) -> string
-  {
-    // @todo Arena expects string at the moment; might/should change to Shared_name at some point.
-
-    string shm_pool_name = shm_pool_name_prefix.str();
-
-    /* Per contract pool_id is unique entirely globally and is informally recommended to encode here; so we do.
-     * We could instead keep our own ++ing pool-ID, since we guarantee non-conflicting names from other
-     * apps/servers/etc. using our Shared_name-building conventions; but since they're giving us this
-     * thing for free (as of this writing it is globally-unique -- even across apps, etc. -- for
-     * SHM-jemalloc's own internal purposes), we might as well use it. */
-    return shm_pool_name += to_string(pool_id);
-    // @todo to_string() deals with locales which may be slow.  Consider std::to_chars().
-  }; // auto pool_naming_func =
+  auto shm_pool_name_prefix = build_conventional_shared_name(Shared_name::S_RESOURCE_TYPE_ID_SHM,
+                                                             Shared_name::ct(m_srv_app_ref.m_name), m_srv_namespace,
+                                                             Shared_name::ct(app.m_name));
+  shm_pool_name_prefix /= SHM_SUBTYPE_PREFIX;
 
   app_shm
     = Arena::create(get_logger(),
                     // See equally-relevant note/@todo in Session_mv::init_shm().
-                    make_shared<Memory_manager>(get_logger()),
-                    typename Arena::Shm_object_name_generator(std::move(pool_naming_func)),
+                    make_shared<Memory_manager>(),
+                    std::move(shm_pool_name_prefix),
                     util::shared_resource_permissions(m_srv_app_ref.m_permissions_level_for_client_apps));
   if (!app_shm)
   {
@@ -470,19 +478,70 @@ Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
     // See @todo on this Code; in short if create() emitted an Error_code, we'd just emit that instead here.
     return error::Code::S_SHM_ARENA_CREATION_FAILED;
   }
-  // else: Cool!  One last thing (which cannot really fail).
+  // else: Cool!
 
-  /* Need this for arena->construct<T>(), where T is allocator-compliant thing such as STL containers,
-   * to work. */
-#ifndef NDEBUG
-  const bool ok =
-#endif
-  app_shm->add_shm_pool_listener(&m_shm_arena_pool_listener);
-  assert(ok && "Maintenance bug?  It should only fail if already registered.");
+  // Its doc header explains things.  Mutex is locked as required.
+  app_shm_stats_tickle_and_schedule(app.m_name);
 
-  return Error_code();
-  // Lock_guard app_shm_lock(m_app_shm_mutex): unlocks here.
+  return {};
+  // Lock_guard app_shm_lock{m_app_shm_mutex}: unlocks here.
 } // Session_server::init_app_shm_as_needed()
+
+TEMPLATE_JEM_SESSION_SRV
+void CLASS_JEM_SESSION_SRV::app_shm_stats_tickle_and_schedule(const std::string& app_name)
+{
+  using util::Call_timing;
+  using boost::chrono::seconds;
+  using std::shared_ptr;
+  using std::string;
+
+  /* If you read our doc header and possibly consult Session_impl::session_shm_stats_tickle_and_schedule() -- our
+   * cousin -- then the below should be quite straightforward.
+   *
+   * A question might arise: the Session_impl guy is still simple, but it is worried about session-hosings
+   * and "thread W" -- whereas we really don't care; why not?  Answer: That's just the nature of these app-scope
+   * arenas.  They outlive any particular Session(s), potentially, and are available for use through any of
+   * them (well, ones w/r/t the same Client_app::m_name).  Even if some session fails to start-up -- maybe even
+   * if it is the first one for this Client_app and hence the one that made m_app_shm_by_name[app_name] appear
+   * in the first place -- the *arena* is totally fine and cool to keep existing.  Lastly: there is no such
+   * thing as *this Session_server (cf. various `Session`s) being "down": while `*this` exists, it's "up."  So
+   * even if we wanted to stop these (harmless) ticklings due to *this no longer operating, it just isn't a
+   * thing as of this writing.  Though even if it were... meh.  Tickle away.
+   *
+   * Secondly let's discuss the appropriate (default at least) period for this tickling.  ...See
+   * Session_impl::session_shm_stats_tickle_and_schedule().  We use a similar period here.  Do realize:
+   * that one is per-session; this one is per-distinct Client_app that has connected to *this session-server
+   * at least once.  Realistically: there might 1 or 2 or maybe 5 of these; like assuming it is 5, it means
+   * this application is capable of doing IPC (opening IPC sessions -- contexts basically) with 5 different
+   * applications (like, distinct executables... not processes/instances thereof); that's quite ambitious.
+   * That is to say... it's not going to be, like, 100 of these timers here. */
+  constexpr util::Fine_duration TICKLE_PERIOD = seconds{10}; // @todo Provide a knob including ability to turn off?
+
+  /* We are in thread <whichever one calls init_app_shm_as_needed()> or, after that, m_async_periodic_worker's.
+   * Does not matter: arena->sample_hi_wmarks() is safe from any thread by its contract.
+   *
+   * Mutex is locked by contract. */
+
+  const auto map_it = m_app_shm_by_name.find(app_name);
+  /* Subtlety: Due to an intentional quirk of init_app_shm_as_needed(), if it's in the map, the ptr may still be null:
+   * init_app_shm_as_needed() failed for app.m_name but does not erase in that case and just leaves null. */
+  const auto arena = (map_it == m_app_shm_by_name.end()) ? shared_ptr<Arena>{} : map_it->second;
+
+  if (!arena)
+  {
+    return; // As promised in contract: no tickle, no further tickles.
+  }
+  // else:
+
+  // Background for the Call_timing thing: <see comment in Session_impl::session_shm_stats_tickle_and_schedule()>.
+  arena->sample_hi_wmarks(Call_timing::S_POSSIBLY_UNSAFE);
+
+  m_async_periodic_worker.schedule_from_now(TICKLE_PERIOD, [this, app_name](auto&&) mutable
+  {
+    Lock_guard app_shm_lock{m_app_shm_mutex}; // Required by our contract.
+    app_shm_stats_tickle_and_schedule(app_name);
+  });
+} // Session_server::app_shm_stats_tickle_and_schedule()
 
 TEMPLATE_JEM_SESSION_SRV
 typename CLASS_JEM_SESSION_SRV::Arena* CLASS_JEM_SESSION_SRV::app_shm(const Client_app& app)
@@ -495,36 +554,36 @@ std::shared_ptr<typename CLASS_JEM_SESSION_SRV::Arena> CLASS_JEM_SESSION_SRV::ap
 {
   using std::shared_ptr;
 
-  // We are in some unspecified thread; we promised thread safety form any concurrency situation.
+  // We are in some unspecified thread; we promised thread safety from any concurrency situation.
 
-  Lock_guard app_shm_lock(m_app_shm_mutex);
+  Lock_guard app_shm_lock{m_app_shm_mutex};
 
   /* Subtlety: Due to an intentional quirk of init_app_shm_as_needed(), if it's in the map, the ptr may still be null:
    * init_app_shm_as_needed() failed for app.m_name but does not erase in that case and just leaves null. */
   const auto map_it = m_app_shm_by_name.find(app.m_name);
-  return (map_it == m_app_shm_by_name.end()) ? shared_ptr<Arena>() : map_it->second;
+  return (map_it == m_app_shm_by_name.end()) ? shared_ptr<Arena>{} : map_it->second;
 
-  // Lock_guard app_shm_lock(m_app_shm_mutex): unlocks here.
+  // Lock_guard app_shm_lock{m_app_shm_mutex}: unlocks here.
 }
 
 TEMPLATE_JEM_SESSION_SRV
 typename CLASS_JEM_SESSION_SRV::Structured_msg_builder_config
-  CLASS_JEM_SESSION_SRV::app_shm_builder_config(const Client_app& app)
+  CLASS_JEM_SESSION_SRV::app_shm_builder_config(const Client_app& app, size_t segment1_sz)
 {
+  using transport::struc::shm::stat::Outer_serializer_global_stats;
+  using transport::struc::shm::stat::Core_serializer_global_stats;
+
   const auto arena = app_shm(app);
   assert(arena && "By contract do not call this for not-yet-encountered Client_app.");
 
-  return Structured_msg_builder_config(get_logger(), 0, 0, arena);
-}
-
-TEMPLATE_JEM_SESSION_SRV
-typename CLASS_JEM_SESSION_SRV::Structured_msg_reader_config
-  CLASS_JEM_SESSION_SRV::app_shm_reader_config(const Client_app& app)
-{
-  const auto arena = app_shm(app);
-  assert(arena && "By contract do not call this for not-yet-encountered Client_app.");
-
-  return Structured_msg_reader_config(get_logger(), arena);
+  return Structured_msg_builder_config{ get_logger(), segment1_sz,
+                                        transport::struc::BUILDER_CONFIG_FRAME_PREFIX_SZ_VIA_STRUC_CHANNEL,
+                                        arena,
+                                        // Default snd-stats targets: per-Arena SHM-msg-{inner,outer} globals.
+                                        &Core_serializer_global_stats<Arena>::get()
+                                          .stats_mutable_default().m_snd,
+                                        &Outer_serializer_global_stats<Arena>::get()
+                                          .stats_mutable_default().m_snd };
 }
 
 TEMPLATE_JEM_SESSION_SRV
@@ -559,10 +618,15 @@ void CLASS_JEM_SESSION_SRV::async_accept(Server_session_obj* target_session,
 }
 
 TEMPLATE_JEM_SESSION_SRV
-ipc::shm::arena_lend::Owner_shm_pool_listener_for_repository*
-  CLASS_JEM_SESSION_SRV::shm_arena_pool_listener()
+size_t CLASS_JEM_SESSION_SRV::mq_msg_size_limit() const
 {
-  return &m_shm_arena_pool_listener;
+  return Impl::mq_msg_size_limit();
+}
+
+TEMPLATE_JEM_SESSION_SRV
+void CLASS_JEM_SESSION_SRV::mq_msg_size_limit(size_t limit)
+{
+  Impl::mq_msg_size_limit(limit);
 }
 
 TEMPLATE_JEM_SESSION_SRV
@@ -575,7 +639,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
   using boost::chrono::seconds;
   using boost::lexical_cast;
 
-  constexpr util::Fine_duration CLEANUP_PERIOD = seconds(30);
+  constexpr util::Fine_duration CLEANUP_PERIOD = seconds{30};
 
   FLOW_LOG_TRACE("Client session [" << *this << "]: Periodic (or initial) cleanup starting.");
 
@@ -584,12 +648,12 @@ void CLASS_JEM_SESSION_SRV::cleanup()
    *
    * As with SHM-classic, cleanup of SHM-pools = 2 tasks; graceful cleanup, when objects are destroyed normally
    * on process exit() or earlier; and cleanup after a process dies or zombifies/later dies and thus the
-   * regular destructor don't run.  Graceful cleanup for SHM-jemalloc is accomplished in each Arena's dtor
+   * regular destructors don't run.  Graceful cleanup for SHM-jemalloc is accomplished in each Arena's dtor
    * and is, to us, a black box; the point is it takes care of it, so we need not do anything further.
    * (This is in contrast to SHM-classic which centers on classic::Pool_arena which is so minimalistic that it leaves
    * that task to the user of Pool_arena; in our case ipc::session::shm::classic code is that user and takes care of it.
    * Point is, with SHM-jemalloc we need not.)  So that leaves ungraceful cleanup.  In point of fact, SHM-jemalloc
-   * explicitly leaves the task of handling to that to its user (that's us).  So:
+   * explicitly leaves the task of handling that to its user (that's us).  So:
    *
    * In short, SHM-jemalloc at its core is symmetric in the sense that in an A-B session, where (say) A happens
    * to be the Session_server side (SHM-jemalloc is not aware of that, but you and I are here), A maintains
@@ -631,6 +695,16 @@ void CLASS_JEM_SESSION_SRV::cleanup()
    *     aforementioned ipc::session Shared_name semantics.
    *   - Determne whether process with a certain PID is alive.  Solution: util::process_running().
    *
+   * A note on stats: A stat surface for this sweep (scanned/removed/skipped counts and such) has been considered
+   * and deliberately omitted.  Rationale: These events are rare by construction (crash aftermath); and the sweep
+   * is fully log-observable -- each removal is INFO-logged with the pool name and reasoning, anomalies are
+   * WARNING-logged, and the removed-count is logged at the end.  For rare events those logs are strictly richer
+   * than counters would be; nor is this a hot path where instrumentation would come along ~free.  Revisit only
+   * if a monitoring consumer materializes that needs queryable counts.  (A cross-process SHM-resident stats
+   * store has also been considered and rejected: it would itself be a persistent resource requiring
+   * crash-cleanup -- the very problem class this algorithm handles -- plus versioning/consistency headaches.)
+   * (End of note on stats.)
+   *
    * Let's do it. */
 
   const auto n_removed
@@ -652,7 +726,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
                                              &the_rest)
           && (resource_type == Shared_name::S_RESOURCE_TYPE_ID_SHM)
           && (srv_app_name == m_srv_app_ref.m_name)
-          && String_view(the_rest.str()).starts_with((SHM_SUBTYPE_PREFIX + Shared_name::S_SEPARATOR).str())))
+          && String_view{the_rest.str()}.starts_with((SHM_SUBTYPE_PREFIX + Shared_name::S_SEPARATOR).str())))
     {
       /* Not our pool to possibly delete.  Misnamed; or not from a split with our Server_app;
        * or not from this SHM-provider. */
@@ -665,7 +739,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
      * in the big comment above regarding arena-lending SHM-providers being symmetrical in how each side deals
      * with the resources they owned.  So going out of our way to clean server stuff by server, client stuff by
      * by client.  @todo Reconsider maybe.  It's also not of huge import, this question: If it gets cleaned, cool. */
-    if (String_view(the_rest.str()).find_first_of(Shared_name::S_SEPARATOR,
+    if (String_view{the_rest.str()}.find_first_of(Shared_name::S_SEPARATOR,
                                                   SHM_SUBTYPE_PREFIX.size() + 1) != String_view::npos)
     {
       return false; // Not our pool to possibly delete.  From a split with our Server_app but created by client side.
@@ -710,7 +784,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
                   "successfully.");
   }
 
-  m_async_cleanup_worker.schedule_from_now(CLEANUP_PERIOD, [this](auto&&) { cleanup(); });
+  m_async_periodic_worker.schedule_from_now(CLEANUP_PERIOD, [this](auto&&) { cleanup(); });
 } // Session_server::cleanup()
 
 TEMPLATE_JEM_SESSION_SRV

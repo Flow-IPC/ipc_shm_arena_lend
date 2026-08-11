@@ -22,36 +22,23 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
-#include <gtest/gtest.h>
-#include "ipc/shm/arena_lend/shm_pool_holder.hpp"
-#include "ipc/shm/arena_lend/shm_pool.hpp"
+/// @file
+#include "ipc/shm/arena_lend/detail/stats.hpp"
+#include "ipc/shm/arena_lend/detail/arena_lend_fwd.hpp"
 
-using std::make_shared;
-using std::size_t;
-using std::string;
-
-namespace ipc::shm::arena_lend::test
+namespace ipc::shm::arena_lend::detail::stat
 {
 
-/// Class interface tests.
-TEST(Shm_pool_holder_test, Interface)
+// Free function implementations.
+
+flow::util::Mutex_recursive& thread_end_gap_mutex()
 {
-  const Shm_pool::pool_id_t SHM_POOL_ID(33);;
-  const string SHM_POOL_NAME("Borrower_shm_pool_repository_test_pool");
-  void* const SHM_POOL_ADDRESS = reinterpret_cast<void*>(0x10);
-  constexpr size_t SHM_POOL_SIZE = 4096;
-  constexpr int SHM_POOL_FD = 1;
+  using flow::util::Mutex_recursive;
 
-  auto shm_pool = make_shared<Shm_pool>(SHM_POOL_ID, SHM_POOL_NAME, SHM_POOL_ADDRESS, SHM_POOL_SIZE, SHM_POOL_FD);
-  Shm_pool_holder shm_pool_holder(shm_pool);
-  auto stored_shm_pool = shm_pool_holder.get_shm_pool();
-  if (stored_shm_pool == nullptr)
-  {
-    ADD_FAILURE() << "Shared memory pool is nullptr";
-    return;
-  }
-
-  EXPECT_EQ(*stored_shm_pool, *shm_pool);
+  /* We promised it'll outlive all C++ code; intentionally leak it making it immortal.  As usual in C++17
+   * the local-static maneuver is thread-safe and efficient while creating the static-guy on-demand. */
+  static const auto s_mutex = new Mutex_recursive;
+  return *s_mutex;
 }
 
-} // namespace ipc::shm::arena_lend::test
+} // namespace ipc::shm::arena_lend::detail::stat

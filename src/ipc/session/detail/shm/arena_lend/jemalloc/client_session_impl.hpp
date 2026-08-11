@@ -25,7 +25,6 @@
 /// @file
 #pragma once
 
-#include "ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.hpp"
 #include "ipc/shm/classic/pool_arena.hpp"
 #include "ipc/session/detail/shm/arena_lend/jemalloc/session_impl.hpp"
 #include "ipc/session/detail/client_session_impl.hpp"
@@ -41,18 +40,18 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * `public` super-class Client_session_impl is to #Client_session.
  *
  * @see shm::arena_lend::jemalloc::Client_session doc header which covers both its public behavior/API and a
- *      detailed sketch of the entire implementation.
+ *      detailed sketch of the entire implementation.  (It is in a jemalloc_fwd.hpp as of this writing.)
  *
- * @tparam S_MQ_TYPE_OR_NONE
+ * @tparam MQ_TYPE_OR_NONE
  *         See shm::arena_lend::jemalloc::Client_session counterpart.
- * @tparam S_TRANSMIT_NATIVE_HANDLES
+ * @tparam TRANSMIT_NATIVE_HANDLES
  *         See shm::arena_lend::jemalloc::Client_session counterpart.
  * @tparam Mdt_payload
  *         See shm::arena_lend::jemalloc::Client_session counterpart.
  */
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 class Client_session_impl :
-  public Session_impl<session::Client_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
+  public Session_impl<session::Client_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload,
                                                    session::schema::ShmType::JEMALLOC,
                                                    // Session_base::Graceful_finisher doc header explains why true here:
                                                    true>>
@@ -62,7 +61,7 @@ public:
 
   /// Short-hand for our non-`virtual` base.
   using Base = Session_impl
-                 <session::Client_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload,
+                 <session::Client_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload,
                                                session::schema::ShmType::JEMALLOC, true>>;
 
   // Constructors/destructor.
@@ -180,22 +179,6 @@ private:
   // Data.
 
   /**
-   * This guy needs to be around, with each arena (in our case, out of the box, just session_shm()) registered
-   * against it, for shm::stl::Arena_allocator (and thus STL/allocator-compliant data structures, including
-   * containers like our own transport::struc::shm::Capnp_message_builder::Segments_in_shm) to work properly with that
-   * arena.
-   *
-   * Details:
-   *   - It is recommended there are not tons of these lying around, but in a production application there
-   *     should be one session::Client_session around at a time at most.  So keeping this here makes sense.
-   *   - It is *not* a problem if there is more than one per process; so if there are more sessions around
-   *     in the process, it won't cause any problem.  It's not a singleton situation.
-   *
-   * There is also one in each Session_server.
-   */
-  ipc::shm::arena_lend::Owner_shm_pool_listener_for_repository m_shm_arena_pool_listener;
-
-  /**
    * Thread used for low-priority periodic low-priority cleanup work.  See cleanup().
    *
    * ### Rationale ###
@@ -212,10 +195,10 @@ private:
 
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define TEMPLATE_JEM_CLI_SESSION_IMPL \
-  template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+  template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define CLASS_JEM_CLI_SESSION_IMPL \
-  Client_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>
+  Client_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>
 
 TEMPLATE_JEM_CLI_SESSION_IMPL
 template<typename On_passive_open_channel_handler, typename Task_err>
@@ -224,7 +207,6 @@ CLASS_JEM_CLI_SESSION_IMPL::Client_session_impl(flow::log::Logger* logger_ptr,
                                                 Task_err&& on_err_func,
                                                 On_passive_open_channel_handler&& on_passive_open_channel_func) :
   Base(logger_ptr, cli_app_ref, srv_app_ref, std::move(on_err_func), std::move(on_passive_open_channel_func)),
-  m_shm_arena_pool_listener(get_logger()),
   m_async_cleanup_worker(get_logger(),
                          // Generally follow the lead of vanilla Client_session_impl::m_async_worker ctor call here:
                          flow::util::ostream_op_string("CSnJCl-", srv_app_ref.m_name, '<', cli_app_ref.m_name))
@@ -241,7 +223,6 @@ CLASS_JEM_CLI_SESSION_IMPL::Client_session_impl(flow::log::Logger* logger_ptr,
                                                 const Client_app& cli_app_ref, const Server_app& srv_app_ref,
                                                 Task_err&& on_err_func) :
   Base(logger_ptr, cli_app_ref, srv_app_ref, std::move(on_err_func)),
-  m_shm_arena_pool_listener(get_logger()),
   m_async_cleanup_worker(get_logger(),
                          // @todo Copy-pasting here... not great.
                          flow::util::ostream_op_string("CSnJCl-", srv_app_ref.m_name, '<', cli_app_ref.m_name))
@@ -321,9 +302,9 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
     = init_channels_by_cli_req_pre_sized ? make_shared<Channels>(init_channels_by_cli_req_pre_sized->size())
                                          : shared_ptr<Channels>();
   auto temp_mdt_from_srv_or_null
-    = mdt_from_srv_or_null ? make_shared<Mdt_reader_ptr>() : shared_ptr<Mdt_reader_ptr>();
+    = mdt_from_srv_or_null ? make_shared<Mdt_reader_ptr>() : shared_ptr<Mdt_reader_ptr>{};
   auto temp_init_channels_by_srv_req
-    = init_channels_by_srv_req ? make_shared<Channels>() : shared_ptr<Channels>();
+    = init_channels_by_srv_req ? make_shared<Channels>() : shared_ptr<Channels>{};
 
   return Base::Base::async_connect(mdt,
                                    temp_init_channels_by_cli_req_pre_sized.get(),
@@ -407,11 +388,12 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
         // else
 
         // That's the entire payload of the in-message.
-        auto local_hndl_or_null = msg->native_handle_or_null();
+        auto local_hndl_or_null = msg->emit_native_handle_or_null();
+        // Unless null we must now either .release() it or give it to something (Channel) that'll own it.
 
         if (local_hndl_or_null.null())
         {
-          FLOW_LOG_WARNING("Client session [" << *this << "]: Session-connect request: Vanilla async-connect"
+          FLOW_LOG_WARNING("Client session [" << *this << "]: Session-connect request: Vanilla async-connect "
                            "succeeded, but opposing server failed to create the resources (pre-connected native handle "
                            "pair for local stream socket connection) necessary for arena-lending SHM provider's "
                            "internal IPC needs.  Will go back to NULL state and report to user via "
@@ -420,7 +402,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
             (session::error::Code::S_SESSION_OPEN_CHANNEL_SERVER_CANNOT_PROCEED_RESOURCE_UNAVAILABLE);
           return;
         }
-        /* else: We can make Channel, and upgrade to struc::Channel, with no further potential for errors.
+        /* else: We can make Channel with no further potential for errors.
          *       Our super-class (shm::...::Session_mv) can handle those details and everything else including
          *       setting up the Arena.  That stuff is the same on the server and client, except server also sets
          *       up an extra arena; but we don't have any extra steps.  So that's it!
@@ -428,7 +410,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
          * Well, one last thing actually: The cleanup algorithm started/contained in our ctor depends on being able
          * to parse-out the PID of the creating process from the pool name as obtained by
          * doing Pool_arena::for_each_persistent() which trolls /dev/shm (in Linux at least).  Hence we shall place
-         * our PID at the expect place in the name via the mechanism provided for such things by init_shm(). */
+         * our PID at the expected place in the name via the mechanism provided for such things by init_shm(). */
 
         FLOW_LOG_INFO("Client session [" << *this << "]: Session-connect request: Vanilla async-connect succeeded, "
                       "and opposing server sent a resource (pre-connected native handle for "
@@ -437,14 +419,17 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
 
         // Don't forget to ack it.
         Error_code err_code;
-        if (!master_channel->send(master_channel->create_msg(), msg.get(), &err_code))
+        auto ack = master_channel->create_msg();
+        if ((!master_channel->send(&ack, msg.get(), &err_code)) || err_code)
         {
+          local_hndl_or_null.release(); // Else will leak.
+
           if (err_code)
           {
             // The send() detected new master_channel hosing.
             Base::Base::complete_async_connect_after_canceling_peer_state(err_code);
           }
-          // else: Must have emitted error somehow elsewhere.  async_connect() will fail.
+          // else { Must have emitted error somehow elsewhere.  async_connect() will fail. }
           return;
         }
         // else
@@ -452,21 +437,19 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
         /* So just init_shm() left.
          * It might have failed; if so, then that's that (nothing else to undo); or conversely, if it succeeds,
          * on this side there's nothing further to do either.  So just report the result of init_shm(). */
-        err_code = Base::init_shm(std::move(local_hndl_or_null),
+        err_code = Base::init_shm(std::move(local_hndl_or_null), // init_shm() promises to handle ownership.
                                   Shared_name::ct(to_string(util::Process_credentials::own_process_id())));
+        Base::Base::complete_async_connect_after_canceling_peer_state(err_code);
+
         if (!err_code)
         {
-          /* I lied (Arnie voice from Commando).  We also need to do this for each arena (we have just the one).
-           * Need this for arena->construct<T>(), where T is allocator-compliant thing such as STL containers,
-           * to work. */
-#ifndef NDEBUG
-          const bool ok =
-#endif
-          Base::session_shm()->add_shm_pool_listener(&m_shm_arena_pool_listener);
-          assert(ok && "Maintenance bug?  It should only fail if already registered.");
+          /* See its doc header.  Formally speaking: we are in thread W, just reached PEER state; supposed to call it.
+           *
+           * Informally: This tickling-for-stats is something to start doing once the per-session arena is up, and
+           * the Session has successfully started; and then it'll self-perpetuate/eventually stop as appropriate.
+           * What it actually does is explained in its doc header in Base (Session_impl). */
+          Base::session_shm_stats_tickle_and_schedule();
         }
-
-        Base::Base::complete_async_connect_after_canceling_peer_state(err_code);
       }); // async_worker()->post()
     }); // master_channel->expect_msg()
 
@@ -484,7 +467,7 @@ void CLASS_JEM_CLI_SESSION_IMPL::cleanup()
   using boost::chrono::seconds;
   using boost::lexical_cast;
 
-  constexpr util::Fine_duration CLEANUP_PERIOD = seconds(30);
+  constexpr util::Fine_duration CLEANUP_PERIOD = seconds{30};
 
   FLOW_LOG_TRACE("Client session [" << *this << "]: Periodic (or initial) cleanup starting.");
 
@@ -524,7 +507,7 @@ void CLASS_JEM_CLI_SESSION_IMPL::cleanup()
                                              &the_rest)
           && (resource_type == Shared_name::S_RESOURCE_TYPE_ID_SHM)
           && (cli_app_name == Base::Base::Base::cli_app_ptr()->m_name)
-          && String_view(the_rest.str()).starts_with((SHM_SUBTYPE_PREFIX + Shared_name::S_SEPARATOR).str())))
+          && String_view{the_rest.str()}.starts_with((SHM_SUBTYPE_PREFIX + Shared_name::S_SEPARATOR).str())))
     {
       // Not our pool to possibly delete.  Misnamed; or not by this Client_app; or not from this SHM-provider.
       return false;
@@ -534,7 +517,7 @@ void CLASS_JEM_CLI_SESSION_IMPL::cleanup()
     /* We must parse out the client-PID (as noted in big comment above).
      * the_rest should look like: SHM_SUBTYPE_PREFIX / -->client-PID<-- / more-stuff.
      * Hence make past_prefix point to: ---------------^ */
-    String_view past_prefix(the_rest.str());
+    String_view past_prefix{the_rest.str()};
     past_prefix.remove_prefix(SHM_SUBTYPE_PREFIX.str().size() + 1);
     // Now cut off from here -------------------------------------------^.
     const size_t sep_pos = past_prefix.find_first_of(Shared_name::S_SEPARATOR);

@@ -22,10 +22,14 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
 #include "ipc/shm/arena_lend/shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/divisible_shm_pool.hpp"
+#include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
+#include "ipc/shm/arena_lend/detail/arena_lend_fwd.hpp"
+#include "ipc/util/shared_name.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include <flow/util/util.hpp>
 
@@ -34,9 +38,14 @@ namespace ipc::shm::arena_lend
 
 /**
  * Abstract class representing a shared memory pool collection for owners, which are entities (e.g., processes)
- * that have access to a memory manager. In other words, they can allocate and deallocate memory. An event listener
- * can be registered to obtain notifications of key events in the collection, which are currently changes in the
- * shared memory pool set.
+ * that have access to a memory manager. In other words, they can allocate and deallocate memory.  Subclasses
+ * may override on_shm_pool_created() and on_shm_pool_removed() to be notified of changes in the SHM pool set.
+ *
+ * @todo ipc::shm::arena_lend::Owner_shm_pool_collection (among others) should be
+ * officially classified an internal API (at least, per coding guide, placed in `detail/` header; optionally in `detail`
+ * sub-namespace).  Once `ipc::shm::arena_lend` (the SHM-arena-lend module) becomes officially extensible to
+ * handle other memory-managers beyond jemalloc, thus allowing for user's own arena-lending SHM-provider impls
+ * (not just SHM-jemalloc), then move this back out of `detail`, as sub-classing it is expected in that case.
  */
 class Owner_shm_pool_collection :
   public Shm_pool_collection
@@ -46,48 +55,26 @@ public:
   using pool_id_t = Shm_pool::pool_id_t;
   /// Short-hand for pool offset type.
   using pool_offset_t = Shm_pool::size_t;
-  /**
-   * Alias for the functor that creates a new shared memory object name. This functor must be thread-safe.
-   * To conform with shared object naming convention, the name must:
-   * 1. Start with a slash ('/') character.
-   * 2. Have [1, NAME_MAX - 2] non-slash characters, following the initial slash character, NAME_MAX = 255.
-   *
-   * The final character string used will be null-terminated.
-   *
-   * Most importantly the pool name must be unique across all time between boots.
-   *
-   * The argument is an unsigned integer ID that is guaranteed unique across *all* pools across *all* time between
-   * boots. It should, though formally is not required to, be encoded into the returned name.
-   *   - It provides excellent uniqueness which one might as well take advantage of instead of having to
-   *     come up with one's own source of unique pool names.
-   *   - It can help debugging/clarity, as glancing at the name identifies the pool within the
-   *     shm::arena_lend system as well.
-   */
-  using Shm_object_name_generator = std::function<std::string(pool_id_t)>;
 
   /**
-   * Abstract class representing listeners for events in the collection.
+   * Destructor.  Removes (unmaps, closes, unlinks) any SHM-pools still registered -- see below for why any
+   * would be.
+   *
+   * The subclass typically causes pool removal organically, via its memory manager's native teardown, before
+   * this runs: e.g., jemalloc::Ipc_arena's native-arena destruction invokes the mandatory-removal (extent
+   * *destroy*) hook per extent.  However that mechanism can leave stragglers -- see inside
+   * jemalloc::Ipc_arena::optional_remove_shm_pool() -- and we will here eliminate them too.
+   *
+   * Formally(ish) we can justify it as follows:
+   *   - Can we do it here?  Yes: By the time we run, the whole collection is defunct -- the native arena is
+   *     gone, and no one is permitted to rely on any of its pools (in this process or any borrower).
+   *   - Should we do it here?  Yes: Whether every pool is removed organically during native-arena destruction
+   *     that *must* precede us, or whether some -- or even all -- are left around is a memory-manager (e.g.: jemalloc)
+   *     detail, and in actual fact at least some (e.g.: yes, still jemalloc) memory-managers will leave 1+
+   *     pool around.  Not removing them here is a leak on some level; probably (no guarantees though) not of physical
+   *     RAM but at least of pool-names in the file-system (which can count against OS limits).
    */
-  class Event_listener
-  {
-  public:
-    /// Destructor.
-    virtual ~Event_listener() = 0;
-
-    /**
-     * Notification for created shared memory pools.
-     *
-     * @param shm_pool The shared memory pool that was created.
-     */
-    virtual void notify_created_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool) = 0;
-    /**
-     * Notification for removed shared memory pools.
-     *
-     * @param shm_pool The shared memory pool that was deregistered.
-     * @param removed_shared_memory Whether the underlying shared memory was actually removed.
-     */
-    virtual void notify_removed_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool, bool removed_shared_memory) = 0;
-  }; // class Event_listener
+  ~Owner_shm_pool_collection() override;
 
   /**
    * Constructor.
@@ -95,13 +82,13 @@ public:
    * @param logger For logging purposes.
    * @param id Identifier for the collection.
    * @param memory_manager The memory allocator.
-   * @param name_generator The shared object name generator.
+   * @param pool_name_base Pool-name prefix; each pool's SHM object name is derived from this plus its unique ID.
    * @param permissions The shared memory object file permissions when one is created.
    */
   Owner_shm_pool_collection(flow::log::Logger* logger,
-                            Collection_id id,
+                            collection_id_t id,
                             const std::shared_ptr<Memory_manager>& memory_manager,
-                            Shm_object_name_generator&& name_generator,
+                            Shared_name&& pool_name_base,
                             const util::Permissions& permissions);
 
   /**
@@ -120,25 +107,26 @@ public:
   virtual void deallocate(void* address);
 
   /**
-   * Adds a listener to be notified for collection events.
-   *
-   * @param listener A borrowed handle to the listener.
-   *
-   * @return Whether the listener was added successfully, which would generally only fail if the listener was
-   *         already previously added.
+   * Returns SHM object file-system permissions we were given via constructor.
+   * @return See above.
    */
-  bool add_event_listener(Event_listener* listener);
-  /**
-   * Removes a listener from being notified for collection events.
-   *
-   * @param listener A borrowed handle to the listener.
-   *
-   * @return Whether the listener was removed successfully, which would generally only fail if the listener was
-   *         not found.
-   */
-  bool remove_event_listener(Event_listener* listener);
+  const util::Permissions& get_permissions() const;
 
 protected:
+  /**
+   * Hook invoked after a SHM pool has been registered. Default implementation does nothing.
+   *
+   * @param shm_pool The shared memory pool that was created.
+   */
+  virtual void on_shm_pool_created(const std::shared_ptr<Shm_pool>& shm_pool);
+  /**
+   * Hook invoked after a SHM pool has been deregistered. Default implementation does nothing.
+   *
+   * @param shm_pool The shared memory pool that was deregistered.
+   * @param removed_shared_memory Whether the underlying shared memory was actually removed.
+   */
+  virtual void on_shm_pool_removed(const std::shared_ptr<Shm_pool>& shm_pool, bool removed_shared_memory);
+
   /**
    * Function to perform memory mapping.
    *
@@ -171,7 +159,14 @@ protected:
    */
   using Memory_decommit_functor = std::function<bool(const std::shared_ptr<Shm_pool>&, std::size_t, std::size_t)>;
 
-  /// A shared memory pool that also contains a mutex for serializing access.
+  /**
+   * A shared memory pool that also contains a mutex for serializing access.
+   * @todo Making Divisible_shm_pool::m_remaining_size `atomic` -- perhaps optionally based on a tparam --
+   * would speed things up (and likely reduce lines-of-code).  `fetch_sub(&R, dec, relaxed) - dec` would
+   * be quite quick and would return 0 -- the only condition we care about actually checking -- exactly once.
+   * Possibly the `relaxed` might have to be changed to `acq_rel` or something, but in any case it's a well
+   * known pattern and tailor-made for this simple algorithm.  Better than a mutex.
+   */
   class Lockable_shm_pool :
     public Divisible_shm_pool,
     private boost::noncopyable
@@ -257,47 +252,26 @@ protected:
   bool remove_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool,
                        const Memory_unmap_functor& unmap_functor,
                        bool& unmapped_pool);
+
   /**
-   * Returns a new shared memory object name, which should be unique.
+   * Returns a unique SHM object name for the given pool ID, by combining the pool-name base with the ID.
    *
    * @param shm_pool_id Recently generated ultra-unique ID.
    * @return See above.
    */
-  inline std::string generate_shm_object_name(pool_id_t shm_pool_id) const;
-
-  /**
-   * Construct an object at a pre-allocated location in shared memory and returns a shared
-   * pointer to this object. When the shared pointer has no more references, it will be destructed by this pool
-   * collection instance via the given deleter. The start() method must be executed prior to any calls to this.
-   *
-   * @tparam T The object type to be created.
-   * @tparam Deleter A copy-constructible class containing operator() that performs destruction of the memory.
-   * @tparam Args The parameter types that are passed to the constructor of T.
-   * @param allocation Allocated shared memory.
-   * @param deleter A deleter instance that will delete T (typically constructed on the stack as it will be copied).
-   * @param args The arguments passed to the constructor of T.
-   *
-   * @return A shared pointer to an object created in shared memory.
-   */
-  template <typename T, typename Deleter, typename... Args>
-  std::shared_ptr<T> construct_helper(void* allocation, Deleter&& deleter, Args&&... args)
-  {
-    if (allocation == nullptr)
-    {
-      return nullptr;
-    }
-
-    T* obj = new(allocation) T(std::forward<Args>(args)...);
-    return std::shared_ptr<T>(obj, std::forward<Deleter>(deleter));
-  }
+  inline Shared_name generate_shm_object_name(pool_id_t shm_pool_id) const;
 
 private:
-  /// Multi-reader, single-writer mutex.
-  using Mutex = flow::util::Mutex_shared_non_recursive;
-  /// Single-writer lock for the mutex.
-  using Write_lock = flow::util::Lock_guard<Mutex>;
-  /// Multi-reader lock for the mutex.
-  using Read_lock = flow::util::Shared_lock_guard<Mutex>;
+  /// Friend facade providing privileged access for internal Flow-IPC components.
+  template<typename Base_t>
+  friend struct detail::Owner_spc_impl;
+
+  /**
+   * Returns fragment we were told via constructor to be used as the base for SHM object name.
+   * See generate_shm_object_name().
+   * @return See above.
+   */
+  const Shared_name& get_pool_name_base() const;
 
   /**
    * Creates a shared memory object.
@@ -329,14 +303,10 @@ private:
 
   /// Memory allocator.
   std::shared_ptr<Memory_manager> m_memory_manager;
-  /// Shared object name generator.
-  Shm_object_name_generator m_name_generator;
+  /// Pool-name prefix; individual pool SHM object names are derived from this.
+  const Shared_name m_pool_name_base;
   /// The shared memory object file permissions when one is created.
   const util::Permissions m_permissions;
-  /// Mutex for listener map.
-  mutable Mutex m_event_listeners_mutex;
-  /// Event_listener container for notifications.
-  std::set<Event_listener*> m_event_listeners;
 }; // class Owner_shm_pool_collection
 
 std::shared_ptr<Memory_manager> Owner_shm_pool_collection::get_memory_manager() const
@@ -344,9 +314,9 @@ std::shared_ptr<Memory_manager> Owner_shm_pool_collection::get_memory_manager() 
   return m_memory_manager;
 }
 
-std::string Owner_shm_pool_collection::generate_shm_object_name(pool_id_t shm_pool_id) const
+Shared_name Owner_shm_pool_collection::generate_shm_object_name(pool_id_t shm_pool_id) const
 {
-  return m_name_generator(shm_pool_id);
+  return m_pool_name_base / Shared_name::ct_from_int(shm_pool_id);
 }
 
 Owner_shm_pool_collection::Lockable_shm_pool::Mutex& Owner_shm_pool_collection::Lockable_shm_pool::get_mutex()

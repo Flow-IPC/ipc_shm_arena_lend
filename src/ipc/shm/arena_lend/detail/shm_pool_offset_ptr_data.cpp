@@ -143,13 +143,13 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       // Okay, now we can lock it as noted above; and we will reuse this handle to it from now on in this process.
 
       {
-        Sh_lock sh_lock(*s_pool_id_mutex_or_none);
+        Sh_lock sh_lock{*s_pool_id_mutex_or_none};
 
         // Let's see if indeed pool already exists.
         try
         {
           s_pool_id_shm_obj_or_none // Currently default-cted.
-            = Shm_obj(util::OPEN_ONLY, little_pool_name.native_str(), bipc::read_write);
+            = Shm_obj{util::OPEN_ONLY, little_pool_name.native_str(), bipc::read_write};
 
           // Didn't throw?  Then pool already existed and was therefore initialized by someone else; we have a handle.
         }
@@ -164,7 +164,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
           // else: Indeed, not found.  Must create underlying pool.
 
           s_pool_id_shm_obj_or_none // Currently default-cted (still).
-            = Shm_obj(util::CREATE_ONLY, little_pool_name.native_str(), bipc::read_write, perms);
+            = Shm_obj{util::CREATE_ONLY, little_pool_name.native_str(), bipc::read_write, perms};
           // It threw if failed.
 
           /* We were the ones to create it; so we must initialize it for everyone before unlocking.  Mutex
@@ -174,8 +174,8 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
           s_pool_id_shm_obj_or_none.truncate(sizeof(pool_id_t));
           // It threw if failed.
 
-          // To actually initialize it we must map a local vaddr area to it,
-          s_pool_id_shm_region_or_none = Shm_region(s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t));
+          // To actually initialize it we must map a local vaddr area to it.
+          s_pool_id_shm_region_or_none = Shm_region{s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t)};
           // It threw if failed.
 
           // Lastly start the ID in this deterministic initial state.  (Only ++ after this, in all processes.)
@@ -193,7 +193,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       } // Sh_lock sh_lock(*s_pool_id_mutex_or_none)
 
       // Got here: opened pool handle, and pool in solid shape, but we do still need to map it for subsequent access.
-      s_pool_id_shm_region_or_none = Shm_region(s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t));
+      s_pool_id_shm_region_or_none = Shm_region{s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t)};
       // It threw if failed.
     }); // op_with_possible_bipc_exception()
     if (id != 0)
@@ -228,7 +228,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
    * the other way.  Not quite a to-do in my opinion (ygoldfel).) */
 
   {
-    Sh_lock sh_lock(*s_pool_id_mutex_or_none);
+    Sh_lock sh_lock{*s_pool_id_mutex_or_none};
 
     // Get the next ID; and zero the MSB (reserved for the selector), leaving the proper-width next pool ID.
     auto& id_ref = *(static_cast<pool_id_t*>(s_pool_id_shm_region_or_none.get_address()));

@@ -22,60 +22,33 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
-namespace ipc::shm::arena_lend::detail
+#include <ostream>
+
+namespace ipc::session::shm::arena_lend::jemalloc
 {
 
-/**
- * Pretends to be a void object such that references can be used. In particular, it is useful for templating
- * with void types.
- */
-struct Void_holder
-{
-  /// Intentionally empty
-}; // struct Void_holder
+// Types.
+
+// Find doc headers near the bodies of these compound types.
+
+class Shm_session;
+
+// Free functions.
 
 /**
- * A generic mechanism for getting the reference for a type. In particular, it supports the void type.
+ * Prints string representation of the given `Shm_session` to the given `ostream`.
  *
- * @tparam T The type.
- */
-template <typename T>
-struct Add_reference
-{
-  /// The reference type.
-  using m_type = T&;
-}; // struct Add_reference
-
-/**
- * Specialization for a reference type.
+ * @relatesalso Shm_session
  *
- * @tparam T The type.
+ * @param os
+ *        Stream to which to write.
+ * @param val
+ *        Object to serialize.
+ * @return `os`.
  */
-template<typename T>
-struct Add_reference<T&>
-{
-  /// The reference type.
-  using m_type = T&;
-}; // struct Add_reference<T&>
+std::ostream& operator<<(std::ostream& os, const Shm_session& val);
 
-/**
- * Specialization for void type.
- */
-template<>
-struct Add_reference<void>
-{
-  using m_type = Void_holder&;
-}; // struct Add_reference<void>
-
-/**
- * Specialization for const void type.
- */
-template<>
-struct Add_reference<const void>
-{
-  using m_type = const Void_holder&;
-}; // struct Add_reference<const void>
-
-} // namespace ipc::shm::arena_lend::detail
+} // namespace ipc::session::shm::arena_lend::jemalloc

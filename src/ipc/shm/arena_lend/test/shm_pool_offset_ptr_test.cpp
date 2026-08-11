@@ -26,15 +26,13 @@
 #include <sys/mman.h>
 #include "ipc/shm/arena_lend/borrower_allocator_arena.hpp"
 #include "ipc/shm/arena_lend/borrower_shm_pool_collection.hpp"
-#include "ipc/shm/arena_lend/borrower_shm_pool_listener.hpp"
-#include "ipc/shm/arena_lend/borrower_shm_pool_repository.hpp"
+#include "ipc/shm/arena_lend/detail/owner_shm_pool_repository.hpp"
+#include "ipc/shm/arena_lend/test/test_shm_pool_repository.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
-#include "ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.hpp"
 #include "ipc/shm/stl/stateless_allocator.hpp"
 #include "ipc/test/test_logger.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_fwd.hpp"
-#include "ipc/shm/arena_lend/jemalloc/test/test_util.hpp"
 #include <boost/container/string.hpp>
 #include <boost/container/vector.hpp>
 #include <boost/container/list.hpp>
@@ -59,8 +57,8 @@ namespace ipc::shm::arena_lend::test
 
 using Ipc_arena = jemalloc::Ipc_arena;
 template <typename T>
-using Ipc_arena_allocator = jemalloc::Ipc_arena_allocator<T>;
-using Ipc_arena_activator = jemalloc::Ipc_arena_activator;
+using Ipc_arena_allocator = jemalloc::Ipc_arena::Allocator<T>;
+using Ipc_arena_activator = jemalloc::Ipc_arena::Activator;
 using Memory_manager = jemalloc::Memory_manager;
 using pool_offset_t = Shm_pool::size_t;
 
@@ -75,7 +73,7 @@ public:
    */
   template <typename Pointed_type>
   using Pointer = Shm_pool_offset_ptr<Pointed_type,
-                                      Owner_shm_pool_repository_singleton,
+                                      detail::Owner_shm_pool_repository<Ipc_arena>,
                                       int,
                                       false>;
 }; // class Ipc_arena_wrapper
@@ -85,8 +83,10 @@ class Shm_pool_offset_ptr_test :
   public ::testing::Test
 {
 public:
+  // This is under any reasonable SBO (small buffer optimization) limit.
   static constexpr size_t S_INITIAL_STRING_SIZE = 1;
-  static constexpr size_t S_ADDITIONAL_STRING_SIZE = 25;
+  // This is over any such limit.
+  static constexpr size_t S_ADDITIONAL_STRING_SIZE = 51;
   static constexpr size_t S_TOTAL_STRING_SIZE = S_INITIAL_STRING_SIZE + S_ADDITIONAL_STRING_SIZE;
   static constexpr char S_STARTING_STRING_CHAR = 'a';
 
@@ -109,19 +109,19 @@ public:
   {
   }; // struct My_subclass
 
-  using Pointer = Ipc_arena::Pointer<My_class>;
-  using Subpointer = Ipc_arena::Pointer<My_subclass>;
-  using Offset_pointer = Ipc_arena_wrapper::Pointer<My_class>;
+  using Ptr = Ipc_arena::Pointer<My_class>;
+  using Subptr = Ipc_arena::Pointer<My_subclass>;
+  using Offset_ptr = Ipc_arena_wrapper::Pointer<My_class>;
 
-  // Construct arena and register a listener that puts the shared memory pools in a repository for offset pointer use
   Shm_pool_offset_ptr_test() :
     m_logger(flow::log::Sev::S_INFO),
     m_log_component(Log_component::S_TEST),
-    m_owner_shm_pool_listener(&m_logger),
-    m_memory_manager(make_shared<Memory_manager>(&m_logger)),
-    m_arena(jemalloc::test::create_arena(&m_logger, m_memory_manager))
+    m_memory_manager(make_shared<Memory_manager>()),
+    m_shm_pool_name_base(arena_lend::test::create_test_pool_name_base()),
+    m_arena(Ipc_arena::create(&m_logger, m_memory_manager,
+                              Shared_name{m_shm_pool_name_base},
+                              {}))
   {
-    EXPECT_TRUE(m_arena->add_shm_pool_listener(&m_owner_shm_pool_listener));
   }
 
   flow::log::Logger* get_logger()
@@ -139,18 +139,17 @@ public:
     return m_arena;
   }
 
-private:
+protected: // For the individual tests like _Vector. They subclass the fixture class.
   Test_logger m_logger;
   flow::log::Component m_log_component;
-  Owner_shm_pool_listener_for_repository m_owner_shm_pool_listener;
   shared_ptr<Memory_manager> m_memory_manager;
+  const Shared_name m_shm_pool_name_base;
   shared_ptr<Ipc_arena> m_arena;
 }; // class Shm_pool_offset_ptr_test
 
 namespace
 {
 
-using Borrower_shm_pool_repository_singleton = Shm_pool_repository_singleton<Borrower_shm_pool_repository>;
 /**
  * Alias for a Stateless_allocator using Borrower_allocator_arena.
  *
@@ -158,57 +157,7 @@ using Borrower_shm_pool_repository_singleton = Shm_pool_repository_singleton<Bor
  */
 template<typename T>
 using Borrower_arena_allocator =
-  ipc::shm::stl::Stateless_allocator<T, Borrower_allocator_arena<Borrower_shm_pool_repository_singleton>>;
-
-/**
- * Listener for shared memory pool events that occur on the borrower side that maintain a repository for
- * use with shared memory smart pointers. Using this type of listener comes with an expectation that the
- * shared memory pool names are unique and not opened by multiple sessions concurrently.
- *
- * @see Shm_pool_offset_ptr
- */
-class Borrower_shm_pool_listener_for_repository :
-  public flow::log::Log_context,
-  public Borrower_shm_pool_listener
-{
-public:
-  /**
-   * Constructor.
-   *
-   * @param logger Used for logging purposes.
-   */
-  Borrower_shm_pool_listener_for_repository(flow::log::Logger* logger) :
-    flow::log::Log_context(logger, Log_component::S_SHM)
-  {
-  }
-
-  /**
-   * Registers a shared memory pool in the repository.
-   *
-   * @param shm_pool The shared memory pool that was opened.
-   */
-  virtual void notify_opened_shm_pool(const shared_ptr<Shm_pool>& shm_pool) override
-  {
-    if (!Borrower_shm_pool_repository_singleton::get_instance().insert(shm_pool))
-    {
-      FLOW_LOG_WARNING("Could not insert SHM pool [" << shm_pool->get_name() << "]");
-    }
-  }
-
-  /**
-   * Deregisters a shared memory pool from the repository.
-   *
-   * @param shm_pool The shared memory pool that was opened.
-   */
-  virtual void notify_closed_shm_pool(Shm_pool::pool_id_t shm_pool_id) override
-  {
-    unsigned int use_count;
-    auto shm_pool =
-      Borrower_shm_pool_repository_singleton::get_instance().erase_or_decrement_use(shm_pool_id, use_count);
-    EXPECT_NE(shm_pool, nullptr);
-    EXPECT_EQ(use_count, 0UL);
-  }
-}; // class Borrower_shm_pool_repository_listener
+  ipc::shm::stl::Stateless_allocator<T, Borrower_allocator_arena<test::Test_shm_pool_repository>>;
 
 /**
  * Checks that a container matches expected.
@@ -267,19 +216,16 @@ bool check_container(const shared_ptr<Container_type>& container, size_t expecte
 }
 
 /**
- * Returns whether the shared memory pool is registered in the global shared memory pool repository.
+ * Returns whether the shared memory pool is registered in the borrower-side test repository.
+ * We do not check the owner-side repository, because Owner_shm_pool_repository::to_address()
+ * intentionally retains stale per-thread cache entries after pool removal (see its doc header).
  *
- * @tparam is_owner Whether the repository in question is the owner repository; otherwise, it is the borrower.
  * @param shm_pool The shared memory pool to check.
- *
  * @return See above.
  */
-template <bool is_owner>
-bool check_shm_pool_registration(const shared_ptr<Shm_pool>& shm_pool)
+bool check_borrower_shm_pool_registration(const shared_ptr<Shm_pool>& shm_pool)
 {
-  using Repository_type = std::conditional_t<is_owner, Owner_shm_pool_repository, Borrower_shm_pool_repository>;
-
-  return (Shm_pool_repository_singleton<Repository_type>::to_address(shm_pool->get_id(), 0) != nullptr);
+  return test::Test_shm_pool_repository::to_address(shm_pool->get_id(), 0) != nullptr;
 }
 
 } // Anonymous namespace
@@ -291,19 +237,19 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_interface)
 
   void* buffer = arena->allocate(S_BUFFER_SIZE);
 
-  Pointer offset_ptr = Pointer(buffer);
+  Ptr offset_ptr = Ptr(buffer);
   EXPECT_NE(offset_ptr.get(), nullptr);
   EXPECT_TRUE(offset_ptr.is_offset());
   EXPECT_FALSE(offset_ptr.is_raw());
 
-  Pointer next_ptr = offset_ptr + 1;
+  Ptr next_ptr = offset_ptr + 1;
   EXPECT_EQ(reinterpret_cast<size_t>(next_ptr.get()) - reinterpret_cast<size_t>(offset_ptr.get()), sizeof(My_class));
   EXPECT_TRUE(next_ptr.is_offset());
 
   // Convert to pointer and back and make sure it is equivalent
   {
     My_class* pointer = offset_ptr.get();
-    Pointer other_offset_ptr = Pointer::pointer_to(*pointer);
+    Ptr other_offset_ptr = Ptr::pointer_to(*pointer);
     EXPECT_TRUE(other_offset_ptr.is_offset());
     EXPECT_EQ(other_offset_ptr, offset_ptr);
   }
@@ -311,47 +257,47 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_interface)
   EXPECT_EQ(&(*offset_ptr), offset_ptr);
 
   {
-    Pointer p = next_ptr;
+    Ptr p = next_ptr;
     p -= 1;
     EXPECT_EQ(p, offset_ptr);
   }
   {
-    Pointer p1 = next_ptr;
-    Pointer p2 = --p1;
+    Ptr p1 = next_ptr;
+    Ptr p2 = --p1;
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, offset_ptr);
   }
   {
-    Pointer p1 = next_ptr;
-    Pointer p2 = p1--;
+    Ptr p1 = next_ptr;
+    Ptr p2 = p1--;
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
   {
-    Pointer p = next_ptr - 1;
+    Ptr p = next_ptr - 1;
     EXPECT_EQ(p, offset_ptr);
   }
   EXPECT_EQ(next_ptr - offset_ptr, 1);
   {
-    Pointer p = offset_ptr;
+    Ptr p = offset_ptr;
     p += 1;
     EXPECT_EQ(p, next_ptr);
   }
   {
-    Pointer p1 = offset_ptr;
-    Pointer p2 = ++p1;
+    Ptr p1 = offset_ptr;
+    Ptr p2 = ++p1;
     EXPECT_EQ(p1, next_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
   {
-    Pointer p1 = offset_ptr;
-    Pointer p2 = p1++;
+    Ptr p1 = offset_ptr;
+    Ptr p2 = p1++;
     EXPECT_EQ(p1, next_ptr);
     EXPECT_EQ(p2, offset_ptr);
   }
   {
-    Pointer p1 = &offset_ptr[0];
-    Pointer p2 = &p1[1];
+    Ptr p1 = &offset_ptr[0];
+    Ptr p2 = &p1[1];
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
@@ -379,19 +325,19 @@ TEST_F(Shm_pool_offset_ptr_test, Raw_pointer_interface)
 {
   uint8_t buffer[S_BUFFER_SIZE] = {};
 
-  Pointer offset_ptr = Pointer(buffer);
+  Ptr offset_ptr = Ptr(buffer);
   EXPECT_NE(offset_ptr.get(), nullptr);
   EXPECT_TRUE(offset_ptr.is_raw());
   EXPECT_FALSE(offset_ptr.is_offset());
 
-  Pointer next_ptr = offset_ptr + 1;
+  Ptr next_ptr = offset_ptr + 1;
   EXPECT_EQ(reinterpret_cast<size_t>(next_ptr.get()) - reinterpret_cast<size_t>(offset_ptr.get()), sizeof(My_class));
   EXPECT_TRUE(next_ptr.is_raw());
 
   // Convert to pointer and back and make sure it is equivalent
   {
     My_class* pointer = offset_ptr.get();
-    Pointer other_offset_ptr = Pointer::pointer_to(*pointer);
+    Ptr other_offset_ptr = Ptr::pointer_to(*pointer);
     EXPECT_TRUE(other_offset_ptr.is_raw());
     EXPECT_EQ(other_offset_ptr, offset_ptr);
   }
@@ -399,47 +345,47 @@ TEST_F(Shm_pool_offset_ptr_test, Raw_pointer_interface)
   EXPECT_EQ(&(*offset_ptr), offset_ptr);
 
   {
-    Pointer p = next_ptr;
+    Ptr p = next_ptr;
     p -= 1;
     EXPECT_EQ(p, offset_ptr);
   }
   {
-    Pointer p1 = next_ptr;
-    Pointer p2 = --p1;
+    Ptr p1 = next_ptr;
+    Ptr p2 = --p1;
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, offset_ptr);
   }
   {
-    Pointer p1 = next_ptr;
-    Pointer p2 = p1--;
+    Ptr p1 = next_ptr;
+    Ptr p2 = p1--;
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
   {
-    Pointer p = next_ptr - 1;
+    Ptr p = next_ptr - 1;
     EXPECT_EQ(p, offset_ptr);
   }
   EXPECT_EQ((next_ptr - offset_ptr), 1);
   {
-    Pointer p = offset_ptr;
+    Ptr p = offset_ptr;
     p += 1;
     EXPECT_EQ(p, next_ptr);
   }
   {
-    Pointer p1 = offset_ptr;
-    Pointer p2 = ++p1;
+    Ptr p1 = offset_ptr;
+    Ptr p2 = ++p1;
     EXPECT_EQ(p1, next_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
   {
-    Pointer p1 = offset_ptr;
-    Pointer p2 = p1++;
+    Ptr p1 = offset_ptr;
+    Ptr p2 = p1++;
     EXPECT_EQ(p1, next_ptr);
     EXPECT_EQ(p2, offset_ptr);
   }
   {
-    Pointer p1 = &offset_ptr[0];
-    Pointer p2 = &p1[1];
+    Ptr p1 = &offset_ptr[0];
+    Ptr p2 = &p1[1];
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
@@ -447,12 +393,12 @@ TEST_F(Shm_pool_offset_ptr_test, Raw_pointer_interface)
   EXPECT_EQ(offset_ptr + 1, next_ptr);
   EXPECT_EQ(1 + offset_ptr, next_ptr);
   EXPECT_TRUE(offset_ptr);
-  EXPECT_FALSE(Pointer());
-  EXPECT_TRUE(!Pointer());
-  EXPECT_FALSE(Pointer().is_raw());
-  EXPECT_FALSE(Pointer(nullptr));
-  EXPECT_TRUE(!Pointer(nullptr));
-  EXPECT_FALSE(Pointer(nullptr).is_raw());
+  EXPECT_FALSE(Ptr());
+  EXPECT_TRUE(!Ptr());
+  EXPECT_FALSE(Ptr().is_raw());
+  EXPECT_FALSE(Ptr(nullptr));
+  EXPECT_TRUE(!Ptr(nullptr));
+  EXPECT_FALSE(Ptr(nullptr).is_raw());
   EXPECT_FALSE(!offset_ptr);
   EXPECT_TRUE(offset_ptr == offset_ptr);
   EXPECT_TRUE(offset_ptr != next_ptr);
@@ -472,18 +418,18 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_only_interface)
 
   void* buffer = arena->allocate(S_BUFFER_SIZE);
 
-  Offset_pointer offset_ptr = Offset_pointer(buffer);
+  Offset_ptr offset_ptr = Offset_ptr(buffer);
   EXPECT_NE(offset_ptr.get(), nullptr);
   EXPECT_TRUE(offset_ptr.is_offset());
 
-  Offset_pointer next_ptr = offset_ptr + 1;
+  Offset_ptr next_ptr = offset_ptr + 1;
   EXPECT_EQ(reinterpret_cast<size_t>(next_ptr.get()) - reinterpret_cast<size_t>(offset_ptr.get()), sizeof(My_class));
   EXPECT_TRUE(next_ptr.is_offset());
 
   // Convert to pointer and back and make sure it is equivalent
   {
     My_class* pointer = offset_ptr.get();
-    Offset_pointer other_offset_ptr = Offset_pointer::pointer_to(*pointer);
+    Offset_ptr other_offset_ptr = Offset_ptr::pointer_to(*pointer);
     EXPECT_TRUE(other_offset_ptr.is_offset());
     EXPECT_EQ(other_offset_ptr, offset_ptr);
   }
@@ -491,47 +437,47 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_only_interface)
   EXPECT_EQ(&(*offset_ptr), offset_ptr);
 
   {
-    Offset_pointer p = next_ptr;
+    Offset_ptr p = next_ptr;
     p -= 1;
     EXPECT_EQ(p, offset_ptr);
   }
   {
-    Offset_pointer p1 = next_ptr;
-    Offset_pointer p2 = --p1;
+    Offset_ptr p1 = next_ptr;
+    Offset_ptr p2 = --p1;
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, offset_ptr);
   }
   {
-    Offset_pointer p1 = next_ptr;
-    Offset_pointer p2 = p1--;
+    Offset_ptr p1 = next_ptr;
+    Offset_ptr p2 = p1--;
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
   {
-    Offset_pointer p = next_ptr - 1;
+    Offset_ptr p = next_ptr - 1;
     EXPECT_EQ(p, offset_ptr);
   }
   EXPECT_EQ(next_ptr - offset_ptr, 1);
   {
-    Offset_pointer p = offset_ptr;
+    Offset_ptr p = offset_ptr;
     p += 1;
     EXPECT_EQ(p, next_ptr);
   }
   {
-    Offset_pointer p1 = offset_ptr;
-    Offset_pointer p2 = ++p1;
+    Offset_ptr p1 = offset_ptr;
+    Offset_ptr p2 = ++p1;
     EXPECT_EQ(p1, next_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
   {
-    Offset_pointer p1 = offset_ptr;
-    Offset_pointer p2 = p1++;
+    Offset_ptr p1 = offset_ptr;
+    Offset_ptr p2 = p1++;
     EXPECT_EQ(p1, next_ptr);
     EXPECT_EQ(p2, offset_ptr);
   }
   {
-    Offset_pointer p1 = &offset_ptr[0];
-    Offset_pointer p2 = &p1[1];
+    Offset_ptr p1 = &offset_ptr[0];
+    Offset_ptr p2 = &p1[1];
     EXPECT_EQ(p1, offset_ptr);
     EXPECT_EQ(p2, next_ptr);
   }
@@ -539,12 +485,12 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_only_interface)
   EXPECT_EQ((offset_ptr + 1), next_ptr);
   EXPECT_EQ((1 + offset_ptr), next_ptr);
   EXPECT_TRUE(offset_ptr);
-  EXPECT_FALSE(Offset_pointer());
-  EXPECT_TRUE(!Offset_pointer());
-  EXPECT_FALSE(Offset_pointer().is_offset());
-  EXPECT_FALSE(Offset_pointer(nullptr));
-  EXPECT_TRUE(!Offset_pointer(nullptr));
-  EXPECT_FALSE(Offset_pointer(nullptr).is_offset());
+  EXPECT_FALSE(Offset_ptr());
+  EXPECT_TRUE(!Offset_ptr());
+  EXPECT_FALSE(Offset_ptr().is_offset());
+  EXPECT_FALSE(Offset_ptr(nullptr));
+  EXPECT_TRUE(!Offset_ptr(nullptr));
+  EXPECT_FALSE(Offset_ptr(nullptr).is_offset());
   EXPECT_FALSE(!offset_ptr);
   EXPECT_TRUE(offset_ptr == offset_ptr);
   EXPECT_TRUE(offset_ptr != next_ptr);
@@ -560,39 +506,39 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_only_interface)
 /// Tests copy interface.
 TEST_F(Shm_pool_offset_ptr_test, Copy_interface)
 {
-  using Const_pointer = Ipc_arena::Pointer<const My_class>;
-  using Volatile_pointer = Ipc_arena::Pointer<volatile My_class>;
-  using Const_volatile_pointer = Ipc_arena::Pointer<const volatile My_class>;
+  using Const_ptr = Ipc_arena::Pointer<const My_class>;
+  using Volatile_ptr = Ipc_arena::Pointer<volatile My_class>;
+  using Const_volatile_ptr = Ipc_arena::Pointer<const volatile My_class>;
 
   auto& arena = get_arena();
   void* buffer = arena->allocate(sizeof(My_subclass));
-  Pointer object(buffer);
+  Ptr object(buffer);
   EXPECT_NE(object, nullptr);
   EXPECT_TRUE(object.is_offset());
-  Subpointer subclass_object(buffer);
+  Subptr subclass_object(buffer);
   EXPECT_NE(subclass_object, nullptr);
   EXPECT_TRUE(subclass_object.is_offset());
 
   uint8_t raw_buffer[S_BUFFER_SIZE] = {};
-  Pointer raw_object(raw_buffer);
+  Ptr raw_object(raw_buffer);
 
   // Copy to another similar object
   {
-    Pointer other_object(object);
+    Ptr other_object(object);
     EXPECT_EQ(object, other_object);
     other_object = object;
     EXPECT_EQ(object, other_object);
   }
   // Copy to offset pointer only
   {
-    Offset_pointer offset_object(object);
+    Offset_ptr offset_object(object);
     EXPECT_EQ(object.get(), offset_object.get());
     EXPECT_TRUE(offset_object.is_offset());
     offset_object = object;
     EXPECT_EQ(object.get(), offset_object.get());
     EXPECT_TRUE(offset_object.is_offset());
     // Copy back to another object
-    Pointer other_object(offset_object);
+    Ptr other_object(offset_object);
     EXPECT_EQ(other_object.get(), offset_object.get());
     EXPECT_TRUE(other_object.is_offset());
     other_object = offset_object;
@@ -601,48 +547,48 @@ TEST_F(Shm_pool_offset_ptr_test, Copy_interface)
   }
   // Copy to const
   {
-    Const_pointer const_object(object);
+    Const_ptr const_object(object);
     EXPECT_EQ(object, const_object);
     const_object = object;
     EXPECT_EQ(object, const_object);
     // Copy from const to const
-    Const_pointer other_const_object(const_object);
+    Const_ptr other_const_object(const_object);
     EXPECT_EQ(const_object, other_const_object);
     other_const_object = const_object;
     EXPECT_EQ(const_object, other_const_object);
     // Copy to const volatile
-    Const_volatile_pointer const_volatile_object(const_object);
+    Const_volatile_ptr const_volatile_object(const_object);
     EXPECT_EQ(const_object, const_volatile_object);
     const_volatile_object = const_object;
     EXPECT_EQ(const_object, const_volatile_object);
     // Copy from const volatile to const volatile
-    Const_volatile_pointer other_const_volatile_object(const_volatile_object);
+    Const_volatile_ptr other_const_volatile_object(const_volatile_object);
     EXPECT_EQ(const_volatile_object, other_const_volatile_object);
     other_const_volatile_object = const_volatile_object;
     EXPECT_EQ(const_volatile_object, other_const_volatile_object);
   }
   // Copy to volatile
   {
-    Volatile_pointer volatile_object(object);
+    Volatile_ptr volatile_object(object);
     EXPECT_EQ(object, volatile_object);
     volatile_object = object;
     EXPECT_EQ(object, volatile_object);
     // Copy to const volatile
-    Const_volatile_pointer const_volatile_object(volatile_object);
+    Const_volatile_ptr const_volatile_object(volatile_object);
     EXPECT_EQ(volatile_object, const_volatile_object);
     const_volatile_object = volatile_object;
     EXPECT_EQ(volatile_object, const_volatile_object);
   }
   // Copy from subclass to superclass
   {
-    Pointer other_object(subclass_object);
+    Ptr other_object(subclass_object);
     EXPECT_EQ(subclass_object.get(), other_object.get());
     other_object = subclass_object;
     EXPECT_EQ(subclass_object.get(), other_object.get());
   }
   // Copy from offset pointer to raw pointer
   {
-    Pointer other_raw_object;
+    Ptr other_raw_object;
     EXPECT_FALSE(other_raw_object.is_raw());
     other_raw_object = object;
     EXPECT_TRUE(other_raw_object.is_offset());
@@ -650,7 +596,7 @@ TEST_F(Shm_pool_offset_ptr_test, Copy_interface)
   }
   // Copy from raw pointer to offset pointer
   {
-    Pointer other_offset_object(object);
+    Ptr other_offset_object(object);
     other_offset_object = raw_object;
     EXPECT_TRUE(other_offset_object.is_raw());
     EXPECT_EQ(raw_object, other_offset_object);
@@ -709,25 +655,24 @@ TEST_F(Shm_pool_offset_ptr_test, Vector)
 
   // "Borrow" the shared memory pool
   using Borrower_shm_vector = vector<size_t, Borrower_arena_allocator<size_t>>;
-  Borrower_shm_pool_collection borrower_collection(get_logger(), arena->get_id());
-  auto borrower_shm_pool = borrower_collection.open_shm_pool(owner_shm_pool->get_id(), owner_shm_pool->get_name(),
-                                                             owner_shm_pool->get_size());
+  Borrower_shm_pool_collection borrower_collection(get_logger(), arena->get_id(),
+                                                   Shared_name(m_shm_pool_name_base));
+  Error_code ec;
+  auto borrower_shm_pool = borrower_collection.open_shm_pool(owner_shm_pool->get_id(), owner_shm_pool->get_size(), &ec);
+  EXPECT_TRUE(borrower_shm_pool) << "Error opening/mapping pool: [" << ec << "] [" << ec.message() << "].";
 
   // Register the shared memory pool in the SHM pool singleton repository necessary for the offset pointer
-  Borrower_shm_pool_listener_for_repository borrower_shm_pool_listener(get_logger());
-  borrower_shm_pool_listener.notify_opened_shm_pool(borrower_shm_pool);
+  test::Test_shm_pool_repository::get_instance().insert(shared_ptr<Shm_pool>{borrower_shm_pool});
 
   // "Borrow" the object and make sure it is as expected
   pool_offset_t offset;
   EXPECT_TRUE(owner_shm_pool->determine_offset(owner_vec.get(), offset));
 
   bool object_released = false;
-  auto borrower_vec = borrower_collection.construct<Borrower_shm_vector>(borrower_shm_pool->get_address(),
-                                                                         offset,
-                                                                         [&](void*)
-                                                                         {
-                                                                           object_released = true;
-                                                                         });
+  auto borrower_vec = std::shared_ptr<Borrower_shm_vector>
+                        (reinterpret_cast<Borrower_shm_vector*>
+                           (static_cast<uint8_t*>(borrower_shm_pool->get_address()) + offset),
+                         [&](auto) { object_released = true; });
   EXPECT_TRUE(check_container(borrower_vec, owner_vec->size(), 0UL));
 
   // Release the object
@@ -735,27 +680,21 @@ TEST_F(Shm_pool_offset_ptr_test, Vector)
   EXPECT_TRUE(object_released);
 
   // Check that the borrower shared memory pool is registered in the borrower repository
-  EXPECT_TRUE(check_shm_pool_registration<false>(borrower_shm_pool));
+  EXPECT_TRUE(check_borrower_shm_pool_registration(borrower_shm_pool));
 
   // Deregister the shared memory pool
   EXPECT_TRUE(borrower_collection.release_shm_pool(borrower_shm_pool));
-  borrower_shm_pool_listener.notify_closed_shm_pool(borrower_shm_pool->get_id());
+  test::Test_shm_pool_repository::get_instance().erase(borrower_shm_pool->get_id());
 
   // Check that the borrower shared memory pool is no longer registered in the borrower repository
-  EXPECT_FALSE(check_shm_pool_registration<false>(borrower_shm_pool));
+  EXPECT_FALSE(check_borrower_shm_pool_registration(borrower_shm_pool));
 
   // Delete outside of an activator
   owner_vec.reset();
 
-  // Check that the owner shared memory pool is registered in the owner repository
-  EXPECT_TRUE(check_shm_pool_registration<true>(owner_shm_pool));
-
   // Release handle to arena to trigger removal of shared memory pools from the owner repository
   EXPECT_EQ(arena.use_count(), 1);
   arena.reset();
-
-  // Check that the owner shared memory pool is no longer registered in the owner repository
-  EXPECT_FALSE(check_shm_pool_registration<true>(owner_shm_pool));
 }
 
 /**
@@ -799,25 +738,24 @@ TEST_F(Shm_pool_offset_ptr_test, Boost_string)
   // "Borrow" the shared memory pool
   using Borrower_shm_string =
     boost::container::basic_string<char, std::char_traits<char>, Borrower_arena_allocator<char>>;
-  Borrower_shm_pool_collection borrower_collection(get_logger(), arena->get_id());
-  auto borrower_shm_pool = borrower_collection.open_shm_pool(owner_shm_pool->get_id(), owner_shm_pool->get_name(),
-                                                             owner_shm_pool->get_size());
+  Borrower_shm_pool_collection borrower_collection(get_logger(), arena->get_id(),
+                                                   Shared_name(m_shm_pool_name_base));
+  Error_code ec;
+  auto borrower_shm_pool = borrower_collection.open_shm_pool(owner_shm_pool->get_id(), owner_shm_pool->get_size(), &ec);
+  EXPECT_TRUE(borrower_shm_pool) << "Error opening/mapping pool: [" << ec << "] [" << ec.message() << "].";
 
   // Register the shared memory pool in the SHM pool singleton repository necessary for the offset pointer
-  Borrower_shm_pool_listener_for_repository borrower_shm_pool_listener(get_logger());
-  borrower_shm_pool_listener.notify_opened_shm_pool(borrower_shm_pool);
+  test::Test_shm_pool_repository::get_instance().insert(shared_ptr<Shm_pool>{borrower_shm_pool});
 
   // "Borrow" the object and make sure it is as expected
   pool_offset_t offset;
   EXPECT_TRUE(owner_shm_pool->determine_offset(owner_string.get(), offset));
 
   bool object_released = false;
-  auto borrower_string = borrower_collection.construct<Borrower_shm_string>(borrower_shm_pool->get_address(),
-                                                                            offset,
-                                                                            [&](void*)
-                                                                            {
-                                                                              object_released = true;
-                                                                            });
+  auto borrower_string = std::shared_ptr<Borrower_shm_string>
+                           (reinterpret_cast<Borrower_shm_string*>
+                              (static_cast<uint8_t*>(borrower_shm_pool->get_address()) + offset),
+                            [&](auto) { object_released = true; });
   EXPECT_TRUE(check_container(borrower_string, S_TOTAL_STRING_SIZE, 'a'));
 
   // Release the object
@@ -825,27 +763,21 @@ TEST_F(Shm_pool_offset_ptr_test, Boost_string)
   EXPECT_TRUE(object_released);
 
   // Check that the borrower shared memory pool is registered in the borrower repository
-  EXPECT_TRUE(check_shm_pool_registration<false>(borrower_shm_pool));
+  EXPECT_TRUE(check_borrower_shm_pool_registration(borrower_shm_pool));
 
   // Deregister the shared memory pool
   EXPECT_TRUE(borrower_collection.release_shm_pool(borrower_shm_pool));
-  borrower_shm_pool_listener.notify_closed_shm_pool(borrower_shm_pool->get_id());
+  test::Test_shm_pool_repository::get_instance().erase(borrower_shm_pool->get_id());
 
   // Check that the borrower shared memory pool is no longer registered in the borrower repository
-  EXPECT_FALSE(check_shm_pool_registration<false>(borrower_shm_pool));
+  EXPECT_FALSE(check_borrower_shm_pool_registration(borrower_shm_pool));
 
   // Release object outside of an activator
   owner_string.reset();
 
-  // Check that the owner shared memory pool is registered in the owner repository
-  EXPECT_TRUE(check_shm_pool_registration<true>(owner_shm_pool));
-
   // Release handle to arena to trigger removal of shared memory pools from the owner repository
   EXPECT_EQ(arena.use_count(), 1);
   arena.reset();
-
-  // Check that the owner shared memory pool is no longer registered in the owner repository
-  EXPECT_FALSE(check_shm_pool_registration<true>(owner_shm_pool));
 }
 
 /**
@@ -874,6 +806,26 @@ TEST_F(Shm_pool_offset_ptr_test, Stack_string)
     ADD_FAILURE() << "Could not create string";
     return;
   }
+
+  /* The following brief explanation does not try to *really* explain everything that might be going on in detail
+   * but hopefully gives a general feel. The main thing is it it's working with at least 1 object that's on the stack
+   * but with the nice SHM-enabled allocator. That in itself is nice to test, but as pertains to
+   * Shm_pool_offset_ptr specifically: a ptr to a stack (we could also have used regular heap) addr is represented
+   * by an .is_raw()==true Shm_pool_offset_ptr which has a different representation (with a selector bit = 0, etc.)
+   * than a SHM-pointing ptr. That said, just because we put a `string` on the stack doesn't mean that aspect
+   * of Shm_pool_offset_ptr is being exercised per se. So specifically here is where the below probably exercises it:
+   *   - When a string is copied from stack to SHM, the STL code will be accessing the src string via ptr internally...
+   *     - ...but that isn't necessarily enough, as a (sufficiently big) string's actual buffer will be in SHM.
+   *       So depending on the STL impl this may or may not exercise it.
+   *   - However, if the stack-string starts off small, it will use SBO (small buffer optimization) and store the
+   *     string directly inside the sizeof(string) bytes on the stack.
+   *     - Hence probably the ctor will access a stack-ptr at least once. (Confirmed with gcc-9 STL just in case.)
+   *     - Hence probably the successive appends will each also do so. (Confirmed with gcc-9 STL just in case.)
+   * On the borrower-side it'll be just true offset pointers though, as the whole thing is in SHM including the
+   * sizeof(string) bytes.
+   *
+   * We could be more exhaustive by doing this in a more precise targeted way, but what we do-do will definitely
+   * hit the code in question. */
 
   // Partially build the string on the stack
   {
@@ -915,25 +867,24 @@ TEST_F(Shm_pool_offset_ptr_test, Stack_string)
   // "Borrow" the shared memory pool
   using Borrower_shm_string =
     boost::container::basic_string<char, std::char_traits<char>, Borrower_arena_allocator<char>>;
-  Borrower_shm_pool_collection borrower_collection(get_logger(), arena->get_id());
-  auto borrower_shm_pool = borrower_collection.open_shm_pool(owner_shm_pool->get_id(), owner_shm_pool->get_name(),
-                                                             owner_shm_pool->get_size());
+  Borrower_shm_pool_collection borrower_collection(get_logger(), arena->get_id(),
+                                                   Shared_name(m_shm_pool_name_base));
+  Error_code ec;
+  auto borrower_shm_pool = borrower_collection.open_shm_pool(owner_shm_pool->get_id(), owner_shm_pool->get_size(), &ec);
+  EXPECT_TRUE(borrower_shm_pool) << "Error opening/mapping pool: [" << ec << "] [" << ec.message() << "].";
 
   // Register the shared memory pool in the SHM pool singleton repository necessary for the offset pointer
-  Borrower_shm_pool_listener_for_repository borrower_shm_pool_listener(get_logger());
-  borrower_shm_pool_listener.notify_opened_shm_pool(borrower_shm_pool);
+  test::Test_shm_pool_repository::get_instance().insert(shared_ptr<Shm_pool>{borrower_shm_pool});
 
   // "Borrow" the object and make sure it is as expected
   pool_offset_t offset;
   EXPECT_TRUE(owner_shm_pool->determine_offset(owner_string.get(), offset));
 
   bool object_released = false;
-  auto borrower_string = borrower_collection.construct<Borrower_shm_string>(borrower_shm_pool->get_address(),
-                                                                            offset,
-                                                                            [&](void*)
-                                                                            {
-                                                                              object_released = true;
-                                                                            });
+  auto borrower_string = std::shared_ptr<Borrower_shm_string>
+                           (reinterpret_cast<Borrower_shm_string*>
+                              (static_cast<uint8_t*>(borrower_shm_pool->get_address()) + offset),
+                            [&](auto) { object_released = true; });
   EXPECT_TRUE(check_container(borrower_string, S_TOTAL_STRING_SIZE, 'a'));
 
   // Release the object
@@ -941,30 +892,27 @@ TEST_F(Shm_pool_offset_ptr_test, Stack_string)
   EXPECT_TRUE(object_released);
 
   // Check that the borrower shared memory pool is registered in the borrower repository
-  EXPECT_TRUE(check_shm_pool_registration<false>(borrower_shm_pool));
+  EXPECT_TRUE(check_borrower_shm_pool_registration(borrower_shm_pool));
 
   // Deregister the shared memory pool
   EXPECT_TRUE(borrower_collection.release_shm_pool(borrower_shm_pool));
-  borrower_shm_pool_listener.notify_closed_shm_pool(borrower_shm_pool->get_id());
+  test::Test_shm_pool_repository::get_instance().erase(borrower_shm_pool->get_id());
 
   // Check that the borrower shared memory pool is no longer registered in the borrower repository
-  EXPECT_FALSE(check_shm_pool_registration<false>(borrower_shm_pool));
+  EXPECT_FALSE(check_borrower_shm_pool_registration(borrower_shm_pool));
 
   // Release object outside of an activator
   owner_string.reset();
 
-  // Check that the owner shared memory pool is registered in the owner repository
-  EXPECT_TRUE(check_shm_pool_registration<true>(owner_shm_pool));
-
   // Release handle to arena to trigger removal of shared memory pools from the owner repository
   EXPECT_EQ(arena.use_count(), 1);
   arena.reset();
-
-  // Check that the owner shared memory pool is no longer registered in the owner repository
-  EXPECT_FALSE(check_shm_pool_registration<true>(owner_shm_pool));
 }
 
-/// Used to measure clock time for container operations, which is currently appending. See ECOGS-527.
+/**
+ * Used to measure clock time for container operations, which is currently appending. See ECOGS-527.
+ * @todo Track down preceding ticket (echan-filed)/file in project ticket database/possibly update comment.
+ */
 TEST_F(Shm_pool_offset_ptr_test, Container_list_insertion)
 {
   static constexpr size_t S_NUM_OBJECTS = 100000;

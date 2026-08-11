@@ -45,7 +45,7 @@ const string Test_borrower::S_PROGRAM_NAME("libipc_test_borrower.exec");
 const string Test_borrower::S_PROGRAM_PATH("./" + S_PROGRAM_NAME);
 const string Test_borrower::S_SHM_POOL_COLLECTION_ID_PARAM("shm-pool-collection-id");
 const string Test_borrower::S_SHM_POOL_ID_PARAM("shm-object-id");
-const string Test_borrower::S_SHM_OBJECT_NAME_PARAM("shm-object-name");
+const string Test_borrower::S_SHM_OBJECT_NAME_BASE_PARAM("shm-object-name-base");
 const string Test_borrower::S_SHM_OBJECT_SIZE_PARAM("shm-object-size");
 const string Test_borrower::S_DATA_OFFSET_PARAM("data-offset");
 const string Test_borrower::S_EXPECTED_DATA_PARAM("expected-data");
@@ -57,9 +57,9 @@ string Test_borrower::convert_to_long_param(const string& s)
   return "--" + s;
 }
 
-int Test_borrower::execute_read_check(Collection_id shm_pool_collection_id,
+int Test_borrower::execute_read_check(collection_id_t shm_pool_collection_id,
                                       pool_id_t shm_pool_id,
-                                      const string& shm_object_name,
+                                      const string& shm_object_name_base,
                                       size_t shm_object_size,
                                       size_t data_offset,
                                       const string& data)
@@ -73,7 +73,7 @@ int Test_borrower::execute_read_check(Collection_id shm_pool_collection_id,
   FLOW_LOG_INFO("Executing: " << S_PROGRAM_PATH << " " <<
                 convert_to_long_param(S_SHM_POOL_COLLECTION_ID_PARAM) << " " << shm_pool_collection_id << " " <<
                 convert_to_long_param(S_SHM_POOL_ID_PARAM) << " " << shm_pool_id << " " <<
-                convert_to_long_param(S_SHM_OBJECT_NAME_PARAM) << " " << shm_object_name << " " <<
+                convert_to_long_param(S_SHM_OBJECT_NAME_BASE_PARAM) << " '" << shm_object_name_base << "' " <<
                 convert_to_long_param(S_SHM_OBJECT_SIZE_PARAM) << " " << to_string(shm_object_size) << " " <<
                 convert_to_long_param(S_DATA_OFFSET_PARAM) << " " << to_string(data_offset) << " " <<
                 convert_to_long_param(S_EXPECTED_DATA_PARAM) << " " << data);
@@ -81,7 +81,7 @@ int Test_borrower::execute_read_check(Collection_id shm_pool_collection_id,
   return bp::system(S_PROGRAM_PATH,
                     convert_to_long_param(S_SHM_POOL_COLLECTION_ID_PARAM), to_string(shm_pool_collection_id),
                     convert_to_long_param(S_SHM_POOL_ID_PARAM), to_string(shm_pool_id),
-                    convert_to_long_param(S_SHM_OBJECT_NAME_PARAM), shm_object_name,
+                    convert_to_long_param(S_SHM_OBJECT_NAME_BASE_PARAM), shm_object_name_base,
                     convert_to_long_param(S_SHM_OBJECT_SIZE_PARAM), to_string(shm_object_size),
                     convert_to_long_param(S_DATA_OFFSET_PARAM), to_string(data_offset),
                     convert_to_long_param(S_EXPECTED_DATA_PARAM), data);

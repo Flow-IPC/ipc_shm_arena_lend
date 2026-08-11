@@ -37,25 +37,24 @@ namespace
 using pool_id_t = Shm_pool::pool_id_t;
 
 /// Test shared memory pool ID.
-static const pool_id_t S_ID(1212);
+const pool_id_t S_ID(1212);
 /// Test shared memory pool name.
-static const string S_NAME("test_pool");
+const string S_NAME("test_pool");
 /// Test address.
-static char* const S_ADDRESS = reinterpret_cast<char*>(0x1000);
+char* const S_ADDRESS = reinterpret_cast<char*>(0x1000);
 /// Test shared memory pool size.
-static constexpr size_t S_SIZE = 0x2000;
+constexpr size_t S_SIZE = 0x2000;
 /// Test file descriptor.
-static constexpr int S_FD = 12;
+constexpr int S_FD = 12;
 
 } // Anonymous namespace
 
-/// Death tests (@todo - does it work with NDEBUG as with default CMake Release build-type? -ygoldfel)
-#ifdef NDEBUG // These "deaths" occur only if assert()s enabled; else these are guaranteed failures.
-TEST(Shm_pool_DeathTest, DISABLED_Interface)
-#else
+/// Death tests.
 TEST(Shm_pool_DeathTest, Interface)
-#endif
 {
+#ifdef NDEBUG
+  GTEST_SKIP() << "Death tests rely on assert()s which are disabled in this (NDEBUG) build.";
+#endif
   EXPECT_DEATH(Shm_pool(0, S_NAME, S_ADDRESS, S_SIZE, S_FD), "id != 0");
   EXPECT_DEATH(Shm_pool(S_ID, "", S_ADDRESS, S_SIZE, S_FD), "!name.empty\\(\\)");
   EXPECT_DEATH(Shm_pool(S_ID, S_NAME, nullptr, S_SIZE, S_FD), "address != nullptr");
@@ -73,9 +72,10 @@ TEST(Shm_pool_test, Interface)
   EXPECT_EQ(shm_pool.get_address(), S_ADDRESS);
   EXPECT_EQ(size_t(shm_pool.get_size()), S_SIZE);
   EXPECT_EQ(shm_pool.get_fd(), S_FD);
-  // Sanity check to make sure it doesn't crash
+  // Sanity check: doesn't crash; produces at least something.
   std::ostringstream os;
   shm_pool.print(os);
+  EXPECT_FALSE(os.str().empty());
 
   const Shm_pool::size_t OFFSET_1 = 0x8;
   const Shm_pool::size_t OFFSET_2 = 0x24;
@@ -207,6 +207,12 @@ TEST(Shm_pool_test, Interface)
       const Shm_pool EQUAL_SHM_POOL(S_ID, S_NAME, S_ADDRESS, S_SIZE, S_FD);
       EXPECT_EQ(shm_pool, EQUAL_SHM_POOL);
       EXPECT_EQ(EQUAL_SHM_POOL, shm_pool);
+    }
+    {
+      // Different ID
+      const Shm_pool OTHER_SHM_POOL(S_ID + 1, S_NAME, S_ADDRESS, S_SIZE, S_FD);
+      EXPECT_NE(shm_pool, OTHER_SHM_POOL);
+      EXPECT_NE(OTHER_SHM_POOL, shm_pool);
     }
     {
       // Different name

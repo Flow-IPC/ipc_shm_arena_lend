@@ -25,7 +25,6 @@
 #pragma once
 
 #include <flow/log/log.hpp>
-#include <chrono>
 #include <boost/container/string.hpp>
 #include <boost/container/list.hpp>
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_shm_session_server.hpp"
@@ -35,7 +34,15 @@ namespace ipc::session::shm::arena_lend::jemalloc::test
 
 /**
  * Executes the server portion of the test for
- * #ipc::session::shm::arena_lend::jemalloc::test::Shm_session_test.
+ * #ipc::session::shm::arena_lend::jemalloc::test::Shm_session_test. Two roles bundled in one class:
+ * 1. run() is the driver used inside the *child* server process (see test_jemalloc_shm_session_server_main.cpp
+ *    and Test_shm_session_server_launcher): construct a Test_shm_session_server for the given object type and
+ *    operation mode, wait for its result, map it to a process exit code (Result).
+ * 2. The static *_creator_functor() factories produce the Object_creation_callback used by the server to
+ *    build the to-be-lent object in SHM (char array, vector, 10 MiB string, list, or the 1-million-node
+ *    list used by the allocation-performance tests); these are used by in-process tests too. Each created
+ *    object is wrapped in Owner_object_wrapper, whose destructor tells the server the object was
+ *    garbage-collected -- a key end condition of the tests.
  */
 class Test_shm_session_server_executor :
   public flow::log::Log_context
@@ -53,9 +60,7 @@ public:
   template <template<typename> typename Allocator>
   using List_type = boost::container::list<Simple_object, Allocator<Simple_object>>;
   /// The timeout to furnish a result.
-  static const std::chrono::duration<size_t> S_TEST_TIMEOUT;
-  /// The timeout to furnish a result during performance testing.
-  static const std::chrono::duration<size_t> S_PERFORMANCE_TEST_TIMEOUT;
+  static const boost::chrono::duration<size_t> S_TEST_TIMEOUT;
   /// The text to store in the object.
   static const std::string S_MESSAGE;
   /// The character stored in a string object.
