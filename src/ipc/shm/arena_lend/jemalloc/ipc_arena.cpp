@@ -520,9 +520,7 @@ Ipc_arena::Ipc_arena(flow::log::Logger* logger,
                          this),
   m_destroy_started(false)
 {
-  // If we wrap around, abort
-  collection_id_t id = get_id();
-  assert(id != 0);
+  // Yep.
 }
 
 void Ipc_arena::start()

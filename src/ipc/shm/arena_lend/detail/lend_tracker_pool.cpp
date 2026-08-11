@@ -45,7 +45,6 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
   m_stats(stats)
 {
   using util::Permissions;
-  using util::construct_at;
   using flow::util::stat::fetch_add;
   using flow::util::stat::update_hi_wmark;
   using boost::io::ios_all_saver;
@@ -78,7 +77,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
 
   // Cannot do the following due to null_index: construct<Metadata>(::ipc::bipc::anonymous_instance)().
   m_metadata = static_cast<decltype(m_metadata)>(pool_allocate(sizeof(*m_metadata)));
-  construct_at(m_metadata);
+  util::construct_at(m_metadata);
 
   /* This atomic<uint> m_metadata->m_n_unused is constructed via atomic<uint>{0} (see Metadata definition).
    * Thus omitting: m_metadata->m_n_unused = 0; */
@@ -89,7 +88,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
   auto& hints = m_metadata->m_unused_idx_hints;
   for (auto hint = hints.begin(); hint != hints.end(); ++hint)
   {
-    construct_at(hint, 0);
+    util::construct_at(hint, 0);
   }
 
   assert((m_metadata == m_pool->get_segment_manager()->get_memory_algorithm().get_metadata<Metadata>())
@@ -175,7 +174,6 @@ bool Lend_tracker_pool::dead() const
 
 use_ct_idx_t Lend_tracker_pool::use_count_new()
 {
-  using util::construct_at;
   using std::exception;
 
   Atomic_use_ct* use_ct_ptr{};
@@ -196,7 +194,7 @@ use_ct_idx_t Lend_tracker_pool::use_count_new()
   }
   assert(use_ct_ptr && "allocate() would have thrown (with WARNING logged), else should have returned non-null.");
 
-  construct_at(use_ct_ptr, 1);
+  util::construct_at(use_ct_ptr, 1);
 
   const auto idx = use_ct_ptr_to_idx(use_ct_ptr);
   if (!skip_fast_path_verbose_logging())

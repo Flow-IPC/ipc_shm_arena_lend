@@ -2259,8 +2259,11 @@ bool Thread_lcl_obj_db_admin<Shm_arena_t>::forgetting_shm_arena(collection_id_t 
     /* For each extant _admin set up flag to trigger forgetting-of-arena in that guy's thread opportunistically.
      * Except that if we are in the thread corresponding to one of the `_admin`s, we can do that part synchronously.
      * If that happens, *and* it's the only one, then we are done and therefore done_synchronously=true. */
-    for (const auto& [obj_db, nil] : obj_db_per_thread)
+    for (const auto& obj_db_and_nil : obj_db_per_thread)
     {
+      // (See similar C++17/20 note higher up in similar situation.)
+      const auto obj_db = obj_db_and_nil.first;
+
       if (this_thread_unique_token() == obj_db->m_thread_token)
       {
         s_state.m_arenas_to_forget_map.while_locked([&](auto* arenas_to_forget_map_ptr)
