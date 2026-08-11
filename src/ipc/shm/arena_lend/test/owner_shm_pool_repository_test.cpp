@@ -90,7 +90,7 @@ shared_ptr<Shm_pool> make_pool(pool_id_t id, char* base, size_t size)
 void check_rev(const void* address, pool_id_t exp_id, pool_offset_t exp_offset)
 {
   pool_id_t pool_id;
-  pool_offset_t pool_offset;
+  pool_offset_t pool_offset = 0; // (Init to avoid false warnings with some compilers.)
   Repository::from_address(address, pool_id, pool_offset);
   EXPECT_EQ(pool_id, exp_id) << "from_address([" << address << "]).";
   if (exp_id != 0) // On a miss only pool_id (= 0) is meaningful.
