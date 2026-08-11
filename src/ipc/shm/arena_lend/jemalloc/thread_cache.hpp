@@ -675,9 +675,10 @@ void Thread_cache::destroy_arena_safely(arena_id_t arena_id, const flow::log::Lo
 
     for (const auto& [cache, nil] : state_per_thread)
     {
+      const auto& cache_ref = *cache;
       if (this_thread_unique_token() == cache->thread_token())
       {
-        FLOW_LOG_INFO_LOCKED("Jem_tcache[" << *cache << "]: "
+        FLOW_LOG_INFO_LOCKED("Jem_tcache[" << cache_ref << "]: "
                              "There was a typically-cross-thread tcache-destruction request "
                              "(arena [" << arena_id << "] being destroyed); "
                              "but we are in the relevant thread *now*, so we shall simply tcache-destroy the "
@@ -716,7 +717,7 @@ void Thread_cache::destroy_arena_safely(arena_id_t arena_id, const flow::log::Lo
           {
             const auto id = it_arena_and_tcache->second;
             FLOW_LOG_INFO_LOCKED
-              ("Jem_tcache[" << *cache << "]: Indeed we do hold tcache [" << id << "] for that arena.  "
+              ("Jem_tcache[" << cache_ref << "]: Indeed we do hold tcache [" << id << "] for that arena.  "
                "Proceeding with destruction to cross ourselves off the list.  If that makes "
                "the list empty (does it? = [" << (!on_done_func.empty()) << "]), "
                "we shall imminently destroy arena.");

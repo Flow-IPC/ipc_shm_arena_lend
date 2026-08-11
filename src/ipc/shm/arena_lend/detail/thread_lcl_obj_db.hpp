@@ -1883,8 +1883,14 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
   vector<use_ct_idx_t> unused_ct_idxs; // (Try to optimize a bit by declaring these non-ptrs/refs on the outside.)
   typename decltype(Collection_db::m_objs)::Iterator obj_it;
   typename decltype(Collection_db::m_objs)::Reverse_iterator obj_r_it;
-  for (const auto& [collection_id, collection_db] : m_collection_dbs)
+  for (const auto& collection_id_and_db : m_collection_dbs)
   {
+    /* Aliases: FLOW_LOG_..._LOCKED() messages below may not name structured bindings (C++17).
+     * @todo Move to C++20 => Use bindings after all for pithiness.  (Some C++17-mode compilers already OK; not all.)
+     *       Remove the @warning about this from doc header of FLOW_LOG_WARNING_LOCKED() (in Flow, not Flow-IPC). */
+    const auto collection_id = collection_id_and_db.first;
+    const auto& collection_db = collection_id_and_db.second;
+
     auto& lend_tracker_pool_opt = collection_db->m_lend_tracker_pool;
     if (!lend_tracker_pool_opt) // inactive_arenas_scan() may have nullified it.
     {
@@ -2143,8 +2149,12 @@ bool Thread_lcl_obj_db_admin<Shm_arena_t>::inactive_arenas_scan()
    *   - For each no-live-objects arena forever (empty arena forever), delete the Lend_tracker_pool.
    *   - See if they're all empty forever and return whether it is so. */
   bool no_live_objs_left = true;
-  for (const auto& [collection_id, collection_db] : m_collection_dbs)
+  for (const auto& collection_id_and_db : m_collection_dbs)
   {
+    // (See similar C++17/20 note higher up in similar situation.)
+    const auto collection_id = collection_id_and_db.first;
+    const auto& collection_db = collection_id_and_db.second;
+
     if (!collection_db->m_objs.empty())
     {
       // Live objects persist for this collection_id (arena).  Next.
@@ -2342,8 +2352,12 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::if_requested_forget_arena_related_res
     auto& arenas_to_forget_map = *arenas_to_forget_map_ptr;
     vector<collection_id_t> finished_collection_ids;
 
-    for (auto& [collection_id, arena_forget_progress] : arenas_to_forget_map)
+    for (auto& collection_id_and_progress : arenas_to_forget_map)
     {
+      // (See similar C++17/20 note higher up in similar situation.)
+      const auto collection_id = collection_id_and_progress.first;
+      auto& arena_forget_progress = collection_id_and_progress.second;
+
       auto& db_set = arena_forget_progress.m_dbs_that_still_must_forget;
       if (db_set.erase(this) == 0)
       {
@@ -2407,8 +2421,12 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::forget_shm_arena(collection_id_t coll
                        "per-thread obj-DB that was remaining to do this? = [" << last_one << "].");
 
   const auto collection_db = std::move(it_collection_id_and_db->second); // See below for reason for the move-ct.
-  for (const auto& [use_ct_idx, obj] : collection_db->m_objs)
+  for (const auto& use_ct_idx_and_obj : collection_db->m_objs)
   {
+    // (See similar C++17/20 note higher up in similar situation.)
+    const auto use_ct_idx = use_ct_idx_and_obj.first;
+    const auto& obj = use_ct_idx_and_obj.second;
+
     /* Subtlety: If an iteration of this loop runs, then inactive_arenas_scan() could not have nullified
      * collection_db->m_lend_tracker_pool yet; so it is safe to just deref it without a null check. */
 
@@ -3025,8 +3043,12 @@ typename Thread_lcl_obj_db_client<Shm_arena_t>::Pool_data*
 
   { // Clean dead stuff: m_lend_tracker_pools.
     vector<pool_id_t> dead_lend_tracker_pool_ids;
-    for (const auto& [dead_lend_tracker_pool_id, pool_data] : m_lend_tracker_pools)
+    for (const auto& dead_pool_id_and_data : m_lend_tracker_pools)
     {
+      // (See similar C++17/20 note higher up in similar situation.)
+      const auto dead_lend_tracker_pool_id = dead_pool_id_and_data.first;
+      const auto& pool_data = dead_pool_id_and_data.second;
+
       if (pool_data->m_lend_tracker_pool.dead()) // Else it's an extant guy that's perfectly alive.
       {
         FLOW_LOG_INFO_LOCKED("Tl_obj_db_client: Opportunistic scan: In this thread (process ID "
@@ -3282,8 +3304,12 @@ void Thread_lcl_obj_db_client<Shm_arena_t>::if_requested_forget_arena_related_re
     auto& arenas_to_forget_map = *arenas_to_forget_map_ptr;
     vector<collection_id_t> finished_collection_ids;
 
-    for (auto& [collection_id, db_set] : arenas_to_forget_map)
+    for (auto& collection_id_and_db_set : arenas_to_forget_map)
     {
+      // (See similar C++17/20 note higher up in similar situation.)
+      const auto collection_id = collection_id_and_db_set.first;
+      auto& db_set = collection_id_and_db_set.second;
+
       if (db_set.erase(this) == 0)
       {
         continue; // This collection/arena being forgotten is (no longer?) dependent on our deleting it from *this.

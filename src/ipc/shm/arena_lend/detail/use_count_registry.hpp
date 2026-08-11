@@ -214,6 +214,16 @@ public:
   static constexpr size_t Alignment = S_ALIGN_SZ;
 
   /**
+   * boost.ipc `segment_manager` requires this of a memory-algorithm: per-allocation book-keeping overhead in bytes.
+   * We keep all book-keeping externally (the use-count bitmap), so there is no such overhead.
+   *
+   * (In any case, as of this writing, in our use-case this should not be mentioned by anything at compile-time;
+   * but the member is required for the class to be instantiable at all, for some clang versions at least, while
+   * at least some compilers do not complain.)
+   */
+  static constexpr size_t PayloadPerAllocation = 0;
+
+  /**
    * This (a bit of a hack) is a compile-time knob/constant containing the number of bytes assumed to be
    * between the start of the SHM-pool (segment) storing us, and us (`*this`).
    *
