@@ -1338,6 +1338,7 @@ Thread_lcl_obj_db_admin<Shm_arena_t>::~Thread_lcl_obj_db_admin()
 {
   using flow::util::Thread;
   using flow::log::Logger;
+  using flow::log::Sev;
   using flow::util::ostream_op_string;
   using flow::util::Lock_guard;
   using flow::util::Mutex_recursive;
@@ -1591,6 +1592,7 @@ Thread_lcl_obj_db_admin<Shm_arena_t>::~Thread_lcl_obj_db_admin()
 
   auto& deg_mutex = s_state.m_degraded_admin_threads_mutex;
   auto& deg_threads = s_state.m_degraded_admin_threads;
+  Sev sev_override; // (Careful: Needs to be outside the following block, so it's alive when .wait() happens.)
   {
     // std::atexit() is apparently thread-safe, but access to deg_threads isn't so let's just:
     Lock_guard<std::remove_reference_t<decltype(deg_mutex)>> deg_lock{deg_mutex};
@@ -1605,7 +1607,7 @@ Thread_lcl_obj_db_admin<Shm_arena_t>::~Thread_lcl_obj_db_admin()
     }
 
     // Carry-over the thread-local verbosity override if any.  Rather save it here...
-    const auto sev_override = *(Log_config::this_thread_verbosity_override());
+    sev_override = *(Log_config::this_thread_verbosity_override());
 
     deg_threads.emplace_back(new Thread{[&]()
     {
