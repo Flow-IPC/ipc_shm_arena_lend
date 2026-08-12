@@ -949,16 +949,6 @@ private:
   Borrower_pool_stats m_borrower_pool_stats;
 
   /**
-   * Task engine to process tasks in a serial manner (a/k/a thread W).  The only use case currently is incoming
-   * SHM-channel messages from the lender.  The messages must be serialized, as out-of-ordering may cause issues.
-   * In particular:
-   *   -# An object being borrowed is processed prior to the SHM pool containing it.
-   *   -# A SHM pool being borrowed is processed prior to a SHM pool being removed with the same address.
-   *   -# A SHM pool being borrowed is registered prior to the collection containing it.
-   */
-  flow::async::Single_thread_task_loop m_serial_task_loop;
-
-  /**
    * The channel used for transmitting SHM-pool messages.
    * Note that by transport::struc::Channel contract it *is safe* to execute `m_shm_channel.X()`
    * and `m_shm_channel.Y()` concurrently for all `X` and `Y` (whether they're the same method or not).
@@ -970,6 +960,16 @@ private:
    * Emptied after calling it which must only occur once (for cleanliness + lower memory use).
    */
   flow::async::Task_asio_err m_shm_channel_error_handler;
+
+  /**
+   * Task engine to process tasks in a serial manner (a/k/a thread W).  The only use case currently is incoming
+   * SHM-channel messages from the lender.  The messages must be serialized, as out-of-ordering may cause issues.
+   * In particular:
+   *   -# An object being borrowed is processed prior to the SHM pool containing it.
+   *   -# A SHM pool being borrowed is processed prior to a SHM pool being removed with the same address.
+   *   -# A SHM pool being borrowed is registered prior to the collection containing it.
+   */
+  flow::async::Single_thread_task_loop m_serial_task_loop;
 }; // class Shm_session
 
 // Free functions: in *_fwd.hpp.

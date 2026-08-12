@@ -1374,7 +1374,7 @@ TEST_F(Ipc_arena_test, Multithread_load)
     {
       threads.emplace_back(
         make_unique<std::thread>(
-          [&]()
+          [&, i]() // i by value: the loop iterates (and ends) while the new thread is still starting up.
           {
             flow::log::Logger::this_thread_set_logged_nickname(ostream_op_string("testThread", i), &logger);
 

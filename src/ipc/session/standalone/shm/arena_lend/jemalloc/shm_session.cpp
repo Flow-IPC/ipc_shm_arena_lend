@@ -57,13 +57,13 @@ Shm_session::Shm_session(flow::log::Logger* logger, Shm_channel&& shm_channel,
   flow::log::Log_context(logger, Log_component::S_SESSION),
   m_remote_process_id(shm_channel.remote_peer_process_credentials().process_id()), // <-- Caution (see our doc header).
   m_connected(true),
-  m_serial_task_loop(logger, "JSSS_" + std::to_string(m_remote_process_id)),
   /* Immediately upgrade the sync_io unstructured core Channel into our struc::Channel.
    * We still have to start() it and stuff which we shall do presently.  Nothing can fail here though. */
   m_shm_channel(std::in_place,
                 get_logger(), std::move(shm_channel), transport::struc::Channel_base::S_SERIALIZE_VIA_HEAP,
                 session_token_non_nil),
-  m_shm_channel_error_handler(std::move(shm_channel_error_handler))
+  m_shm_channel_error_handler(std::move(shm_channel_error_handler)),
+  m_serial_task_loop(logger, "JSSS_" + std::to_string(m_remote_process_id))
 {
   using flow::async::reset_this_thread_pinning;
 
@@ -141,18 +141,30 @@ Shm_session::~Shm_session()
    *   - Stop/join the thread.
    * Otherwise such code in such threads can access stuff we access/modify below.
    *
-   * Is the stopping, in and of itself, dangerous somehow?  Well, if something is concurrently happening already,
+   * (Is the stopping, in and of itself, dangerous somehow?  Well, if something is concurrently happening already,
    * then we cannot stop it now; we are then acting as-if we (dtor) were called a tiny bit later by waiting for
    * it to complete.  If something is about to happen, but we prevented it, then it is ~no different from the
-   * precipitating event occurring a tiny bit later -- when there is no Shm_session through which to speak anymore.
+   * precipitating event occurring a tiny bit later -- when there is no Shm_session through which to speak anymore.)
+   *
+   * Recap (1): The above concerns safety of concurrent interactions between:
+   * *this dtor <=> m_serial_task_loop's thread m_serial_task_loop.W.
    *
    * Similarly wrap-up any handler -- especially error handler (that calls set_disconnected()) -- since stuff
    * is shutting down around now -- concurrently executing for m_shm_channel; and join that thread.  It's
-   * why we made m_shm_channel optional<>, as struc::Channel lacks a stop(), so instead we delete it.  This is
-   * important ordering: init is m_serial_task_loop => m_shm_channel, so deinit must be the opposite order, otherwise
-   * crash/etc. can happen right here (this had been an observed bug). */
-  m_shm_channel.reset();
+   * why we made m_shm_channel optional<>, as struc::Channel lacks a stop(), so instead we delete it.
+   *
+   * Recap (2): The above concerns safety of concurrent interactions between:
+   * *this dtor <=> m_shm_channel's thread m_shm_channel.W.
+   *
+   * Careful, however: the deletion of *m_shm_channel is itself "*this dtor" code.  If it happens while
+   * m_serial_task_loop.W is running, then "Recap (1)" gets broken.  Therefore the order must be:
+   * stop m_serial_task_loop, stop (delete) m_shm_channel.  Though... are m_shm_channel.W-posted tasks
+   * going to break with m_serial_task_loop stop()ed?  Answer: no; by fundamental design, they merely post tasks onto
+   * thread W (m_serial_task_loop.W); this is allowed and fine (no different, in fact it essentially *is*,
+   * boost::asio::post() onto a non-run()ing io_context); such tasks are queued and don't run (and will be very
+   * soon then deleted with m_serial_task_loop). */
   m_serial_task_loop.stop();
+  m_shm_channel.reset();
   /* Now m_connected can't change -- only set_disconnected() modifies it and only in thread W -- which is nice
    * for cleanliness though shouldn't matter.
    *
