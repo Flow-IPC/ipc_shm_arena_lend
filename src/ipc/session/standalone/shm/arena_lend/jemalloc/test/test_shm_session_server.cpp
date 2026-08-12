@@ -414,6 +414,8 @@ bool Test_shm_session_server::open_shm_channel(const shared_ptr<Server_session>&
 
 void Test_shm_session_server::shm_channel_error_handler(const Error_code& ec)
 {
+  m_shm_channel_error_observed = true;
+
   if (ec != ipc::transport::error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE)
   {
     FLOW_LOG_INFO("Server SHM channel error occurred [" << ec << "]");
@@ -818,6 +820,19 @@ bool Test_shm_session_server::execute_disconnection_tests(const shared_ptr<Serve
 
   // Simulate disconnection.
   shm_session->set_disconnected(ipc::transport::error::Code::S_RECEIVES_FINISHED_CANNOT_RECEIVE);
+  /* set_disconnected() records the disconnected state in the Shm_session's internal thread (thread W) --
+   * asynchronously, unless invoked from that thread, and we are not.  Until it's recorded, the lend attempts
+   * below race against it and can succeed or not (luck or lack thereof).  So we await (with a timeout) the
+   * recording first: the error callback will fire. */
+  for (size_t i = 0; (i != 500) && (!m_shm_channel_error_observed); ++i)
+  {
+    flow::util::this_thread::sleep_for(boost::chrono::milliseconds(10));
+  }
+  if (!m_shm_channel_error_observed)
+  {
+    FLOW_LOG_WARNING("Simulated disconnection was never observed (error handler did not fire)");
+    return false;
+  }
 
   // Attempt to lend arena
   bool result = true;

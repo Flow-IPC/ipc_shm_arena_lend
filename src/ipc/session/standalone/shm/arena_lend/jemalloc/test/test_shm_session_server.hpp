@@ -32,6 +32,7 @@
 #include "ipc/session/session_server.hpp"
 #include <flow/test/test_file_util.hpp>
 #include <boost/filesystem.hpp>
+#include <atomic>
 
 namespace ipc::session::shm::arena_lend::jemalloc::test
 {
@@ -597,6 +598,8 @@ private:
   const std::shared_ptr<Object_deleted_relay> m_object_deleted_relay;
   /// Whether the test object was deleted.
   bool m_test_object_deleted;
+  /// Whether shm_channel_error_handler() has fired (a session's SHM channel disconnection was observed).
+  std::atomic<bool> m_shm_channel_error_observed{false};
   /// Associates session to session data.
   std::unordered_map<std::shared_ptr<Server_session>, Session_data> m_session_map;
 
