@@ -1,4 +1,4 @@
-/* Flow-IPC
+/* Flow-IPC: SHM-jemalloc
  * Copyright (c) 2023 Akamai Technologies, Inc.; and other contributors.
  * Each commit is copyright by its respective author or author's employer.
  *
