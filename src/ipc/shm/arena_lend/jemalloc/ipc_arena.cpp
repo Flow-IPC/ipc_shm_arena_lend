@@ -234,10 +234,12 @@ void Ipc_arena::destroy()
   const Log_context_mt log_ctx_sync{get_logger(), get_log_component()};
   FLOW_LOG_SET_LOCKED_CONTEXT(&log_ctx_sync);
   /* Secondly, before asyncness might begin, ensure that any "regular" *this logging code (that uses get_logger()
-   * such as FLOW_LOG_INFO/TRACE/WARNING()) sees null get_logger().  At this stage it is thread-safe: user cannot be
-   * messing with *this while its original handle has ref-count 0, and we haven't kicked off anything
-   * async/concurrent yet.  (Recall also that if *this is shutting down, then no construct()ed objects remain either,
-   * so by now there should be no concurrent allocs/pool creations/etc.) */
+   * such as FLOW_LOG_INFO/TRACE/WARNING()) sees null get_logger().  At this stage it is thread-safe: user cannot
+   * be messing with *this while its original handle has ref-count 0; no construct()ed objects remain, so no
+   * concurrent allocs/pool creations/etc. can occur; and we haven't kicked off anything async/concurrent yet.
+   * The one exception: obj-db-deferred deallocations may run -- via an obj-db scan in some thread -- until the
+   * _admin::forgetting_shm_arena() barrier below; hence deallocate() specifically must not (and does not) touch
+   * get_logger() (see comment there). */
   set_logger(nullptr);
   // Now, any "regular" logging => no-op; but _LOCKED() logging shall work synchronously.
 
@@ -637,17 +639,15 @@ void Ipc_arena::deallocate(void* address)
   assert(!m_arenas.empty() && "start() must have been called by now.");
   const auto& arena_id = m_arena0;
 
+  /* Careful: no logging -- nor any other get_logger() access -- in this method, unlike in allocate() and others.
+   * Reason: obj-db-deferred deallocations can make this method run, via an obj-db scan in some thread,
+   * concurrently with destroy()'s set_logger(nullptr) (see notes there): destroy() can begin while such a scan
+   * is in flight, and scans stop only at the _admin::forgetting_shm_arena() barrier -- which is necessarily
+   * after the set_logger(nullptr).  So a get_logger() here would race that mute.  allocate() is immune: it cannot run
+   * once the handle group hits ref-count 0 (no construct()ed objects remain to allocate() things). */
+
 #if IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE
-  if (skip_fast_path_verbose_logging())
-  {
-    get_jemalloc_memory_manager()->deallocate(address, arena_id);
-  }
-  else
-  {
-    FLOW_LOG_DATA("Deallocating address [" << address << "], arena [" << arena_id << "], no tcache.");
-    get_jemalloc_memory_manager()->deallocate(address, arena_id);
-    FLOW_LOG_DATA("Deallocated address [" << address << "], arena [" << arena_id << "], no tcache.");
-  }
+  get_jemalloc_memory_manager()->deallocate(address, arena_id);
 #else // #if !IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE
   // Suggest reading Thread_cache class doc header for background on jemalloc-tcache.
 
@@ -716,40 +716,15 @@ void Ipc_arena::deallocate(void* address)
      * may be sitting in the calling thread's tcache.  (See discussion at end of function for how it comes to
      * be -- and how commonly -- that the allocating thread differs from ours.) */
 
-    // Fast-path:
-    if (skip_fast_path_verbose_logging())
-    {
-      get_jemalloc_memory_manager()->deallocate(address, arena_id, tcache_id_for_arena);
-    }
-    else
-    {
-      FLOW_LOG_DATA("Deallocating address [" << address << "], arena [" << arena_id << "], tcache "
-                    "[" << tcache_id_for_arena << "].");
-      get_jemalloc_memory_manager()->deallocate(address, arena_id, tcache_id_for_arena);
-      FLOW_LOG_DATA("Deallocated address [" << address << "], arena [" << arena_id << "], tcache "
-                    "[" << tcache_id_for_arena << "].");
-    }
+    get_jemalloc_memory_manager()->deallocate(address, arena_id, tcache_id_for_arena);
     return;
   } // if (tcache_id_for_arena != Thread_cache::S_NO_TCACHE_ID)
   // else: No tcache available in this thread (yet), for this arena.
 
-  // Do a similar thing to the NO_TCACHE snippet above, just with modified logging.
-  if (skip_fast_path_verbose_logging())
-  {
-    get_jemalloc_memory_manager()->deallocate(address, arena_id);
-  }
-  else
-  {
-    FLOW_LOG_TRACE("jemalloc::deallocate[" << address << "] will proceed with tcache disabled, even though (like all "
-                   "allocations at this layer) it was allocated with tcache enabled; reason: "
-                   "we are in a thread that has not yet requested tcache creation "
-                   "for arena [" << arena_id << "] (presumably because it has in this arena "
-                   "not yet allocated anything at this layer).  Slight perf loss results.");
-
-    FLOW_LOG_DATA("Deallocating address [" << address << "], arena [" << arena_id << "], no tcache.");
-    get_jemalloc_memory_manager()->deallocate(address, arena_id);
-    FLOW_LOG_DATA("Deallocated address [" << address << "], arena [" << arena_id << "], no tcache.");
-  }
+  /* Do a similar thing to the NO_TCACHE snippet above.  (Slight perf loss results versus the tcache path
+   * above -- the alloc was tcache-enabled, but this thread has not requested tcache creation for the arena,
+   * presumably having never allocated in it at this layer.) */
+  get_jemalloc_memory_manager()->deallocate(address, arena_id);
 
   /* Discussion for context: Suppose end user's actual code *outside any SHM-aware allocators* refrains from making
    * direct [de]allocate() calls (which isn't disallowed either incidentally).  That represents not-guaranteed

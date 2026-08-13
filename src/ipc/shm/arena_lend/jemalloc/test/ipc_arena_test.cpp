@@ -494,13 +494,8 @@ TEST_F(Ipc_arena_test, Interface)
                                ostream_op_string("Allocated size \\[", S_ALLOCATION_SIZE,
                                                  "\\], arena \\[", arena_id, "\\]")
                              }));
-    EXPECT_TRUE(check_output([&]()
-                             {
-                               collection->deallocate(p);
-                             },
-                             cout,
-                             ostream_op_string("Deallocated address \\[", p,
-                                               "\\], arena \\[", arena_id, "\\]")));
+    // (deallocate() is intentionally log-free -- see its impl comment -- so there is no output to check.)
+    collection->deallocate(p);
 
     // Use shared object creation interface
     // Ensure that construction and destruction is executed properly and that the underlying object's destructor
@@ -543,15 +538,10 @@ TEST_F(Ipc_arena_test, Interface)
 
       if (foo != nullptr)
       {
-        // Ensure that the destructor for the object is called and the memory is deallocated
-        EXPECT_TRUE(check_output([&]()
-                                 {
-                                   foo = nullptr;
-                                 },
-                                 cout,
-                                 ostream_op_string("Deallocating address \\[",
-                                                   static_cast<void*>(foo.get()),
-                                                   "\\], arena \\[", arena_id, "\\]")));
+        /* Ensure that the destructor for the object is called and the memory is deallocated
+         * (via the counters: deallocate() is intentionally log-free -- see its impl comment -- so no
+         * output check here). */
+        foo = nullptr;
         EXPECT_EQ(*constructor_counter, 1u);
         EXPECT_EQ(*destructor_counter, 1u);
       }
