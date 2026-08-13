@@ -1031,13 +1031,17 @@ private:
         return;
       }
       m_result = result;
-      m_promise.set_value(result);
     }
 
+    /* Notify the listener *before* fulfilling the promise: start() unblocks on the promise, after which the
+     * test body may destroy the listener (typically a stack object) -- so the reverse order would let this
+     * thread's virtual call race that destruction.  (No double-set possible despite the promise now being
+     * outside the lock: the m_result guard above lets only one thread reach this point.) */
     if (m_event_listener != nullptr)
     {
       m_event_listener->notify_completion(result);
     }
+    m_promise.set_value(result);
   }
 
   /**
