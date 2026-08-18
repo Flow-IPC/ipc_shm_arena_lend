@@ -60,6 +60,9 @@ template<typename Session_impl_t>
 class Session_impl : public Session_impl_t
 {
 public:
+
+  /// See shm::arena_lend::jemalloc::Session_mv counterpart for public description probe-XD2 end.
+  using Probe_clone_at_top = jemalloc::Shm_session;
   // Types.
 
   /// Short-hand for base class.
@@ -81,6 +84,12 @@ public:
 
   /// See shm::arena_lend::jemalloc::Session_mv counterpart for public description.
   using Shm_session = jemalloc::Shm_session;
+
+  /// See shm::arena_lend::jemalloc::Session_mv counterpart for public description probe-XD1 end.
+  using Probe_clone_tagged = jemalloc::Shm_session;
+
+  /// See shm::arena_lend::jemalloc::Session_mv counterpart for public description.
+  using Probe_clone_untagged = jemalloc::Shm_session;
 
   /// See shm::arena_lend::jemalloc::Session_mv counterpart for public description.
   template<typename Message_body>
