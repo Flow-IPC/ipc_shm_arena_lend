@@ -33,6 +33,14 @@
 namespace ipc::session::shm::arena_lend::jemalloc
 {
 
+/// In-situ link-probe: IB0 class-brief qualified shm::classic::Session_mv probe end.
+struct Doxygen_link_probe_in_situ
+{
+  /// IB1 in-situ-function-brief qualified: see shm::classic::Session_mv counterpart probe end.
+  void probe_in_situ_brief_qualified();
+}; // struct Doxygen_link_probe_in_situ
+
+
 // Types.
 
 /**

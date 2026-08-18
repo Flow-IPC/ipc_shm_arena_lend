@@ -343,6 +343,14 @@ struct Doxygen_link_probe
   int m_probe_member;
 }; // struct Doxygen_link_probe
 
+/// Templated link-probe: TB0 class-brief qualified shm::classic::Session_mv probe end.
+template<typename T>
+struct Doxygen_link_probe_tpl
+{
+  /// TB1 template-function-brief qualified: see shm::classic::Session_mv counterpart probe end.
+  void probe_tpl_brief_qualified();
+}; // struct Doxygen_link_probe_tpl
+
 // Free functions: in *_fwd.hpp.
 
 // Template implementations.
