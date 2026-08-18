@@ -38,6 +38,12 @@ struct Doxygen_link_probe_in_situ
 {
   /// IB1 in-situ-function-brief qualified: see shm::classic::Session_mv counterpart probe end.
   void probe_in_situ_brief_qualified();
+  /// IB2 in-situ-alias-brief qualified: see shm::classic::Session_mv counterpart probe end.
+  using Probe_alias = int;
+
+  /// IB3 in-situ-template-fn-brief qualified: see shm::classic::Session_mv counterpart probe end.
+  template<typename T>
+  void probe_in_situ_tpl();
 }; // struct Doxygen_link_probe_in_situ
 
 
@@ -65,6 +71,12 @@ class Client_session_impl :
                                                    true>>
 {
 public:
+  /// XB1 in-real-class-fn-brief qualified: see shm::classic::Session_mv counterpart probe end.
+  void probe_in_real_class();
+
+  /// XB2 in-real-class-alias-brief qualified: see shm::classic::Session_mv counterpart probe end.
+  using Probe_alias_x = int;
+
   // Types.
 
   /// Short-hand for our non-`virtual` base.
