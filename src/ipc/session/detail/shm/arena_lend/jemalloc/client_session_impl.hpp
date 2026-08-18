@@ -77,6 +77,15 @@ public:
   /// XB2 in-real-class-alias-brief qualified: see shm::classic::Session_mv counterpart probe end.
   using Probe_alias_x = int;
 
+  /// See shm::classic::Session_mv counterpart probe-XB3 end.
+  void probe_exact_leading_see_phrase();
+
+  /// shm::classic::Session_mv leads this brief probe-XB5 end.
+  void probe_ref_as_first_word();
+
+  /// See shm::classic::Session_mv counterpart for public description probe-XB6 end.
+  using Probe_alias_leading_see = int;
+
   // Types.
 
   /// Short-hand for our non-`virtual` base.
