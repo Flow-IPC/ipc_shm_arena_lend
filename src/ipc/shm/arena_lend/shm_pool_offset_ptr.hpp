@@ -205,7 +205,7 @@ public:
    */
   static Shm_pool_offset_ptr pointer_to(Reference object)
   {
-    return Shm_pool_offset_ptr(&object);
+    return Shm_pool_offset_ptr{&object};
   }
 
   /**
@@ -265,7 +265,7 @@ public:
    */
   Shm_pool_offset_ptr operator--(int)
   {
-    Shm_pool_offset_ptr tmp(*this);
+    Shm_pool_offset_ptr tmp{*this};
     --*this;
     return tmp;
   }
@@ -330,7 +330,7 @@ public:
    */
   Shm_pool_offset_ptr operator++(int)
   {
-    Shm_pool_offset_ptr tmp(*this);
+    Shm_pool_offset_ptr tmp{*this};
     ++*this;
     return tmp;
   }

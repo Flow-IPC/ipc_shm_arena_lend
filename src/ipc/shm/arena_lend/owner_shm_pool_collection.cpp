@@ -247,7 +247,7 @@ bool Owner_shm_pool_collection::remove_range_and_pool_if_empty(const void* addre
   }
 
   {
-    Lockable_shm_pool::Lock lock(shm_pool->get_mutex());
+    Lockable_shm_pool::Lock lock{shm_pool->get_mutex()};
     size_t remaining_size = shm_pool->get_remaining_size();
     if (remaining_size < size)
     {

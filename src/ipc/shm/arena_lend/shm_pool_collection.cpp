@@ -140,7 +140,7 @@ bool Shm_pool_collection::close_shm_pool(const shared_ptr<Shm_pool>& shm_pool)
 
 void Shm_pool_collection::print_shm_pool_map() const
 {
-  Read_lock read_lock(m_shm_pool_map_mutex);
+  Read_lock read_lock{m_shm_pool_map_mutex};
 
   if (m_shm_pool_map.empty())
   {
@@ -158,7 +158,7 @@ void Shm_pool_collection::print_shm_pool_map() const
 
 shared_ptr<Shm_pool> Shm_pool_collection::lookup_shm_pool(const void* address) const
 {
-  Read_lock read_lock(m_shm_pool_map_mutex);
+  Read_lock read_lock{m_shm_pool_map_mutex};
 
   shared_ptr<Shm_pool> shm_pool;
   auto iter = m_shm_pool_map.lower_bound(const_cast<void*>(address));
@@ -205,7 +205,7 @@ shared_ptr<Shm_pool> Shm_pool_collection::lookup_shm_pool(const void* address) c
 
 shared_ptr<Shm_pool> Shm_pool_collection::lookup_shm_pool_exact(const void* address) const
 {
-  Read_lock read_lock(m_shm_pool_map_mutex);
+  Read_lock read_lock{m_shm_pool_map_mutex};
 
   const auto iter = m_shm_pool_map.find(const_cast<void*>(address));
   if (iter == m_shm_pool_map.end())
@@ -220,7 +220,7 @@ shared_ptr<Shm_pool> Shm_pool_collection::lookup_shm_pool_exact(const void* addr
 bool Shm_pool_collection::register_shm_pool(const shared_ptr<Shm_pool>& shm_pool)
 {
   {
-    Write_lock write_lock(m_shm_pool_map_mutex);
+    Write_lock write_lock{m_shm_pool_map_mutex};
 
     auto iter = m_shm_pool_map.emplace(make_pair(shm_pool->get_address(), shm_pool));
     if (!iter.second)

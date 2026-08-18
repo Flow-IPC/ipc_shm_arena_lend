@@ -248,7 +248,7 @@ bool Shm_pool_collection::skip_fast_path_verbose_logging() const
 
 bool Shm_pool_collection::deregister_shm_pool_internal(void* address)
 {
-  Write_lock write_lock(m_shm_pool_map_mutex);
+  Write_lock write_lock{m_shm_pool_map_mutex};
   return m_shm_pool_map.erase(address) != 0;
 }
 
