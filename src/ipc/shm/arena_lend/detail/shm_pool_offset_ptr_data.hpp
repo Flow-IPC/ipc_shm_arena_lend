@@ -491,7 +491,7 @@ private:
  *         See details above regarding their expected behaviors.
  * @tparam CAN_STORE_RAW_PTR
  *         Whether a `*this` is allowed to represent a vaddr that is neither null nor belonging to any SHM-pool
- *         registered in the global Repository_type at the time of construction of a `*this` from a `void*`.
+ *         registered in the global `Repository_type` at the time of construction of a `*this` from a `void*`.
  *         If `true` in that event, then a raw pointer shall be stored; if `false`, then null is stored (but
  *         unless user code checks for this rather odd possibility, in practice subsequent undefined behavior
  *         is likely).
