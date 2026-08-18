@@ -86,6 +86,18 @@ public:
   /// See shm::classic::Session_mv counterpart for public description probe-XB6 end.
   using Probe_alias_leading_see = int;
 
+  /// See shm::classic::Session_mv counterpart probe-XB7 end.
+  using Probe_alias_chained_target = Shm_session::Blob;
+
+  /// See shm::classic::Session_mv counterpart probe-XB8 end.
+  void probe_alias_typed_arg(const Blob& blob);
+
+protected:
+  /// See shm::classic::Session_mv counterpart probe-XB9 end.
+  void probe_protected_plain();
+
+public:
+
   // Types.
 
   /// Short-hand for our non-`virtual` base.
