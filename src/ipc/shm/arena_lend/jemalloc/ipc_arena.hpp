@@ -606,7 +606,7 @@ public:
 
   /**
    * Returns the jemalloc-ID for the (only, as of this writing) jemalloc-arena maintained by `*this`;
-   * this identifies that arena to the jemalloc API (e.g. `mallctl()` `stats.arenas.<id>.*` queries).
+   * this identifies that arena to the jemalloc API (e.g. `mallctl()` `"stats.arenas.(id).*"` queries).
    *
    * @note The intended use-case for this is for informational purposes, such as if one desires to query
    *       something in the jemalloc-stats API that we perhaps don't already provide in nice form

@@ -43,7 +43,7 @@ namespace ipc::shm::arena_lend::jemalloc::detail
  *
  * ### Why this exists ###
  * `malloc_stats_print()` walks every arena unguarded: it first caches which arenas are `initialized`, then reads
- * each arena's `stats.*`; if an arena is *destroyed* (from any thread) in that window, the per-arena read fails
+ * each arena's `"stats.*"`; if an arena is *destroyed* (from any thread) in that window, the per-arena read fails
  * and jemalloc *aborts the process* (its internal `xmallctlbymib()` is an abort-on-error wrapper).  This is not a
  * jemalloc bug -- the full dump assumes a quiescent arena set.  Holding this mutex around (1) each arena-destroy,
  * (2) each arena-create, and (3) each such dump makes that assumption hold.
@@ -92,7 +92,7 @@ namespace ipc::shm::arena_lend::jemalloc::detail::stat
  * Returns whether the linked jemalloc was built with statistics support (its `config.stats` is `true`).  The
  * value is read once -- it is a compile-time constant within a given jemalloc build -- and cached.
  *
- * If this returns `false`, every `stats.*` `mallctl` query yields `ENOENT`; accordingly the bespoke SHM-jemalloc
+ * If this returns `false`, every `"stats.*"` `mallctl` query yields `ENOENT`; accordingly the bespoke SHM-jemalloc
  * stat snapshots shall, as a matter of policy, produce no real data (return defaults/sentinels) rather
  * than partial results.
  *
@@ -110,21 +110,21 @@ bool config_stats_enabled();
 size_t page_size();
 
 /**
- * Advances jemalloc's internal statistics epoch (writes `mallctl("epoch")`), causing subsequently-read `stats.*`
- * values to reflect a fresh, mutually-consistent snapshot.  Call once immediately before a batch of `stats.*`
+ * Advances jemalloc's internal statistics epoch (writes `mallctl("epoch")`), causing subsequently-read `"stats.*"`
+ * values to reflect a fresh, mutually-consistent snapshot.  Call once immediately before a batch of `"stats.*"`
  * reads; a single call suffices regardless of how many arenas are read in that batch.
  *
  * ### Background: jemalloc's stats `epoch` ###
- * jemalloc does not recompute the `stats.*` values on each read; it keeps a *cached snapshot* of all dynamic
+ * jemalloc does not recompute the `"stats.*"` values on each read; it keeps a *cached snapshot* of all dynamic
  * statistics and serves reads from it.  That snapshot is (re)computed only when you *write* to the `epoch`
  * `mallctl` -- writing any value refreshes the reported data and bumps a monotonic epoch counter; merely
  * *reading* `epoch` refreshes nothing.  Man-page wording (the `epoch` entry): "If a value is passed in, refresh
  * the data from which the `mallctl*()` functions report values, and increment the epoch."
  *
- * Recipe (what we do): write `epoch` once, then read every `stats.*` value of interest.  A single refresh yields
+ * Recipe (what we do): write `epoch` once, then read every `"stats.*"` value of interest.  A single refresh yields
  * one mutually-consistent moment across all arenas/fields read afterward.
  *
- * Stakes: with no refresh, `stats.*` reads are stale -- frozen at the last snapshot, or all-zero if none was
+ * Stakes: with no refresh, `"stats.*"` reads are stale -- frozen at the last snapshot, or all-zero if none was
  * ever taken -- so they won't reflect reality.  Refreshing again *mid-batch* is worse than not at all: you would
  * mix values from different moments (a "torn" set), which can corrupt derived quantities (e.g. live-count =
  * `nmalloc - ndalloc` could come out wrong or even negative).  Hence: exactly one refresh per snapshot batch,
@@ -156,7 +156,7 @@ bool mallctl_name_to_mib(const char* name, size_t* mib, size_t* mib_len);
  *
  * @tparam T
  *         The scalar type of the value as dictated by jemalloc for `name` (e.g. `size_t` for byte gauges,
- *         `uint64_t` for cumulative counters, `bool` for `config.*`).  A wrong-sized type yields failure
+ *         `uint64_t` for cumulative counters, `bool` for `"config.*"`).  A wrong-sized type yields failure
  *         (jemalloc requires an exact size match).
  * @param name
  *        The (NUL-terminated) `mallctl` name to read.
