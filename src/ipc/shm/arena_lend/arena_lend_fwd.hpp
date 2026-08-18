@@ -33,6 +33,15 @@
 #include <string>
 #include <memory>
 
+/**
+ * ipc::shm sub-module providing the SHM-provider family based on the *arena-lending* paradigm: each process
+ * allocates in its own arena(s), lending the resulting objects to other processes, which can read them but not
+ * allocate (nor deallocate) in that arena.  As of this writing there is one arena-lending SHM-provider available
+ * out-of-the-box, SHM-jemalloc (see sub-namespace arena_lend::jemalloc).  The present namespace contains
+ * items applicable to *any* arena-lending provider, with provider-specific items in such sub-namespaces.
+ *
+ * @see ipc::shm doc header for an overview of the available SHM-provider families and how they compare.
+ */
 namespace ipc::shm::arena_lend
 {
 
@@ -291,8 +300,8 @@ void declare_stats(std::string name_prefix,
                    const Pool_stats* src_stats, Pool_stats* target_stats, Visitor&& visitor);
 
 /**
- * Declares the stats for Borrower_pool_lookup_global_stats.  Not invoked directly except by `flow::util::stat` internals,
- * or when composing this stat-set into another.
+ * Declares the stats for Borrower_pool_lookup_global_stats.  Not invoked directly except by `flow::util::stat`
+ * internals, or when composing this stat-set into another.
  * @see `flow::util::stat` namespace doc header for background on the declare/visit mechanism.
  *
  * @tparam Visitor
