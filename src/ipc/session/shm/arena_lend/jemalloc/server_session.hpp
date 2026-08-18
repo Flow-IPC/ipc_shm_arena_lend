@@ -321,6 +321,28 @@ private:
                           transport::Native_socket_stream&& master_channel_sock_stm);
 }; // class Server_session
 
+/**
+ * Autobrief-context link probe: class-brief naked unique Server_session_mv probe-CB1 end.  Class-detailed
+ * portion: qualified shm::classic::Session_mv probe-CD1 end; naked Server_session_mv probe-CD2 end.
+ */
+struct Doxygen_link_probe
+{
+  /// FB1 function-brief qualified ambiguous: see shm::classic::Session_mv counterpart probe end.
+  void probe_brief_qualified();
+
+  /// FB2 function-brief naked unique: see Server_session_mv counterpart probe end.
+  void probe_brief_naked();
+
+  /**
+   * FB3 autobrief first-sentence qualified: see shm::classic::Session_mv counterpart probe end.  Detailed
+   * portion: FD1 qualified shm::classic::Session_mv probe end; FD2 naked unique Server_session_mv probe end.
+   */
+  void probe_autobrief_and_detailed();
+
+  /// MB1 member-variable-brief qualified: see shm::classic::Session_mv counterpart probe end.
+  int m_probe_member;
+}; // struct Doxygen_link_probe
+
 // Free functions: in *_fwd.hpp.
 
 // Template implementations.
