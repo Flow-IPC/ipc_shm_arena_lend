@@ -89,7 +89,11 @@ public:
   /// See shm::classic::Session_mv counterpart probe-XB7 end.
   using Probe_alias_chained_target = Shm_session::Blob;
 
-  /// See shm::classic::Session_mv counterpart probe-XB8 end.
+  /**
+   * See shm::classic::Session_mv counterpart probe-XB8 end.
+   * @param blob
+   *        Probe arg.
+   */
   void probe_alias_typed_arg(const Blob& blob);
 
 protected:
