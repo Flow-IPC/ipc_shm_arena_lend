@@ -96,6 +96,15 @@ public:
    */
   void probe_alias_typed_arg(const Blob& blob);
 
+  /// See shm::arena_lend::jemalloc::Session_mv counterpart probe-XC1 end.
+  void probe_exact_real_ref();
+
+  /// See session::shm::arena_lend::jemalloc::Session_mv counterpart probe-XC2 end.
+  void probe_deeper_real_ref();
+
+  /// See ipc::session::shm::arena_lend::jemalloc::Session_mv counterpart probe-XC3 end.
+  void probe_full_real_ref();
+
 protected:
   /// See shm::classic::Session_mv counterpart probe-XB9 end.
   void probe_protected_plain();
