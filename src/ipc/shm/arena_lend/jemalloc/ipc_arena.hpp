@@ -638,7 +638,11 @@ public:
 
   /* Would be private, but as of this writing some items are used by white-boxy unit-tests.
    * There's a to-do in class doc header to perhaps change this to a facade/attorney/etc. pattern instead. */
+#ifdef IPC_DOXYGEN_ONLY // Compiler ignores; Doxygen sees: document the below as the private it conceptually is.
+private:
+#else // Compiler sees; Doxygen ignores.
 protected:
+#endif
   // Constructors.
 
   /**

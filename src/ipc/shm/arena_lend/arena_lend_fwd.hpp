@@ -78,12 +78,22 @@ using Obj_handle = std::shared_ptr<T>;
 /// Short-hand for util::Shared_name; used in particular for SHM pool names at least.
 using Shared_name = util::Shared_name;
 
-/// Alias for an identifier of the owner (essentially namespace of `collection_id_t`s) of shared information.
+/**
+ * Alias for an identifier of the owner (essentially namespace of `collection_id_t`s) of shared information.
+ *
+ * @internal
+ *
+ * @todo Consider moving `owner_id_t` into detail/.
+ */
 using owner_id_t = util::process_id_t;
 
 /**
  * Identifier type for a shared memory pool collection.
  * @todo Determine proper size of identifier.
+ *
+ * @internal
+ *
+ * @todo Consider moving `collection_id_t` into detail/.
  */
 using collection_id_t = uint32_t;
 

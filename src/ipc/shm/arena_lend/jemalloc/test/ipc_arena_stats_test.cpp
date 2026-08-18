@@ -53,8 +53,9 @@
  *     realistic monitoring shape and keeps the main thread free of thread-local SHMJ state (which otherwise
  *     lingers and can affect unrelated tests).
  *   - Single-threaded-in-sequence: tasks are posted with wait-for-completion; nothing races.  Concurrency of
- *     stat-consumption versus thread teardown (the "Gap") is intentionally out of scope here (dedicated-test
- *     material); do not "improve" this test into a race test. */
+ *     stat-consumption versus thread teardown (the "Gap") is intentionally out of scope here and covered by
+ *     its dedicated test: Thread_lcl_obj_db_test.Stats_consume_vs_thread_exit_gap (thread_lcl_obj_db_test.cpp).
+ *     So do not "improve" this test into a race test. */
 
 namespace ipc::shm::arena_lend::jemalloc::test
 {

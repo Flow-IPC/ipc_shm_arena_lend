@@ -262,10 +262,6 @@ public:
    * any actually-necessary disposal ops is minimal.
    */
   static void this_thread_piggy_scan();
-  /* XXX Add dedicated TLODB (admin+client) unit test: piggy-scan trigger matrix, adversarially (trigger via
-   * unrelated arena; via each documented trigger op; via Ipc_arena::this_thread_gc(); assert quiet thread and
-   * wrong thread do NOT reap); plus the backstops (thread-exit reap; degraded-mode per-exited-thread thread;
-   * end-of-program atexit() path). */
 
   /**
    * Propagates the given logger to the extant (and future) per-thread Thread_lcl_obj_db_admin objects
@@ -2046,16 +2042,6 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
         auto obj_it_to_erase = obj_r_it.base();
         --obj_it_to_erase;
 
-        if ((--n_unused) == 0)
-        {
-          done = true; scan_outcome = FIFO_SUFFICIENT;
-        }
-        else
-        {
-          done = (obj_r_it == objs.past_newest()); // n_unused still non-zero, so `true` would be due to EXHAUSTED.
-        }
-        // Loop-end condition + scan_outcome handled; back to the erasure: Actually destroy obj.
-
         auto& obj = obj_it_to_erase->second;
 
         if (!skip_fast_path_verbose_logging())
@@ -2072,6 +2058,16 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
         obj.m_del_func(obj.m_addr, collection_db->m_shm_arena);
         objs.erase(obj_it_to_erase);
         ++batched_destroy_count;
+        // .erase() done: obj_r_it now points to next-after-erased; back to loop-end condition + scan_outcome handling.
+
+        if ((--n_unused) == 0)
+        {
+          done = true; scan_outcome = FIFO_SUFFICIENT;
+        }
+        else
+        {
+          done = (obj_r_it == objs.past_newest()); // n_unused still non-zero, so `true` would be due to EXHAUSTED.
+        }
       } // while (!done)
 
       if (!skip_fast_path_verbose_logging())

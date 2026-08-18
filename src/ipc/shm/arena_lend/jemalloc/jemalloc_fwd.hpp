@@ -43,7 +43,13 @@ class Thread_cache;
 /// Thread cache ID type as dictated by jemalloc.
 using tcache_id_t = unsigned int;
 
-/// Arena ID as dictated by jemalloc.
+/**
+ * Arena ID as dictated by jemalloc.
+ *
+ * @internal
+ *
+ * @todo Consider moving `arena_id_t` into detail/.
+ */
 using arena_id_t = unsigned int;
 
 // Free functions.

@@ -597,7 +597,11 @@ public:
   static std::vector<Shm_pool_info> borrowed_shm_pool_live_info();
 
   // Would be private, but as of this writing some items are used by white-boxy unit tests.
+#ifdef IPC_DOXYGEN_ONLY // Compiler ignores; Doxygen sees: document the below as the private it conceptually is.
+private:
+#else // Compiler sees; Doxygen ignores.
 protected:
+#endif
   // Types.
 
   /// Alias for a SHM pool.
@@ -629,7 +633,7 @@ protected:
    * Why borrow_object() needs these particular data ultimately:
    *   - #m_pool_id, #m_pool_offset: Needed simply to obtain the vaddr of the object in this (borrowing) process;
    *     the vaddr in the opposing (owner) process is an unrelated number.
-   *     Borrower_shm_pool_collection_repository::to_address() (a `static`) makes this translation.
+   *     `Borrower_shm_pool_collection_repository::to_address()` (a `static`) makes this translation.
    *     (This is not the only place such a lookup is performed; borrower-side Shm_pool_offset_ptr does the same.
    *     This comes up typically in SHM-stored STL-compliant containers which internally store these pointers
    *     due to the allocator used on owner side.  However, borrower-side, that is all subsequent to this
