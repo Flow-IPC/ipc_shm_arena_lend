@@ -129,11 +129,6 @@ TEST_F(Shm_pool_collection_DeathTest, Interface)
 // - (update) cleaned everything up that we know of, but some tests are still disabled, and some will be newly written
 // - so check `ls -l /dev/shm /dev/mqueue /tmp/var/run` and CWD after unit-test run, after test-set is finalized. Leave XXX in until then.
 
-//XXX (random placement for this xxx, but w/e) Doxygen: Once it runs clean (should be now), see if we can get some of Yurified and/or key SHMJ parts into
-//official Doxygen run; right now they're all deliberately skipped due to echan non-compliance, but since heavy Yuri meddling and Yurification the key
-//things should be compliant (but possibly might link to non-compliant items, so the links will not resolve... we will see). I was thinking
-// Ipc_arena + nearby _fwd.hpp aliases maybe; Shm_session + ditto; and stats.
-
 /// Tests for the public and protected interfaces.
 TEST_F(Shm_pool_collection_test, Interface)
 {
