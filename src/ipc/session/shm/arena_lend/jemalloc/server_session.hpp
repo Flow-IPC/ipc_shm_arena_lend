@@ -215,6 +215,16 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *
  * @endinternal
  *
+ * Doxygen link-probe (temporary; for-me experiment branch only).
+ *   - P1 naked unique: Server_session_mv end.
+ *   - P2 relative-qualified unique: session::Server_session_mv end.
+ *   - P3 fully-qualified unique: ipc::session::Server_session_mv end.
+ *   - P4 naked ambiguous: Session_mv end.
+ *   - P5 relative-qualified ambiguous: shm::classic::Session_mv end.
+ *   - P6 deeper-qualified ambiguous: session::shm::classic::Session_mv end.
+ *   - P7 fully-qualified ambiguous: ipc::session::shm::classic::Session_mv end.
+ *   - P8 naked unique nested: Sharded_stats end.
+ *
  * @tparam MQ_TYPE_OR_NONE
  *         Identical to session::Server_session.
  * @tparam TRANSMIT_NATIVE_HANDLES
