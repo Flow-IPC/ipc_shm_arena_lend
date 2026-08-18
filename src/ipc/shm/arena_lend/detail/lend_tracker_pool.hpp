@@ -626,7 +626,7 @@ private:
   std::optional<Pool> m_pool;
 
   /**
-   * Pointer to the Metadata in #m_pool; also used as the base for #use_ct_idx indices produced or consumed
+   * Pointer to the Metadata in #m_pool; also used as the base for `use_ct_idx` indices produced or consumed
    * by `*this` APIs.
    *   - In its dereferenced `Metadata` capacity:
    *     - If we are in admin mode (create-mode/admin ctor invoked): We initially populate this in ctor right
@@ -634,7 +634,7 @@ private:
    *     - Otherwise (client mode: open-mode/client ctor invoked): It is ready-to-go by the time we open
    *       the SHM-pool #m_pool in ctor.
    *   - As an offset base: Since Use_count_registry::get_metadata() is formally guaranteed to point to the
-   *     start of the data area, with actual use-count slots stored in bulk following the #Metadata:
+   *     start of the data area, with actual use-count slots stored in bulk following the Metadata:
    *     - use_ct_ptr_to_idx(), given a pointer to a use-count slot, subtracts `m_metadata` (the pointer)
    *       to get the offset in bytes; then multiplies by the slot width to obtain the index.
    *       - It is quick: subtract, then shift left.

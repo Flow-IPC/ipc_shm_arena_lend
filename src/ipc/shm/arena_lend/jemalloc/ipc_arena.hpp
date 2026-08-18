@@ -398,7 +398,7 @@ public:
   static void this_thread_gc();
 
   /**
-   * Fills-out the stats/info contents of the given stat::Arena_info_dump`: a printable bundling of stats/info relevant
+   * Fills-out the stats/info contents of the given stat::Arena_info_dump: a printable bundling of stats/info relevant
    * to (but not all necessarily owned by) `*this` Ipc_arena at this point in time.  To summarize the resulting
    * `*target_info_dump`:
    *   - Stats/info stored by-value; can be queried in peace.  They won't concurrently change nor become invalid
@@ -722,7 +722,7 @@ protected:
    *
    * @param shm_pool
    *        See above.
-   * @param shm_pool
+   * @param removed_shared_memory
    *        See above.
    */
   void on_shm_pool_removed(const std::shared_ptr<Shm_pool>& shm_pool, bool removed_shared_memory) override;
@@ -1188,7 +1188,7 @@ private:
    * The monotonically increasing collection (arena ID).
    *
    * One of these globally-uniquely identifies an `Ipc_arena` *of any given one process* (itself identified in relevant
-   * contexts -- generally Shm_session et al when tracking borrowed arenas -- by an #owner_id_t which as of this
+   * contexts -- generally Shm_session et al when tracking borrowed arenas -- by an `owner_id_t` which as of this
    * writing is simply that process's PID).  Together those 2 make up a detail::Uniq_collection_id.
    */
   static std::atomic<collection_id_t> m_collection_id_counter;

@@ -30,20 +30,18 @@
 #include <flow/util/util.hpp>
 #include <boost/interprocess/sync/named_mutex.hpp>
 
-/**
- * Segregated private stuff for ipc::shm::arena_lend.
- * @todo We don't really do `detail` sub-namespaces anywhere else, so maybe don't do it here or do do it all over?
- */
-namespace ipc::shm::arena_lend::detail
-{
+/// @cond
+// -^- Doxygen, please ignore the following.  It's undef-ed later anyway.
 
-// Types.
-
+// 1 if and only if the compiler is gcc proper (not clang, which also defines `__GNUC__`); keys pragmas below.
 #if defined(__GNUC__) && !defined(__clang__)
 #  define IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER 1
 #else
 #  define IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER 0
 #endif
+
+// -v- Doxygen, please stop ignoring.
+/// @endcond
 
 /* gcc (gcc-9 at least) is pretty paranoid about some bit-field paths below and gives some *very* cryptic warnings
  * that amount to maybe-uninitialized.  The code appears solid, so let's bypass it temporarily. */
@@ -51,6 +49,12 @@ namespace ipc::shm::arena_lend::detail
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #endif
+
+/// Segregated private stuff for ipc::shm::arena_lend.
+namespace ipc::shm::arena_lend::detail
+{
+
+// Types.
 
 /**
  * Parameterization-independent aspects of Shm_pool_offset_ptr_data segregated in non-template base.  In terms of
@@ -108,7 +112,7 @@ public:
    *       Calling your attention to this, as it is a subtle effect that might affect something unexpectedly.
    *
    * ### Impl: Why 32-bit width chosen for `pool_offset_t` ###
-   * Per Shm_pool_offset_ptr_data doc header impl discussion, it must fit into #m_rep_t in addition to 1
+   * Per Shm_pool_offset_ptr_data doc header impl discussion, it must fit into #rep_t in addition to 1
    * selector bit and #pool_id_t.  We choose the full 32 LSB (of 64-bit #rep_t) to be #pool_offset_t; allowing
    * for comfy and round maximally-2-or-4GiB-sized pools.  32 LSB also synergizes with #diff_t.
    *
@@ -190,6 +194,8 @@ public:
    * Moreover we will wrap-around having reached the max 31-bit number, back to 1 (0 is special and shall not
    * be used).  If by some incredible miracle we actually do reach this overflow condition, the chances that
    * that the wrapped-around-to-processes are still around/relevant = virtually nil.  So even that should work.
+   *
+   * @return See above.
    */
   static pool_id_t generate_pool_id();
 
@@ -688,7 +694,15 @@ private:
   /// Short-hand from base.
   using Raw_ptr_rep = Base::Raw_ptr_rep;
   /// Type of `m_rep`.  @see #m_rep.
-  using Representation = union { rep_t m_rep; Offset_ptr_rep m_offset_ptr_rep; Raw_ptr_rep m_raw_ptr_rep; };
+  using Representation = union
+  {
+    /// The full raw bits.
+    rep_t m_rep;
+    /// The bits viewed in the offset-ptr form.
+    Offset_ptr_rep m_offset_ptr_rep;
+    /// The bits viewed in the raw-ptr form.
+    Raw_ptr_rep m_raw_ptr_rep;
+  };
 
   // Methods.
 
@@ -1388,10 +1402,10 @@ std::ostream& operator<<(std::ostream& os,
             << "]+[" << val.m_rep.m_offset_ptr_rep.m_pool_offset << "]@" << val.get();
 } // operator<<(ostream, Shm_pool_offset_ptr_data)
 
+} // namespace ipc::shm::arena_lend::detail
+
 #if IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER
 #  pragma GCC diagnostic pop // See above.
 #endif
 
 #undef IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER
-
-} // namespace ipc::shm::arena_lend::detail

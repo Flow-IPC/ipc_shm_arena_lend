@@ -26,29 +26,26 @@
 #pragma once
 
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
-#include "ipc/shm/arena_lend/jemalloc/jemalloc_fwd.hpp"
-#include "ipc/shm/arena_lend/borrower_allocator_arena.hpp"
-#include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
-#include "ipc/shm/shm.hpp"
-#include "ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp"
-#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/util/shared_name_fwd.hpp"
 
-namespace ipc::shm
+/// Segregated private stuff for ipc::session::shm::arena_lend.
+namespace ipc::session::shm::arena_lend::detail
 {
 
-/// Implementation of #Arena_to_borrower_allocator_arena_t for SHM-jemalloc arenas.
-template<>
-struct Arena_to_borrower_allocator_arena<arena_lend::jemalloc::Ipc_arena>
-{
-  /**
-   * Implementation of `Arena_to_borrower_allocator_arena_t`; for SHM-jemalloc the `Arena` and
-   * `Borrower_allocator_arena` are different types, and in common use there is no relevant *object*
-   * of the latter; only the type matters.
-   */
-  using Type
-    = arena_lend::Borrower_allocator_arena
-        <ipc::session::shm::arena_lend::detail::Borrower_shm_pool_collection_repository
-           <arena_lend::jemalloc::Ipc_arena>>;
-};
+// Types.
 
-} // namespace ipc::shm
+// Find doc headers near the bodies of these compound types.
+
+template<typename Shm_arena_t>
+class Borrower_shm_pool_collection_repository;
+
+/// Short-hand for util::Shared_name; used in particular for SHM pool names at least.
+using Shared_name = util::Shared_name;
+
+/// Identifier type for a shared memory pool collection.
+using collection_id_t = ipc::shm::arena_lend::collection_id_t;
+
+/// Alias for an identifier of the owner (essentially namespace of `collection_id_t`s) of shared information.
+using owner_id_t = ipc::shm::arena_lend::owner_id_t;
+
+} // namespace ipc::session::shm::arena_lend::detail

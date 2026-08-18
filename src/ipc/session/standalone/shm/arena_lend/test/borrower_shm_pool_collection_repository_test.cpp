@@ -23,7 +23,7 @@
  * THE SOFTWARE. */
 
 #include <gtest/gtest.h>
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/shm/arena_lend/borrower_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
@@ -45,8 +45,10 @@ namespace ipc::session::shm::arena_lend::test
 
 namespace
 {
-using Repository = Borrower_shm_pool_collection_repository<ipc::shm::arena_lend::jemalloc::Ipc_arena>;
+using Repository = detail::Borrower_shm_pool_collection_repository<ipc::shm::arena_lend::jemalloc::Ipc_arena>;
 using pool_id_t = ipc::shm::arena_lend::Borrower_shm_pool_collection::pool_id_t;
+using detail::owner_id_t;
+using detail::collection_id_t;
 
 const owner_id_t OWNER_ID_0 = 10;
 const owner_id_t OWNER_ID_1 = 20;

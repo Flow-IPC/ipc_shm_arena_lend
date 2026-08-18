@@ -122,7 +122,7 @@ public:
  *
  * @see This is a key building block for the rev-lookup operations of Owner_shm_pool_repository (and
  *      Shm_pool_offset_ptr operating against it, owner-side) and of
- *      session::shm::arena_lend::Borrower_shm_pool_collection_repository (ditto but borrower-side).
+ *      session::shm::arena_lend::detail::Borrower_shm_pool_collection_repository (ditto but borrower-side).
  *      In both cases this is done indirectly via Shm_pool_repo_lookup_core_rev which uses us directly.
  *      The rationale of separating us (Thread_local_pool_lookup_rev) from Shm_pool_repo_lookup_core_rev is the
  *      analogous nature of us and our forward-lookup cousin Thread_local_pool_lookup_fwd.
@@ -322,7 +322,10 @@ private:
 
   /// Per-thread mutex protecting #m_pools_sorted_by_base.  Contended by at most 2 threads (local lookup vs. pusher).
   mutable flow::util::Mutex_non_recursive m_pools_sorted_by_base_mutex;
-  /// Thread-local copy of the canonical sorted map: pool-base vaddr -> Pool_by_base.  See #Map doc and class doc header.
+  /**
+   * Thread-local copy of the canonical sorted map: pool-base vaddr -> Pool_by_base.  See #Map doc and class
+   * doc header.
+   */
   Map m_pools_sorted_by_base;
 }; // class Thread_local_pool_lookup_rev
 

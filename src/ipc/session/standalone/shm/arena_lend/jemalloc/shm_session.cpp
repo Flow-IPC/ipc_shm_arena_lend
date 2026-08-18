@@ -24,7 +24,7 @@
 
 /// @file
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp"
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/stat_info_dump.hpp"
 #include "ipc/shm/arena_lend/detail/owner_spc_impl.hpp"
@@ -122,6 +122,8 @@ Shm_session::Shm_session(flow::log::Logger* logger, Shm_channel&& shm_channel,
 
 Shm_session::~Shm_session()
 {
+  using detail::Borrower_shm_pool_collection_repository;
+
   // Log ~final info/stats.
   {
     Info_dump dump; // Multi-line.
@@ -484,6 +486,7 @@ void Shm_session::send_response(const Shm_struc_channel::Msg_in* original_messag
 
 void Shm_session::receive_arena(collection_id_t collection_id, Shared_name&& pool_name_base)
 {
+  using detail::Borrower_shm_pool_collection_repository;
   using flow::util::stat::fetch_add;
   using flow::util::stat::update_hi_wmark;
 
@@ -509,6 +512,7 @@ void Shm_session::receive_arena(collection_id_t collection_id, Shared_name&& poo
 
 void Shm_session::receive_shm_pool(collection_id_t collection_id, pool_id_t shm_pool_id, pool_offset_t pool_size)
 {
+  using detail::Borrower_shm_pool_collection_repository;
   using flow::util::stat::fetch_add;
   using flow::util::stat::update_hi_wmark;
 
@@ -604,7 +608,7 @@ void Shm_session::info_dump(Info_dump* target_info_dump, [[maybe_unused]] util::
 
 std::vector<Shm_session::Shm_pool_info> Shm_session::borrowed_shm_pool_live_info() // Static.
 {
-  return Borrower_shm_pool_collection_repository<Arena>::get_instance().shm_pool_live_info();
+  return detail::Borrower_shm_pool_collection_repository<Arena>::get_instance().shm_pool_live_info();
 }
 
 const Shm_session::Borrower_pool_stats& Shm_session::borrower_pool_stats() const
@@ -626,12 +630,14 @@ const Shm_session::Borrower_pool_lookup_global_stats& Shm_session::borrower_pool
 const Shm_session::Borrower_pool_stats&
   Shm_session::borrower_pool_stats_process_wide(Borrower_pool_stats_list* per_arena_stats) // Static.
 {
-  return Borrower_shm_pool_collection_repository<Arena>::get_instance().stats(per_arena_stats);
+  return detail::Borrower_shm_pool_collection_repository<Arena>::get_instance().stats(per_arena_stats);
 }
 
 void Shm_session::global_stats_reset() // Static.
 {
   using ipc::shm::arena_lend::detail::Pool_lookup_global_stats;
+  using detail::Borrower_shm_pool_collection_repository;
+
   Pool_lookup_global_stats<Arena, false>::stats_reset();
   Borrower_shm_pool_collection_repository<Arena>::get_instance().stats_reset();
 }

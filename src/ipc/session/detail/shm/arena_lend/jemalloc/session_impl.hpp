@@ -27,7 +27,7 @@
 
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc.hpp"
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp"
 #include "ipc/session/shm/arena_lend/jemalloc/error.hpp"
 #include "ipc/session/shm/arena_lend/jemalloc/jemalloc.hpp"

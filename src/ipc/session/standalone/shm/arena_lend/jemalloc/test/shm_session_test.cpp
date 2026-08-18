@@ -23,7 +23,7 @@
  * THE SOFTWARE. */
 
 #include "ipc/session/client_session.hpp"
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_shm_session.hpp"
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/test/test_shm_session_server_executor.hpp"
@@ -80,6 +80,8 @@ using Server_operation_mode = Test_shm_session_server::Operation_mode;
 using Simple_object = Test_shm_session_server_executor::Simple_object;
 using pool_id_t = ipc::shm::arena_lend::Shm_pool::pool_id_t;
 using pool_offset_t = ipc::shm::arena_lend::Shm_pool::size_t;
+using collection_id_t = detail::collection_id_t;
+using owner_id_t = detail::owner_id_t;
 
 using ipc::shm::arena_lend::Borrower_allocator_arena;
 using ipc::shm::arena_lend::Shm_pool;
@@ -90,7 +92,7 @@ using ipc::shm::arena_lend::jemalloc::Memory_manager;
  * compile-time discriminator. Note: in checks below we always use to_address_safe(), which returns null on an
  * unknown/no-longer-borrowed pool id; plain to_address() is undefined behavior in that case -- which is
  * exactly the case various checks probe for (and any check might hit, when failing). */
-using Borrower_repo = Borrower_shm_pool_collection_repository<Ipc_arena>;
+using Borrower_repo = detail::Borrower_shm_pool_collection_repository<Ipc_arena>;
 
 using flow::test::check_output;
 using ipc::test::Test_logger;

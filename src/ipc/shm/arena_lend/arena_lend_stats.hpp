@@ -264,7 +264,7 @@ struct Zombie_obj_reaper_stats
   static_assert((detail::Lend_tracker_pool::S_N_UNUSED_IDX_HINTS % 4) == 0,
                 "N_UNUSED_IDX_HINTS should be divisible by 4, if only for this stat histogram's buckets "
                   "to be nice and even.");
-  /*
+  /**
    * Histogram that records, at the start of each run through the zombie-reaping scan algorithm (see #m_scans),
    * the zombie-object-count estimate N -- excluding N=0 (no work to do; immediate exit) and excluding
    * *exhaustive* scans (see #m_exhaustive_scans): those do not read the estimate at all.
@@ -1239,8 +1239,8 @@ struct Shm_pool_info
  *     tracking inside every `allocate()` and `deallocate()` ([de]allocate buffer) call.  We stay away from
  *     doing this in Flow-IPC proper, due to the performance risk at least, but memory managers know how to do
  *     it well.
- *   - `_hi_wmark` (e.g.: #m_mapped_sz_hi_wmark) fields are not reported by memory manager directly (if they were,
- *     we'd take them!), so their semantics have the same limitation as within TL-sharded `struct`s (e.g.: see
+ *   - `_hi_wmark` (e.g.: Vaddr::m_mapped_sz_hi_wmark) fields are not reported by memory manager directly (if they
+ *     were, we'd take them!), so their semantics have the same limitation as within TL-sharded `struct`s (e.g.: see
  *     Shared_stats doc header).
  *
  * This `struct` is provider-agnostic by design: it is the stat-set of arena_lend::Memory_manager (the base

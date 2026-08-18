@@ -102,7 +102,7 @@ bool config_stats_enabled();
 
 /**
  * Returns the jemalloc page size in bytes (`arenas.page`), read once and cached (constant for the process).
- * Several jemalloc gauges (e.g. `stats.arenas.<i>.pdirty`) are denominated in pages; multiply by this to obtain
+ * Several jemalloc gauges (e.g. `stats.arenas.(i).pdirty`) are denominated in pages; multiply by this to obtain
  * bytes.
  *
  * @return See above.

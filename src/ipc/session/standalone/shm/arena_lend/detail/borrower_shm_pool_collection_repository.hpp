@@ -32,6 +32,7 @@
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
 #include "ipc/shm/arena_lend/detail/arena_lend_fwd.hpp"
 #include "ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/arena_lend_fwd.hpp"
 #include <flow/util/action_registry.hpp>
 #include <flow/log/log.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
@@ -41,7 +42,7 @@
 #include <memory>
 #include <tuple>
 
-namespace ipc::session::shm::arena_lend
+namespace ipc::session::shm::arena_lend::detail
 {
 
 // Types.
@@ -50,14 +51,6 @@ namespace ipc::session::shm::arena_lend
  * (Internal-use) Singleton repository for borrowed SHM-pool data.  All sessions (jemalloc::Shm_session) in this
  * process funnel their borrowed pool info here, enabling offset-pointer resolution (to_address(), from_address())
  * and pool-handle lifecycle management (ref-counted open/close).
- *
- * @todo ipc::session::shm::arena_lend::Borrower_shm_pool_collection_repository (among others) should be
- * officially classified an internal API (at least, per coding guide, placed in `detail/` header; optionally in `detail`
- * sub-namespace).  (E.g., its counterpart in owner-land is already
- * ipc::shm::arena_lend::detail::Owner_shm_pool_repository.)  Once `ipc::shm::arena_lend` (the SHM-arena-lend
- * module) becomes officially extensible to handle other memory-managers beyond jemalloc, thus allowing for user's own
- * arena-lending SHM-provider impls (not just SHM-jemalloc), then *maybe* move this back out of `detail`, if
- * indeed referencing it is expected in that case.  (As of this writing we estimate it should not be.)
  *
  * @note We mention #Uniq_collection_id below... though as of this writing it is not used in the actual public
  *       API.  When we do this, we just mean an (`owner_id_t`, `collection_id_t`) pair.  Such a pair ultra-uniquely
@@ -1087,4 +1080,4 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::stats_reset()
   }
 } // Borrower_shm_pool_collection_repository::stats_reset()
 
-} // namespace ipc::session::shm::arena_lend
+} // namespace ipc::session::shm::arena_lend::detail

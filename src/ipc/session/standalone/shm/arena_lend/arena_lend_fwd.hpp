@@ -26,9 +26,6 @@
 #pragma once
 
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
-#include "ipc/util/util_fwd.hpp"
-#include "ipc/util/shared_name_fwd.hpp"
-#include "ipc/shm/stl/stl_fwd.hpp"
 #include <vector>
 #include <memory>
 
@@ -36,20 +33,6 @@ namespace ipc::session::shm::arena_lend
 {
 
 // Types.
-
-// Find doc headers near the bodies of these compound types.
-
-template<typename Shm_arena_t>
-class Borrower_shm_pool_collection_repository;
-
-/// Short-hand for util::Shared_name; used in particular for SHM pool names at least.
-using Shared_name = util::Shared_name;
-
-/// Identifier type for a shared memory pool collection.
-using collection_id_t = ipc::shm::arena_lend::collection_id_t;
-
-/// Alias for an identifier of the owner (essentially namespace of `collection_id_t`s) of shared information.
-using owner_id_t = ipc::shm::arena_lend::owner_id_t;
 
 /**
  * Canonical short-hand for a list of per-arena `stat::Borrower_pool_stats`, as produced by the borrower-side

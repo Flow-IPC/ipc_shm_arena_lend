@@ -33,7 +33,7 @@
 #include "ipc/shm/arena_lend/detail/arena_lend_fwd.hpp"
 #include "ipc/shm/arena_lend/detail/stats.hpp"
 #include "ipc/shm/shm_stats.hpp"
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/util/process_credentials.hpp"
 #include "ipc/common.hpp"
 #include <flow/util/linked_hash_map.hpp>
@@ -88,7 +88,7 @@ namespace ipc::shm::arena_lend::detail
  *     arena type (jemalloc::Ipc_arena in this case) and particular arena of that type as a given... then contemplate
  *     various (non-`static`) APIs.
  *
- * A particular `Shm_arena` is specified to our non-`static` APIs as either a `Shm_arena*` or a #collection_id_t.
+ * A particular `Shm_arena` is specified to our non-`static` APIs as either a `Shm_arena*` or a `collection_id_t`.
  * Reminder: a collection ID, as pertains to SHM-arena owned by *this* process, uniquely identifies a `Shm_arena`.
  * (A given `collection_id_t` value might equal some that of some other arena owned by/allocating in another process;
  * but in the context of Thread_lcl_obj_db_admin -- as it is an *admin*, meaning owner-oriented, module -- we
@@ -438,6 +438,7 @@ public:
    *
    * @param collection_id
    *        See constructing_obj().  This arena must not be shutting down.
+   * @return See above.
    */
   stat::Sharded_stats* stats_update_pre_consumption(collection_id_t collection_id);
 
@@ -507,7 +508,7 @@ private:
     std::optional<Lend_tracker_pool> m_lend_tracker_pool;
 
     /**
-     * Map from use-count-slot index to #Object, in insertion (construction) order.  The insertion-order
+     * Map from use-count-slot index to Object, in insertion (construction) order.  The insertion-order
      * property (via `Linked_hash_map`) enables the oldest-to-newest scan in unused_obj_scan():
      * older objects are likelier to have reached use-count zero.
      */
@@ -762,7 +763,7 @@ private:
   mutable flow::util::Mutex_non_recursive m_collection_dbs_mutex;
 
   /**
-   * Per-arena tracking map: keyed by collection-ID, each value is the arena's #Collection_db
+   * Per-arena tracking map: keyed by collection-ID, each value is the arena's Collection_db
    * containing the Lend_tracker_pool and the set of live objects constructed from that arena
    * in this thread.  Entries are created on first constructing_obj() for a given arena and
    * removed by forget_shm_arena().  In addition, inactive_arenas_scan() destroys Collection_db::m_lend_tracker_pool
@@ -809,7 +810,7 @@ private:
    * of perf-relevance).  Consider: every this_thread_piggy_scan(), called on ~every SHM-jemalloc API,
    * opportunistically, must:
    *   -# loop through #m_collection_dbs;
-   *      -# for each arena (#collection_id_t = integer = the key), grab the mapped Collection_db;
+   *      -# for each arena (`collection_id_t` = integer = the key), grab the mapped Collection_db;
    *      -# then access its Lend_tracker_pool, grab the aux-pool base-vaddr, at a certain constant offset
    *         grab an integer (Lend_tracker_pool::n_unused());
    *      -# then based on the value of that integer, do a roughly proportional-to-it amount of further work.
@@ -839,7 +840,7 @@ private:
    *
    * The problem: Consider stat-consumption from some thread U, while a thread-local `*this` corresponds to
    * thread V.  If we simply had a single stat::Sharded_stats in `*this`: no issue; but we have N of them:
-   * one per arena (per #collection_id_t / Collection_db pair).  In fact stat-consumption executes for a
+   * one per arena (per `collection_id_t`/Collection_db pair).  In fact stat-consumption executes for a
    * given #Shm_arena A of the stat-consumption API's caller's choice; so only a particular Collection_db C
    * is of interest.  Hence, in U, that code must grab V's (among others) Collection_db C from
    * `this->m_collection_dbs`; that is if there even *is* a C (which is the case only if
@@ -1060,7 +1061,7 @@ public:
    *
    * ### Impl ##
    * See inside; but in short for your reading convenience: We could do it synchronously by
-   * performing a `Thread_local_state_registry::while_locked()` + `...::State_per_thread_map` and
+   * performing a `Thread_local_state_registry::while_locked()` + `"...::State_per_thread_map"` and
    * performing the deletion og the given arena's stuff from each `*this`'s #m_per_arena_stats_shards -- but
    * then the key-set of a `*this` would be potentially modified from not-the-owning-thread; which
    * would mean #m_per_arena_stats_shards_mutex would need to be locked even whenever merely searching
@@ -2879,7 +2880,7 @@ template<typename Shm_arena_t>
 void Thread_lcl_obj_db_client<Shm_arena_t>::disposing_obj(pool_id_t lend_tracker_pool_id, use_ct_idx_t use_ct_idx,
                                                           owner_id_t owner_id, collection_id_t collection_id)
 {
-  using ipc::session::shm::arena_lend::Borrower_shm_pool_collection_repository;
+  using ipc::session::shm::arena_lend::detail::Borrower_shm_pool_collection_repository;
   using flow::error::Runtime_error;
 
   // This is the borrower-side disposer action.

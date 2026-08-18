@@ -27,7 +27,7 @@
 
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/jemalloc_fwd.hpp"
 #include "ipc/session/standalone/shm/arena_lend/ipc_shm_message.capnp.h"
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/stat_info_dump.hpp"
@@ -222,7 +222,7 @@ public:
   template<typename T>
   using Borrower_arena_allocator
     = ipc::shm::stl::Stateless_allocator
-        <T, ipc::shm::arena_lend::Borrower_allocator_arena<Borrower_shm_pool_collection_repository<Arena>>>;
+        <T, ipc::shm::arena_lend::Borrower_allocator_arena<detail::Borrower_shm_pool_collection_repository<Arena>>>;
 
   /// Alias for a stats/info bundle type.
   using Info_dump = ipc::shm::arena_lend::jemalloc::stat::Shm_session_info_dump;
@@ -610,12 +610,16 @@ protected:
   using pool_id_t = Shm_pool::pool_id_t;
   /// Short-hand for pool offset type.
   using pool_offset_t = Shm_pool::size_t;
+  /// Short-hand for pool-collection (a/k/a arena) ID type.
+  using collection_id_t = ipc::shm::arena_lend::collection_id_t;
+  /// Short-hand for util::Shared_name; used in particular for SHM pool names at least.
+  using Shared_name = ipc::shm::arena_lend::Shared_name;
 
   /**
    * Alias for a structured channel for our internal use.
    *
    * ### Rationale for alias target ###
-   * The basic choices are transport::struc::Channel_via_heap and `transport::struc::shm::*::Channel`.
+   * The basic choices are transport::struc::Channel_via_heap and `"transport::struc::shm::*::Channel"`.
    * The latter is pretty crazy.  That'd be, as of this writing, either
    * transport::struc::shm::arena_lend::jemalloc::Channel
    * (infinite compile-time recursion!) or transport::struc::shm::classic::Channel (which is somewhat more
@@ -1056,7 +1060,7 @@ Shm_session::Handle<T> Shm_session::borrow_object(const Blob& blob) const
   using ipc::shm::arena_lend::detail::Thread_lcl_obj_db_admin;
   using ipc::shm::arena_lend::detail::construct_with_borrower_obj_disposer;
   using Borrower_shm_pool_collection_repository
-    = ipc::session::shm::arena_lend::Borrower_shm_pool_collection_repository<Arena>;
+    = ipc::session::shm::arena_lend::detail::Borrower_shm_pool_collection_repository<Arena>;
   using std::memcpy;
 
   Thread_lcl_obj_db_admin<Arena>::this_thread_piggy_scan(); // Opportunistic!

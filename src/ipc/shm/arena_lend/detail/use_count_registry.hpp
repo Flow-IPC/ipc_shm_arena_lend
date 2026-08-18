@@ -58,7 +58,7 @@ namespace ipc::shm::arena_lend::detail
  * ### How to use ###
  * Make a `basic_managed_shared_memory` M in the normal way but with Use_count_registry as a template parameter.
  * Probably you'll want to use `null_index` as a template parameter as well; though maybe not (not our business).
- * Size the segment `decltype(M)::segment_manager::get_min_size() + Use_count_registry::S_ASSUMED_BASE_OFFSET`
+ * Size the segment `"decltype(M)::segment_manager::get_min_size() + Use_count_registry::S_ASSUMED_BASE_OFFSET"`
  * (or larger, but there's no point).
  *
  * We assume you'll want a single `Metadata` struct which is the only thing a `*this` will allocate() other

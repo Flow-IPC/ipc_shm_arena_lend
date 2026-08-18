@@ -488,7 +488,8 @@ set(HDRS
     ipc/session/shm/arena_lend/jemalloc/session.hpp
     ipc/session/shm/arena_lend/jemalloc/session_server.hpp
     ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp
-    ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp
+    ipc/session/standalone/shm/arena_lend/detail/arena_lend_fwd.hpp
+    ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp
     ipc/session/standalone/shm/arena_lend/jemalloc/jemalloc_fwd.hpp
     ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp
     ipc/shm/arena_lend/arena_lend_fwd.hpp

@@ -97,7 +97,7 @@ using pool_id_t = uint32_t;
  * and #use_ct_idx_t to know which atomic integer in memory to increment (session `lend_object()`) or decrement
  * (`shared_ptr` disposers) or initialize to 1 (arena `construct()`).
  *
- * If the given aux pool handle has not yet been opened on-demand, then a #collection_id_t (arena/collection ID) is
+ * If the given aux pool handle has not yet been opened on-demand, then a `collection_id_t` (arena/collection ID) is
  * also required, so as to look up that arena's *pool name base* to which to append pool ID to get the pool name.
  * As for a given arena's pool name base, from SHM-arena-lending SHM-provider module's PoV it comes form the user
  * when issuing `Arena::create()` (e.g.: jemalloc::Ipc_arena::create()).  ipc::session::shm::arena_lend
@@ -377,7 +377,7 @@ void sharded_stats_impl(const Shm_arena& shm_arena, Sharded_stats* target_stats)
  *     - 1 `M.lock()` for `_admin<Arena_type2>`.
  *     - 1 `M.lock()` for `_client<Arena_type2>`.
  *     - ...
- *  - Boost machinery executes the `tsp` cleanups.  For us: in some arbitrary order:
+ *   - Boost machinery executes the `tsp` cleanups.  For us: in some arbitrary order:
  *     - For `_admin<Arena_type1>`:
  *       - `Thread_local_state_registry<Arena_type1>` locks registry, removes, unlocks.  Gap begins here.
  *       - It calls `~_admin()`.   Gap continues, until the shards are parked where they must during this dtor.
