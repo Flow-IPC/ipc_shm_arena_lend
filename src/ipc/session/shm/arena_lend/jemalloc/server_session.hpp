@@ -30,6 +30,8 @@
 #include "ipc/session/detail/shm/arena_lend/jemalloc/server_session_impl.hpp"
 #include "ipc/session/shm/arena_lend/jemalloc/session.hpp"
 #include "ipc/session/server_session.hpp"
+#include "ipc/transport/struc/shm/shm_fwd.hpp"
+#include "ipc/transport/transport_fwd.hpp"
 #include <boost/move/make_unique.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc
@@ -240,6 +242,28 @@ public:
 
   /// Short-hand for base class member alias Session_mv::Structured_msg_builder_config.
   using Structured_msg_builder_config = typename Base::Structured_msg_builder_config;
+
+  /**
+   * Server_session::Vat_network and `Client_session::Vat_network` are reasonable concrete types
+   * of template transport::struc::shm::rpc::Session_vat_network for an ipc::session user to use on opposing
+   * sides of a session; use the mainstream-form ctor to straightforwardly construct your zero-copy-enabled
+   * `Vat_network` (from a `*this`) for blazing-fast capnp-RPC.
+   */
+  using Vat_network = typename Base::Vat_network;
+
+  /// You may disregard.
+  using Async_io_obj = transport::Null_peer;
+  /// Useful for generic programming, the `sync_io`-pattern counterpart to `*this` type.
+  using Sync_io_obj = sync_io::Server_session_adapter<Server_session>;
+
+  // Constants.
+
+  /**
+   * Implements Session API per contract: equals `true`.
+   * @internal
+   * This is explicitly here (it's inherited anyway) mostly to document it as being available at this level.
+   */
+  static constexpr bool S_IS_SRV_ELSE_CLI = Base::S_IS_SRV_ELSE_CLI;
 
   // Constructors/destructor.
 
