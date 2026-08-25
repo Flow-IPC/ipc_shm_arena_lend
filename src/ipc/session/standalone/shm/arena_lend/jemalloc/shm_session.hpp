@@ -351,7 +351,7 @@ public:
    *   - lend_arena() itself tries to send internal `LendArena` message over `shm_channel`; the send fails
    *     synchronously.  Thread: end user thread.
    *     - Result: post `shm_channel_error_handler(E)` onto thread W to execute ASAP.  lend_arena() returns false.
-   *   - `Arena::allocate()`, for an #Arena that has been successfuly `lend_arena()`ed earlier, is told
+   *   - `Arena::allocate()`, for an #Arena that has been successfully `lend_arena()`ed earlier, is told
    *     synchronously (by memory manager jemalloc) that a new SHM-pool is required, so it created it and informed
    *     every `Shm_session` (including `*this`) through which it has been let that this occurred, and that it
    *     must inform the opposing process(es), receive ack(s), and only then let `Arena::allocate()` return.

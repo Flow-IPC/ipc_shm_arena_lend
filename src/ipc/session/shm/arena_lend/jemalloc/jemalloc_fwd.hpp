@@ -196,7 +196,7 @@ namespace ipc::session::shm::arena_lend::jemalloc::rpc
  * Why this value for the alias and the ones nearby?  Answer: See shm::classic::rpc::Client_session doc header;
  * same deal here.
  */
-template<schema::MqType S_MQ_TYPE_OR_NONE = schema::MqType::NONE>
+template<session::schema::MqType S_MQ_TYPE_OR_NONE = session::schema::MqType::NONE>
 using Client_session = jemalloc::Client_session<S_MQ_TYPE_OR_NONE, true>;
 
 /**
@@ -207,7 +207,7 @@ using Client_session = jemalloc::Client_session<S_MQ_TYPE_OR_NONE, true>;
  * @tparam S_MQ_TYPE_OR_NONE
  *         See #Client_session.
  */
-template<schema::MqType S_MQ_TYPE_OR_NONE = schema::MqType::NONE>
+template<session::schema::MqType S_MQ_TYPE_OR_NONE = session::schema::MqType::NONE>
 using Session_server = jemalloc::Session_server<S_MQ_TYPE_OR_NONE, true>;
 
 /**
@@ -217,7 +217,7 @@ using Session_server = jemalloc::Session_server<S_MQ_TYPE_OR_NONE, true>;
  * @tparam S_MQ_TYPE_OR_NONE
  *         See #Client_session.
  */
-template<schema::MqType S_MQ_TYPE_OR_NONE = schema::MqType::NONE>
+template<session::schema::MqType S_MQ_TYPE_OR_NONE = session::schema::MqType::NONE>
 using Server_session = jemalloc::Server_session<S_MQ_TYPE_OR_NONE, true>;
 
 } // namespace ipc::session::shm::arena_lend::jemalloc::rpc

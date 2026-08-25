@@ -368,7 +368,7 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
 
     /* We promised to dispose of this at the proper time.  Since we won't create the Channel that would do it,
      * let's do it directly. */
-    local_hndl.release();
+    local_hndl.close();
 
     // See @todo on this Code; in short if create() emitted an Error_code, we'd just emit that instead here.
     return error::Code::S_SHM_ARENA_CREATION_FAILED;

@@ -389,7 +389,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
 
         // That's the entire payload of the in-message.
         auto local_hndl_or_null = msg->emit_native_handle_or_null();
-        // Unless null we must now either .release() it or give it to something (Channel) that'll own it.
+        // Unless null we must now either .close() it or give it to something (Channel) that'll own it.
 
         if (local_hndl_or_null.null())
         {
@@ -422,7 +422,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
         auto ack = master_channel->create_msg();
         if ((!master_channel->send(&ack, msg.get(), &err_code)) || err_code)
         {
-          local_hndl_or_null.release(); // Else will leak.
+          local_hndl_or_null.close(); // Else will leak.
 
           if (err_code)
           {
