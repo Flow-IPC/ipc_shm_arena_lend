@@ -94,7 +94,6 @@ using ipc::shm::arena_lend::jemalloc::Memory_manager;
  * exactly the case various checks probe for (and any check might hit, when failing). */
 using Borrower_repo = detail::Borrower_shm_pool_collection_repository<Ipc_arena>;
 
-using flow::test::check_output;
 using ipc::test::Test_logger;
 using flow::test::to_underlying;
 using ipc::session::schema::MqType;
@@ -2284,18 +2283,19 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
      * In the external-process variant we can be more specific: the owner process' exit removed the
      * lend-tracker pool (which holds the use-count) from the file-system, and this thread has never opened
      * that pool; so this release must take the tolerant slow path -- discover the pool is gone, conclude the
-     * object is moot, quietly no-op -- and we assert exactly that via its log phrase. (In-process, the timing
-     * of the owner-side teardown steps is not deterministic enough to predict which path the release takes;
-     * there we settle for its not blowing up.) */
+     * object is moot, quietly no-op -- and we assert exactly that via the benign-open-failure stat, which
+     * that path bumps.  (In-process, the timing of the owner-side teardown steps is not deterministic enough
+     * to predict which path the release takes; there we settle for its not blowing up.)
+     *
+     * Attn: Do not wrap the release in check_output() to assert on the log-phrase instead: that helper swaps
+     * std::cout's streambuf for the duration, while the session-teardown threads (W et al) are concurrently
+     * logging through that same std::cout -- a data race that can corrupt the heap. */
     object.reset(); // (Not the last handle: the event listener holds another. So this much is unremarkable.)
     if (server_is_external)
     {
       const auto open_fail_ct_pre
         = Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load();
-      EXPECT_TRUE(check_output([&]() { event_listener.release_object(); },
-                               std::cout,
-                               "lend-tracker-pool has been removed from the file-system"));
-      // The benign-open-failure stat must reflect the same event the log phrase just showed.
+      event_listener.release_object();
       EXPECT_EQ(Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load(),
                 open_fail_ct_pre + 1);
     }
@@ -2415,15 +2415,18 @@ void execute_crash_tests(Shm_session_test& test_harness)
       EXPECT_EQ(message, Test_shm_session_server_executor::S_MESSAGE);
     }
 
-    /* Doc header item 2: release must work, and via the normal path -- assert the tolerant-disposer
-     * pool-is-gone phrase did *not* appear (the crash never unlinked the lend-tracker pool), and neither
-     * did the benign-open-failure stat budge. */
+    /* Doc header item 2: release must work, and via the normal path -- assert the benign-open-failure stat
+     * did *not* budge (the tolerant-disposer path -- taken only if the crash had unlinked the lend-tracker
+     * pool, which it cannot have -- would bump it).
+     *
+     * Attn: Do not wrap the release in check_output() to also assert on the log-phrase: that helper swaps
+     * std::cout's streambuf for the duration, while the session-teardown threads (W et al) are concurrently
+     * logging through that same std::cout -- a data race that can corrupt the heap.  The stat assertion
+     * covers the intent without that hazard. */
     object.reset(); // (Not the last handle: the event listener holds another.)
     const auto open_fail_ct_pre
       = Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load();
-    EXPECT_FALSE(check_output([&]() { event_listener.release_object(); },
-                              std::cout,
-                              "lend-tracker-pool has been removed from the file-system"));
+    event_listener.release_object();
     EXPECT_EQ(Ipc_arena::obj_db_aux_pool_global_stats().m_client_tl_aux_pool_hndl_open_fail_count.load(),
               open_fail_ct_pre);
 
