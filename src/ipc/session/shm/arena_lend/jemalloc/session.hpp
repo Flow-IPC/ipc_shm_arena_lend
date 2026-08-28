@@ -28,6 +28,7 @@
 #include "ipc/shm/arena_lend/jemalloc/jemalloc.hpp"
 #include "ipc/shm/stl/stateless_allocator.hpp"
 #include "ipc/transport/struc/shm/shm_fwd.hpp"
+#include "ipc/transport/struc/shm/rpc/rpc_fwd.hpp"
 #include "ipc/transport/transport_fwd.hpp"
 
 namespace ipc::session::shm::arena_lend::jemalloc

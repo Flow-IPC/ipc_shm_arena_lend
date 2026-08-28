@@ -51,7 +51,7 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *
  * ### Implementation ###
  * See similar section of session::Session_server.  It explains why we sub-class Session_server_impl and even how
- * how that's used for this SHM-jemalloc scenario.  To reiterate:
+ * that's used for this SHM-jemalloc scenario.  To reiterate:
  *
  * We use 2 of 2 available customization points of `private` super-class Session_server_impl.  We:
  *   - pass-up a `per_app_setup_func()` that, given the new session's desired Client_app, creates-if-needed the per-app
