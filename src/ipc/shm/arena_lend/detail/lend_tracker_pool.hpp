@@ -458,6 +458,30 @@ private:
    * the design of the applications and all.  (We -- ygoldfel and co. -- discovered this in practice; and raised
    * the width of this value and hence the value Use_count_registry::S_ALLOC_SZ from 1 byte to 4 bytes.)
    *
+   * ### Formal status: typed access to SHM ###
+   * `Atomic_use_ct`s live in a SHM pool.  We routinely use the pattern wherein we have a `use_ct_idx_t` as input,
+   * from who knows where (received over an IPC transport, quite likely); then we call use_ct_idx_to_ptr() on it;
+   * this computes the location of that use-count slot, as a vaddr `Atomic_use_ct*` located inside the SHM-pool
+   * bounds; and then we dereference this `atomic` and do things like `auto use_ct_prev = (...).fetch_sub(1)` to it.
+   * Thing is, given the computation in use_ct_idx_ptr(), this breaks aliasing guidelines: a byte address is
+   * computed, `reinterpret_cast<>`ed to an unrelated pointer type `Atomic_use_ct*`, and then dereferenced.
+   * Is it fine + is there any alternative?  Short answer: in practice yes and no respectively.  Longer answer:
+   *
+   * Omitted for now.  It is notoriously difficult not to accidentally lie when talking about the C++ abstract
+   * machine.  We'd like to fill this in with formally and practically accurate verbiage (to-do below), but for now
+   * these takeaways:
+   *   - The aforementioned pattern (including the dodgy-looking `reinterpret_cast<>` followed by deref) is
+   *     reasonable.
+   *   - There is no alternative -- such as the usual suggestions (`memcpy()`, placement-new) -- that applies here.
+   *   - We properly `construct_at()` each `Atomic_use_ct` in the owner process; further modifications, regardless of
+   *     process, are all lock-free (`static_assert()` nearby).
+   *
+   * @note These notes may equally apply to `atomic`s in `struct` Metadata; Metadata::m_n_unused in particular
+   *       is important.
+   *
+   * @todo In Lend_tracker_pool::Atomic_use_ct doc header, explain formally and practically how accesses to these
+   * values work from the point C++ abstract-machine PoV.
+   *
    * @todo The width of Lend_tracker_pool::Atomic_use_ct and the corresponding constant Use_count_registry::S_ALLOC_SZ
    * is set to 4 bytes as of this writing; but it may be prudent to make this configurable at compile-time instead,
    * to allow for the trade-off discussed in nearby "Tuning" doc header section.
@@ -466,6 +490,10 @@ private:
   static_assert(sizeof(Atomic_use_ct::value_type) == Use_count_registry::S_ALLOC_SZ,
                 "Size of 1 slot in the use-count-storing custom pool-allocator must equal the size of the value "
                   "we in fact store in each such slot.");
+  static_assert(Atomic_use_ct::is_always_lock_free,
+                "Atomic_use_ct must be lock-free: a non-lock-free atomic is implemented via per-process lock state "
+                  "which cannot work across processes; and lock-freedom implies address-freedom in practice; "
+                  "address-freedom makes our cross-process (SHM) use-count ops work.  See also its doc header.");
 
   /// Type of #m_pool.
   using Pool = ::ipc::bipc::basic_managed_shared_memory<char, Use_count_registry, ::ipc::bipc::null_index>;
@@ -495,6 +523,7 @@ private:
      * this procedure; that is fine: we'll get it next time then, when that same algorithm runs opportunistically.)
      */
     std::atomic<unsigned int> m_n_unused{0};
+    static_assert(decltype(m_n_unused)::is_always_lock_free, "Another atomic counter in SHM.");
 
     /**
      * Essential for the perf of related algorithms, this stores (a limited number of) indices to unused-referencing
@@ -534,6 +563,8 @@ private:
      * #S_N_UNUSED_IDX_HINTS is kept low, particularly.
      */
     boost::array<std::atomic<use_ct_idx_t>, S_N_UNUSED_IDX_HINTS> m_unused_idx_hints;
+    static_assert(decltype(m_unused_idx_hints)::value_type::is_always_lock_free,
+                  "Another atomic counter in SHM.");
   }; // struct Metadata
 
   // Friends.

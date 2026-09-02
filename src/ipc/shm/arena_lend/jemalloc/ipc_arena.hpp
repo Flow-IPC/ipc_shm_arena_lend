@@ -39,6 +39,7 @@
 #include "ipc/util/util.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include <flow/log/log.hpp>
+#include <flow/util/util.hpp>
 #include <unordered_map>
 #include <map>
 #include <set>
@@ -1316,6 +1317,7 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Args&&... args)
   using arena_lend::detail::Thread_lcl_obj_db_admin;
   using arena_lend::detail::use_ct_idx_t;
   using Disposer = arena_lend::detail::Owner_obj_disposer_and_mdt<Ipc_arena>;
+  using flow::util::construct_at;
   constexpr bool HAS_TRIVIAL_DTOR = std::is_trivially_destructible_v<T>;
 
   Thread_lcl_obj_db_admin<Ipc_arena>::this_thread_piggy_scan(); // Opportunistic!
@@ -1361,12 +1363,12 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Args&&... args)
   auto* const obj = static_cast<T*>(addr);
   if constexpr(HAS_TRIVIAL_DTOR)
   {
-    util::construct_at(obj, std::forward<Args>(args)...);
+    construct_at(obj, std::forward<Args>(args)...);
   }
   else
   {
     Activator ctx{this};
-    util::construct_at(obj, std::forward<Args>(args)...);
+    construct_at(obj, std::forward<Args>(args)...);
   }
 
   /* Recommend reading Disposer a/k/a Owner_obj_disposer_and_mdt class doc header; it is quite instructive

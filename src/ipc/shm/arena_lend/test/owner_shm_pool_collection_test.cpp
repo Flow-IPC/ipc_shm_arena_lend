@@ -34,6 +34,7 @@
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
 #include "ipc/test/test_logger.hpp"
 #include "ipc/test/test_common_util.hpp"
+#include <flow/util/util.hpp>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/types.h>
@@ -287,7 +288,7 @@ public:
     auto* const addr = allocate(sizeof(T));
     if (!addr) { return nullptr; }
     auto* const obj = static_cast<T*>(addr);
-    util::construct_at(obj, std::forward<Args>(args)...);
+    flow::util::construct_at(obj, std::forward<Args>(args)...);
     return std::shared_ptr<T>(obj, Object_deleter(this));
   }
 

@@ -35,6 +35,7 @@
 #include <boost/container/flat_map.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <type_traits>
+#include <cstdint>
 
 namespace ipc::shm::arena_lend::detail
 {
@@ -514,8 +515,8 @@ void Thread_local_pool_lookup_rev<Repository_t, LOOKUP_CAN_FAIL, Shm_arena_t>::l
   --it;
 
   const auto& pool_data = it->second;
-  const auto addr_ptr = static_cast<const uint8_t*>(address);
-  const auto pool_base = static_cast<const uint8_t*>(it->first);
+  const auto addr_ptr = reinterpret_cast<uintptr_t>(address);
+  const auto pool_base = reinterpret_cast<uintptr_t>(it->first);
 
   if constexpr(S_LOOKUP_CAN_FAIL)
   {

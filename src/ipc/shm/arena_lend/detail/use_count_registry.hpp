@@ -80,7 +80,7 @@ namespace ipc::shm::arena_lend::detail
  * `M->construct<T>(...)(...)` stuff (and so on).  That said, with `null_index`, one might guess they can
  * still use `M->construct<T>(anonymous_instance)(...)` -- its being anonymous and all -- but no; that
  * does not compile; apparently even anonymous-instance things still require a real index.
- * Still, with util::construct_at() utility it's close to the same level of syntactic sugar anyway.
+ * Still, with `flow::util::construct_at()` utility it's close to the same level of syntactic sugar anyway.
  * (In C++20 it is available as `std::construct_at()`, but as of this writing we are on C++17.)
  *
  * ### Resource use: RAM ###
@@ -135,10 +135,6 @@ namespace ipc::shm::arena_lend::detail
  * a "playing field" divided into smaller *quanta*, with more joining the field
  * if needed).  The rest can likely be gleaned by just reading the code, starting with the API and then the
  * `private: // Data.` area.
- *
- * @todo Tactically, Use_count_registry does much pointer arithmetic such as add/subtract/compare on actual
- *       pointer types, particularly `uint8_t`; but it is formally safer (details omitted here) to convert
- *       to `uintptr_t` (an integer type that can hold ptr vals) before doing such math.
  */
 class Use_count_registry :
   private boost::noncopyable

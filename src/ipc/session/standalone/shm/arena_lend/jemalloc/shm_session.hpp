@@ -987,11 +987,12 @@ private:
 template<typename T>
 Shm_session::Blob Shm_session::lend_object(const Handle<T>& object)
 {
-  using flow::error::Runtime_error;
   using Owner_shm_pool_repository = ipc::shm::arena_lend::detail::Owner_shm_pool_repository<Arena>;
   using ipc::shm::arena_lend::detail::Thread_lcl_obj_db_admin;
   using Thread_lcl_obj_db_client = ipc::shm::arena_lend::detail::Thread_lcl_obj_db_client<Arena>;
   using ipc::shm::arena_lend::detail::Owner_obj_disposer_and_mdt;
+  using flow::error::Runtime_error;
+  using flow::util::default_init_at;
 
   Thread_lcl_obj_db_admin<Arena>::this_thread_piggy_scan(); // Opportunistic!
 
@@ -1029,7 +1030,13 @@ Shm_session::Blob Shm_session::lend_object(const Handle<T>& object)
   const auto collection_id = shm_arena.get_id();
   const auto use_ct_idx = disposer->m_use_ct_idx;
   const auto lend_tracker_pool_id = disposer->m_lend_tracker_pool_id;
+
   const auto object_handle = reinterpret_cast<Shm_object_handle*>(blob.data());
+  /* No-op in itself (does not zero members; in our case it'd be wasteful: lend_object() can be a hot path).
+   * Informs compiler this is a genuine Shm_object_handle, so we can do the following assignments without fear
+   * of breaking aliasing rules. */
+  default_init_at(object_handle);
+
   object_handle->m_collection_id = collection_id;
   object_handle->m_lend_tracker_pool_id = lend_tracker_pool_id;
   object_handle->m_use_ct_idx = use_ct_idx;
@@ -1077,8 +1084,7 @@ Shm_session::Handle<T> Shm_session::borrow_object(const Blob& blob) const
   // else
 
   /* memcpy() it out of there: the source address may not be aligned.  (In many APIs such things are assumed as a
-   * matter of course, but as `blob` may be IPCed-over to us via any technique, we're being
-   * extra defensive.) */
+   * matter of course, but as `blob` may be IPCed-over to us via any technique, we're being extra defensive.) */
   Shm_object_handle object_handle;
   memcpy(&object_handle, blob.const_data(), sizeof(object_handle));
 

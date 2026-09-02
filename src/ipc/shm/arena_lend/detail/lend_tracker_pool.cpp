@@ -29,7 +29,9 @@
 #include "ipc/util/detail/util.hpp"
 #include "ipc/shm/classic/error.hpp"
 #include "ipc/shm/classic/pool_arena.hpp"
+#include <flow/util/util.hpp>
 #include <limits>
+#include <cstdint>
 
 namespace ipc::shm::arena_lend::detail
 {
@@ -47,6 +49,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
   using util::Permissions;
   using flow::util::stat::fetch_add;
   using flow::util::stat::update_hi_wmark;
+  using flow::util::construct_at;
   using boost::io::ios_all_saver;
 
   const auto POOL_SZ = Pool::segment_manager::get_min_size() + Use_count_registry::S_ASSUMED_BASE_OFFSET;
@@ -77,7 +80,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
 
   // Cannot do the following due to null_index: construct<Metadata>(::ipc::bipc::anonymous_instance)().
   m_metadata = static_cast<decltype(m_metadata)>(pool_allocate(sizeof(*m_metadata)));
-  util::construct_at(m_metadata);
+  construct_at(m_metadata);
 
   /* This atomic<uint> m_metadata->m_n_unused is constructed via atomic<uint>{0} (see Metadata definition).
    * Thus omitting: m_metadata->m_n_unused = 0; */
@@ -88,7 +91,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
   auto& hints = m_metadata->m_unused_idx_hints;
   for (auto hint = hints.begin(); hint != hints.end(); ++hint)
   {
-    util::construct_at(hint, 0);
+    construct_at(hint, 0);
   }
 
   assert((m_metadata == m_pool->get_segment_manager()->get_memory_algorithm().get_metadata<Metadata>())
@@ -174,6 +177,7 @@ bool Lend_tracker_pool::dead() const
 
 use_ct_idx_t Lend_tracker_pool::use_count_new()
 {
+  using flow::util::construct_at;
   using std::exception;
 
   Atomic_use_ct* use_ct_ptr{};
@@ -194,7 +198,7 @@ use_ct_idx_t Lend_tracker_pool::use_count_new()
   }
   assert(use_ct_ptr && "allocate() would have thrown (with WARNING logged), else should have returned non-null.");
 
-  util::construct_at(use_ct_ptr, 1);
+  construct_at(use_ct_ptr, 1);
 
   const auto idx = use_ct_ptr_to_idx(use_ct_ptr);
   if (!skip_fast_path_verbose_logging())
@@ -456,8 +460,8 @@ unsigned int Lend_tracker_pool::use_count(use_ct_idx_t use_ct_idx) const
 use_ct_idx_t Lend_tracker_pool::use_ct_ptr_to_idx(const Atomic_use_ct* use_ct_ptr) const
 {
   constexpr auto USE_CT_SZ = static_cast<use_ct_idx_t>(sizeof(Atomic_use_ct));
-  return static_cast<use_ct_idx_t>(reinterpret_cast<const uint8_t*>(use_ct_ptr)
-                                   - reinterpret_cast<const uint8_t*>(m_metadata))
+  return static_cast<use_ct_idx_t>(reinterpret_cast<uintptr_t>(use_ct_ptr)
+                                   - reinterpret_cast<uintptr_t>(m_metadata))
          / USE_CT_SZ;
 }
 
@@ -465,7 +469,7 @@ Lend_tracker_pool::Atomic_use_ct* Lend_tracker_pool::use_ct_idx_to_ptr(use_ct_id
 {
   constexpr auto USE_CT_SZ = static_cast<use_ct_idx_t>(sizeof(Atomic_use_ct));
   return reinterpret_cast<Atomic_use_ct*>
-           (reinterpret_cast<int8_t*>(m_metadata)
+           (reinterpret_cast<uintptr_t>(m_metadata)
             + (use_ct_idx * USE_CT_SZ));
 }
 
