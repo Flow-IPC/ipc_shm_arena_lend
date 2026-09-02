@@ -300,15 +300,15 @@ public:
    *
    * @tparam T
    *         The object type to be created.
-   * @tparam Args
+   * @tparam Ctor_args
    *         The parameter types that are passed to the constructor of T.
-   * @param args
+   * @param ctor_args
    *        The arguments passed to the constructor of T.
    *
    * @return A shared pointer to an object created in shared memory.
    */
-  template<typename T, typename... Args>
-  Handle<T> construct(Args&&... args);
+  template<typename T, typename... Ctor_args>
+  Handle<T> construct(Ctor_args&&... ctor_args);
 
   /**
    * Performs a non-garbage-collected allocation of a buffer in SHM.
@@ -1311,13 +1311,13 @@ private:
 
 // Template implementations.
 
-template<typename T, typename... Args>
-Ipc_arena::Handle<T> Ipc_arena::construct(Args&&... args)
+template<typename T, typename... Ctor_args>
+Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
 {
   using arena_lend::detail::Thread_lcl_obj_db_admin;
   using arena_lend::detail::use_ct_idx_t;
   using Disposer = arena_lend::detail::Owner_obj_disposer_and_mdt<Ipc_arena>;
-  using flow::util::construct_at;
+  // using flow::util::construct_at; // C++20 => can conflict with incidentally included std:: counterpart.
   constexpr bool HAS_TRIVIAL_DTOR = std::is_trivially_destructible_v<T>;
 
   Thread_lcl_obj_db_admin<Ipc_arena>::this_thread_piggy_scan(); // Opportunistic!
@@ -1363,12 +1363,12 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Args&&... args)
   auto* const obj = static_cast<T*>(addr);
   if constexpr(HAS_TRIVIAL_DTOR)
   {
-    construct_at(obj, std::forward<Args>(args)...);
+    flow::util::construct_at(obj, std::forward<Ctor_args>(ctor_args)...);
   }
   else
   {
     Activator ctx{this};
-    construct_at(obj, std::forward<Args>(args)...);
+    flow::util::construct_at(obj, std::forward<Ctor_args>(ctor_args)...);
   }
 
   /* Recommend reading Disposer a/k/a Owner_obj_disposer_and_mdt class doc header; it is quite instructive

@@ -64,14 +64,14 @@ namespace ipc::shm::arena_lend::detail
  * We assume you'll want a single `Metadata` struct which is the only thing a `*this` will allocate() other
  * than the 1-sized slots -- but only one, and it must be allocated up-front.  Therefore, upon creating the pool,
  * first-thing:
- *   - `const auto mdt = M->allocate(sizeof(Metadata)); util::construct_at(mdt, ...);`
+ *   - `const auto mdt = M->allocate(sizeof(Metadata)); construct_at(mdt, ...);`
  *     - If you don't need any such `Metadata`, use an empty `struct Metadata`.  You must do that one allocation,
  *       even if it is 0-sized.
  *
  * You can now use `*mdt` for whatever.  Subsequently, you can (must) issue
  * `const auto p = M->allocate(N); ...; M->deallocate(p);` at will.  If storing things such as
  * `atomic<uint32_t>` within these N-byte slots, remember to use:
- *   - `util::construct_at<T>(p, ...); // ctor args in ...; T is the particular N-byte-sized type.`
+ *   - `construct_at<T>(p, ...); // ctor args in ...; T is the particular N-byte-sized type.`
  *     - following `p = M->allocate(sizeof(T))`.
  *   - `static_cast<T*>(p)->~T()`
  *     - preceding `M->deallocate(p)`.
