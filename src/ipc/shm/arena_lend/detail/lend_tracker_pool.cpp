@@ -215,8 +215,7 @@ use_ct_idx_t Lend_tracker_pool::use_count_new()
 unsigned int Lend_tracker_pool::use_count_inc(use_ct_idx_t use_ct_idx)
 {
   auto const use_ct_ptr = use_ct_idx_to_ptr(use_ct_idx);
-  auto use_ct
-    = static_cast<unsigned int>(use_ct_ptr->fetch_add(1, std::memory_order_relaxed));
+  auto use_ct = static_cast<unsigned int>(use_ct_ptr->fetch_add(1, std::memory_order_relaxed));
 
   assert((use_ct != 0)
          && "Use-count starts at 1; and on reaching 0 must never be touched again.  Bug?");
@@ -283,8 +282,7 @@ unsigned int Lend_tracker_pool::use_count_dec(use_ct_idx_t use_ct_idx)
   using std::find_if;
 
   auto const use_ct_ptr = use_ct_idx_to_ptr(use_ct_idx);
-  auto use_ct
-    = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_relaxed));
+  auto use_ct = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_relaxed));
 
   assert((use_ct != 0) && "Use-count on reaching 0 must never be touched again... yet has become negative.  Bug?");
 
@@ -361,8 +359,7 @@ unsigned int Lend_tracker_pool::use_count_dec_admin(use_ct_idx_t* use_ct_idx_ptr
 
   auto& use_ct_idx = *use_ct_idx_ptr;
   auto const use_ct_ptr = use_ct_idx_to_ptr(use_ct_idx);
-  auto use_ct
-    = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_relaxed));
+  auto use_ct = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_relaxed));
 
   assert((use_ct != 0) && "Use-count on reaching 0 must never be touched again... yet has become negative.  Bug?");
 
