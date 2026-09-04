@@ -28,6 +28,7 @@
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/native_handle.hpp"
 #include <sstream>
+#include <cstdlib>
 #include <sys/mman.h>
 
 using std::size_t;
@@ -119,6 +120,13 @@ shared_ptr<Shm_pool> Owner_shm_pool_collection::create_shm_pool(pool_id_t id,
                                                                 void* address,
                                                                 const Memory_map_functor& memory_map_functor)
 {
+  /* @todo Tighten up the various error scenarios in Owner_shm_pool_collection (also spiritually related
+   * code on the borrower side): Be careful to classify errors as recoverable -versus- not really/indicates our
+   * bug somewhere -versus- not really/indicates catastrophic environment failure; then act accordingly and
+   * be consistent about it.  Maintenance-historic note: Generally we've already executed such refactor-contained
+   * error-scenario tightening in most places in SHM-jemalloc, such as Shm_session; but the low-level SHM-pool areas
+   * have not undergone refactoring yet, as mostly on functionality they haven't needed much change. */
+
   int fd = create_shm_object(name, size);
   if (fd == -1)
   {
@@ -140,11 +148,9 @@ shared_ptr<Shm_pool> Owner_shm_pool_collection::create_shm_pool(pool_id_t id,
   if (!register_shm_pool_and_notify(shm_pool))
   {
     // We somehow allocated at an existing location
-    FLOW_LOG_WARNING("Could not map shared memory pool [" << *shm_pool << "]");
-    // Can't unmap as there may be custom function
-    ::close(fd);
-    remove_shm_object(name);
+    FLOW_LOG_FATAL("Could not map shared memory pool [" << *shm_pool << "]");
     assert(false && "Duplicate SHM pool address");
+    std::abort();
   }
 
   return shm_pool;

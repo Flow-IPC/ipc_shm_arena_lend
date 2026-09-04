@@ -299,6 +299,10 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
       }
       else // if (!sys_err_code)
       {
+        /* @todo Own_native_handle did not exist in the past, but now it does; consider using it as much as possible
+         * (init_shm() included) around this area instead of naked Native_handle, so that no leak occurs along any
+         * error path.  As we write this, it's fine (won't leak), but that's brittle in the face of maintenance. */
+
         auto local_hndl = Native_handle{local_hndl_asio.release()};
         auto remote_hndl = Native_handle{remote_hndl_asio.release()};
 
@@ -321,7 +325,11 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
         /* else if ((!sync_request()) && err_code) { New error detected via sync_request(). }
          * else { All good so far.  Ready for init_shm()! } */
 
-        if (!err_code)
+        if (err_code)
+        {
+          local_hndl.close(); // Don't leak it.  (init_shm(), if called below, won't leak regardless of success/fail.)
+        }
+        else // if (!err_code)
         {
           err_code = Base::init_shm(std::move(local_hndl), Shared_name{}, app_shm_ptr());
           /* If that returned falsy: Fantastic.  To quote our mission from earlier:
