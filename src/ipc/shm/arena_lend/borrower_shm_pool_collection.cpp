@@ -95,6 +95,8 @@ shared_ptr<Shm_pool> Borrower_shm_pool_collection::open_shm_pool(pool_id_t id, s
     FLOW_ERROR_SYS_ERROR_LOG_WARNING();
 
     *err_code = sys_err_code;
+
+    ::close(fd); // Don't leak it.
     return nullptr;
   }
 
