@@ -42,10 +42,18 @@ namespace ipc::shm::arena_lend
  * A set of shared memory pools related in their application usage.
  */
 class Shm_pool_collection :
-  /* `protected`, not `public`: end-users have no business with our logging accessors (get_logger()/etc.); and
-   * `Log_context`, not `Log_context_mt`: `*this` is not concurrently-set_logger()-able (see ctor/dtor and
-   * skip_fast_path_verbose_logging()), so the thread-safe variant is unnecessary entropy.  Sub-classes
-   * (Owner_shm_pool_collection, jemalloc::Ipc_arena) still log freely via the (protected) inherited accessors. */
+  /* `protected`, not `public`: It's to avoid end-user set_logger() calls. Though, lots of classes routinely
+   * publicly sub-class Log_context, without really a thought as to whether set_logger() would be safe; in many
+   * cases it would not be. (That's defensible; Log_context does not promise thread-safety; Log_context_mt does.)
+   * In our case there's also skip_fast_path_verbose_logging(), whose value is based on `Logger*` given to ctor,
+   * so a subsequent set_logger() would be extra-wrong -- we just don't want to deal with the possibility at all.
+   * @todo We could publicly expose get_logger(), as that's usually available via `public Log_context` and can
+   * be useful (but hardly of blockbuster importance).
+   *
+   * Log_context, not Log_context_mt: We don't set_logger() ourselves, except when it's safe near end-of-life
+   * (as of this writing in Ipc_arena::destroy() path); and we've outlawed external set_logger(). So no point in _mt.
+   * It's also good to remember that Log_context_mt means get_logger() involves a mutex lock, opening up
+   * perf-badness possibilities with which to have to then contend. */
   protected flow::log::Log_context
 {
 public:
