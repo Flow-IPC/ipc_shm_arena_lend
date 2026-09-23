@@ -1458,8 +1458,8 @@ struct Memory_manager_stats
    *       chosen at tcache-creation via a thread-internal binding that public jemalloc API cannot influence
    *       (`thread.arena` affects only the application-arena binding; no internal-arena counterpart exists) --
    *       so those tallies land in an unrelated automatic arena, and per-*our*-arena request-counts are
-   *       unobtainable.  (Verified against jemalloc 5.3.0 source.  Only tcache-ineligible -- huge -- size
-   *       classes would report; not worth a misleading partial stat.)
+   *       unobtainable.  (Verified against jemalloc 5.3.0 through 5.4.0 source.  Only tcache-ineligible --
+   *       huge -- size classes would report; not worth a misleading partial stat.)
    */
   struct Alloc
   {

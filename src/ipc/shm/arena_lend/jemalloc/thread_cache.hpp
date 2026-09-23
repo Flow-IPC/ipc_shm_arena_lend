@@ -410,8 +410,8 @@ public:
    * Either way -- including the synchronous case -- immediately after destroying the arena, invokes
    * `on_done_func(log_ctx, F)`.
    *
-   * @warning There is a jemalloc-endemic (at least in 5.2.1 through 5.3.1, the latter being the newest version as
-   *          of 4/2026) problem wherein invoking a jemalloc stats-dump (jemalloc API `malloc_stats_print()`)
+   * @warning There is a jemalloc-endemic (at least in 5.2.1 through 5.4.0, the latter being the newest version as
+   *          of 9/2026) problem wherein invoking a jemalloc stats-dump (jemalloc API `malloc_stats_print()`)
    *          concurrently to arena-destruction (as sooner-or-later invoked by the present method) or
    *          arena-creation can trigger a jemalloc abort (`<jemalloc>: Failure in xmallctlbymib()` or similar).
    *          The present method guards against it via tight global-mutex at actual-arena-destruction time;

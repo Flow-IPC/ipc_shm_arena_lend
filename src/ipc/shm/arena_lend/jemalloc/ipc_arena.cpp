@@ -960,7 +960,7 @@ bool Ipc_arena::optional_remove_shm_pool([[maybe_unused]] void* address,
    *   - For data extents declining is moot: they proceed to the mandatory-removal (extent-destroy) hook, which
    *     removes their pools properly.
    *   - The arena's *base* (metadata) block extents (see start_impl()), though, are offered *only* through
-   *     this hook (jemalloc's internal base_unmap() never uses the destroy hook as of jemalloc-5.3.1 at least) --
+   *     this hook (jemalloc's internal base_unmap() never uses the destroy hook as of jemalloc-5.4.0 at least) --
    *     so declining here leaves their pool(s) registered, un-removed.
    *     That is fine: ~Owner_shm_pool_collection() eliminates any such straggler pools all the same.  Intentionally
    *     we don't complicate our logic here for the sake of the destroy-time cleanup of those pools; the

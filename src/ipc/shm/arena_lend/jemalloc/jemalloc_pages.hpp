@@ -33,6 +33,10 @@ namespace ipc::shm::arena_lend::jemalloc
 /**
  * This class contains an API to access functionality that is internal to jemalloc. It is derived from jemalloc's
  * pages.c source file in version 5.2.1.x.
+ *
+ * It is a standalone copy: it includes no jemalloc-internal headers and uses no jemalloc-internal macros or
+ * symbols. Hence the linked jemalloc version does not affect it, and upstream refactors of jemalloc internals
+ * (such as the OS-abstraction layer introduced in 5.4.0, which reorganized the code around pages.c) cannot break it.
  */
 class Jemalloc_pages :
   private boost::noncopyable

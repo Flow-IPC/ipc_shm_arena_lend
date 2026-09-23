@@ -127,8 +127,8 @@ namespace ipc::shm::arena_lend::jemalloc
  * We offer a thin wrapper for jemalloc's stats-dump-to-string dump feature (`malloc_stats_print()`):
  * stats_dump_to_ostream(), stats_dump_to_string(), log_stats_dump().  It turns out that `malloc_stats_print()`
  * is likely to crash (abort with a message like `<jemalloc>: Failure in xmallctlbymib()` and variations), if
- * concurrently an arena is being destroyed or created.  *This is not fixed, or counted as a bug, as of jemalloc-5.3.1*
- * (4/2026).
+ * concurrently an arena is being destroyed or created.  *This is not fixed, or counted as a bug, as of jemalloc-5.4.0*
+ * (9/2026).
  *
  * SHM-jemalloc works around it (internally by using a process-wide mutex), so as long as one uses our APIs
  * (Flow-IPC generally for SHM-jemalloc arena control as needed, naturally; Ipc_arena::info_dump() or

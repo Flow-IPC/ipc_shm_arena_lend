@@ -249,7 +249,7 @@ public:
    * sides of a session; use the mainstream-form ctor to straightforwardly construct your zero-copy-enabled
    * `Vat_network` (from a `*this`) for blazing-fast capnp-RPC.
    */
-  using Vat_network = typename Base::Vat_network;
+  using Vat_network = transport::struc::shm::rpc::Session_vat_network<Server_session, Arena>;
 
   /// You may disregard.
   using Async_io_obj = transport::Null_peer;
