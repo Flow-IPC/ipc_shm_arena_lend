@@ -31,9 +31,10 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-result"
 #pragma GCC diagnostic ignored "-Wnarrowing"
-#include <boost/process/system.hpp>
+// Boost.Process v1 (v2 is the default from Boost 1.88; the un-versioned v1 headers are gone from 1.90 on).
+#include <boost/process/v1/system.hpp>
 #pragma GCC diagnostic pop
-#include <boost/process/io.hpp>
+#include <boost/process/v1/io.hpp>
 
 using std::ostream;
 using std::string;
@@ -74,7 +75,7 @@ bool Test_shm_session_server_launcher::async_run(Object_type object_type,
     m_is_running = true;
   }
 
-  namespace bp = boost::process;
+  namespace bp = boost::process::v1;
 
   FLOW_LOG_INFO("Executing: [" << Test_shm_session_server::get_server_path() << "]");
 

@@ -29,7 +29,8 @@
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-result"
 #pragma GCC diagnostic ignored "-Wnarrowing"
-#include <boost/process/system.hpp>
+// Boost.Process v1 (v2 is the default from Boost 1.88; the un-versioned v1 headers are gone from 1.90 on).
+#include <boost/process/v1/system.hpp>
 #pragma GCC diagnostic pop
 
 using std::string;
@@ -64,7 +65,7 @@ int Test_borrower::execute_read_check(collection_id_t shm_pool_collection_id,
                                       size_t data_offset,
                                       const string& data)
 {
-  namespace bp = boost::process;
+  namespace bp = boost::process::v1;
 
   Test_logger test_logger;
 
