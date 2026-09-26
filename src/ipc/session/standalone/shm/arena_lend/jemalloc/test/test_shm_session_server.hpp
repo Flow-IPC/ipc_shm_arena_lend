@@ -167,11 +167,25 @@ public:
    */
   static const Fs_path& get_server_path();
   /**
-   * Returns the server application specification used in establishing a session.
+   * Returns the server application specification used in establishing a session, with the assumption that the
+   * server is hosted by the current process: its executable path is this process's own.  This is the one to pass
+   * to Session_server (whether in the unit-test process or in the external server program); and the one for a
+   * client to pass to its Client_session when the server runs in the client's own process.
+   *
+   * @see get_external_server_app(), the counterpart for a client of the external server program.  The two differ
+   *      only in App::m_exec_path; both sides of a session must agree on it, as the session-open procedure checks
+   *      the opposing process's executable against it.
    *
    * @return See above.
    */
   static const Server_app& get_server_app();
+  /**
+   * Returns the server application specification for a client of a server running as the external server program
+   * (see S_SERVER_PROGRAM_NAME, get_server_path()).  Identical to get_server_app() except for App::m_exec_path.
+   *
+   * @return See above.
+   */
+  static const Server_app& get_external_server_app();
   /**
    * Returns the client application used in establishing a session with the assumption that the client application
    * is running in the current process.
@@ -539,6 +553,15 @@ private:
    * @return See above.
    */
   static Fs_path form_server_path();
+  /**
+   * Returns the server application specification with the given executable path; all other values are the
+   * fixed ones shared by get_server_app() and get_external_server_app().
+   *
+   * @param exec_path The value for App::m_exec_path.
+   *
+   * @return See above.
+   */
+  static Server_app form_server_app(const Fs_path& exec_path);
   /**
    * Returns the client application specification used in establishing a session.
    *

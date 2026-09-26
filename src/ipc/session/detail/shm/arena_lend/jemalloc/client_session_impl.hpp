@@ -179,7 +179,7 @@ private:
   // Data.
 
   /**
-   * Thread used for low-priority periodic low-priority cleanup work.  See cleanup().
+   * Thread used for low-priority periodic cleanup work.  See cleanup().
    *
    * ### Rationale ###
    * Why not piggy-back on session::Client_session_impl's thread W?  Answer: That guy actually does important stuff
@@ -286,11 +286,11 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
    * on *this* side; and the Shm_session which can lend from said Arena(s) and borrow from *any* opposing Arena(s)
    * Session_server sets up.  They're just objects which are synchronously constructed, and that's it.  However
    * Shm_session requires a Channel over which to conduct internal communications needed by this and opposing
-   * Shm_session.  So that's the main difficulty, as it's asynchronous.  That said the base vanilla Client_impl
+   * Shm_session.  So that's the main difficulty, as it's asynchronous.  That said the base vanilla Client_session_impl
    * provides some protected methods -- cancel_peer_state_to_connecting() on --
    * that make it pretty simple.  The Channel, specifically, just needs a single
    * bidirectional Native_socket_stream.  Same as when opening that type of channel for the user, Session_server
-   * creates a socket-pair and sends us one of the `Native_handle`s (FDs) to us.  So we simply expect_msg() it
+   * creates a socket-pair and sends us one of the `Native_handle`s (FDs).  So we simply expect_msg() it
    * on the session-master-channel; we do it after the vanilla async_connect() completes successfully (the log-in
    * and all that).  OK: let's go.  First do the vanilla async_connect() but substitute our additional steps
    * as the handler, remembering the real user-provided handler to invoke eventually, god willing.
@@ -364,7 +364,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
       on_done_func(err_code); // err_code could be truthy.
     }); // cancel_peer_state_to_connecting()
 
-    /* That was aspirational and hopeful.  Now, by cancel_peer_state_to_connecting() contract, actually kick off the
+    /* That was aspirational and hopeful.  Now, by cancel_peer_state_to_connecting() contract, actually kick off
      * the actions that will async-lead to complete_async_connect_after_canceling_peer_state() which would
      * cause the above handler to finally run (unless a session-master-channel error does so first).
      *

@@ -97,15 +97,27 @@ Fs_path Test_shm_session_server::form_server_path()
 }
 
 // Static method
-const Server_app& Test_shm_session_server::get_server_app()
+Server_app Test_shm_session_server::form_server_app(const Fs_path& exec_path)
 {
-  static const Server_app S_SERVER_APP = {
-    { S_SERVER_APP_NAME, get_server_path(), get_process_creds().user_id(), get_process_creds().group_id() },
+  return {
+    { S_SERVER_APP_NAME, exec_path, get_process_creds().user_id(), get_process_creds().group_id() },
     { S_CLIENT_APP_NAME },
     S_KERNEL_PERSISTENT_RUN_DIR,
     util::Permissions_level::S_GROUP_ACCESS
   };
+}
 
+// Static method
+const Server_app& Test_shm_session_server::get_server_app()
+{
+  static const Server_app S_SERVER_APP = form_server_app(get_program_path(get_process_creds().process_id()));
+  return S_SERVER_APP;
+}
+
+// Static method
+const Server_app& Test_shm_session_server::get_external_server_app()
+{
+  static const Server_app S_SERVER_APP = form_server_app(get_server_path());
   return S_SERVER_APP;
 }
 

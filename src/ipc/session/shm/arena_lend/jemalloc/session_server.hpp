@@ -138,6 +138,9 @@ public:
                           const Client_app::Master_set& cli_app_master_set_ref,
                           Error_code* err_code = nullptr);
 
+  /// Destructor: contract is identical to session::Session_server dtor.
+  ~Session_server();
+
   // Methods.
 
   /**
@@ -431,6 +434,15 @@ CLASS_JEM_SESSION_SRV::Session_server(flow::log::Logger* logger_ptr, const Serve
 } // Session_server::Session_server()
 
 TEMPLATE_JEM_SESSION_SRV
+CLASS_JEM_SESSION_SRV::~Session_server()
+{
+  /* Stop all async_accept() activity before our members (m_app_shm_mutex, m_app_shm_by_name,
+   * m_async_periodic_worker) are destroyed: in-flight log-ins reach them via init_app_shm_as_needed() and
+   * app_shm_ptr().  See Session_server_impl::dtor_stop_accepting(). */
+  Impl::dtor_stop_accepting();
+}
+
+TEMPLATE_JEM_SESSION_SRV
 Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
 {
   using ipc::shm::arena_lend::jemalloc::Memory_manager;
@@ -478,7 +490,7 @@ Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
     /* app_shm, which is in the map directly, is null.  Just leave null in the map; meh.
      * .erase()ing it from there is just pedantic at best.  (The [] lookup above will do the right thing next time.) */
 
-    FLOW_LOG_WARNING("Session_server [" << * this << "]: Failed to create session-scope Arena; "
+    FLOW_LOG_WARNING("Session_server [" << *this << "]: Failed to create app-scope Arena; "
                      "details may be found above.  Session will not open.");
 
     // See @todo on this Code; in short if create() emitted an Error_code, we'd just emit that instead here.
@@ -701,7 +713,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
    *     aforementioned ipc::session Shared_name semantics.
    *   - Determne whether process with a certain PID is alive.  Solution: util::process_running().
    *
-   * A note on stats: A stat surface for this sweep (scanned/removed/skipped counts and such) has been considered
+   * A note on stats: Stats support for this sweep (scanned/removed/skipped counts and such) has been considered
    * and deliberately omitted.  Rationale: These events are rare by construction (crash aftermath); and the sweep
    * is fully log-observable -- each removal is INFO-logged with the pool name and reasoning, anomalies are
    * WARNING-logged, and the removed-count is logged at the end.  For rare events those logs are strictly richer

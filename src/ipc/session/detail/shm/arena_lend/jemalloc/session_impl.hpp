@@ -236,7 +236,7 @@ protected:
                       const std::shared_ptr<Arena>& app_shm_or_null = {});
 
   /**
-   * Undoes init_shm_arenas(), namely destroying shm_session() pointee and session_shm() pointee.  Note
+   * Undoes init_shm(), namely destroying shm_session() pointee and session_shm() pointee.  Note
    * that any other arena (perhaps Server_session_impl::app_shm() pointee?) registered with
    * shm_session() continues to exist; just objects from it cannot be `lend_object()`ed through that
    * shm_session() anymore (but may well be lendable through other sessions -- to other processes).
@@ -363,7 +363,7 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
                       (Base::Base::m_srv_app_ref.m_permissions_level_for_client_apps));
   if (!m_session_shm)
   {
-    FLOW_LOG_WARNING("Session [" << * this << "]: Failed to create session-scope Arena; "
+    FLOW_LOG_WARNING("Session [" << *this << "]: Failed to create session-scope Arena; "
                      "details may be found above.  Session will not open.");
 
     /* We promised to dispose of this at the proper time.  Since we won't create the Channel that would do it,
@@ -422,9 +422,9 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
      * thread W (of vanilla Server/Client_session_impl).
      *
      * Shm_session got an incoming-direction channel-hosing error, or an outgoing-direction error trying to do
-     * send() or eqiuvalent; either way per contract it reports such a thing up to *once* from the aforementioned
+     * send() or equivalent; either way per contract it reports such a thing up to *once* from the aforementioned
      * thread.  As discussed in Shm_session::create() our choices here are:
-     *   - Eat it (log and that's it), because we have our own way(s) of reponsively detecting session-hosing
+     *   - Eat it (log and that's it), because we have our own way(s) of responsively detecting session-hosing
      *     and then <handle session hosing> (discussed a bit down).
      *   - Don't eat it: It indicates Shm_session permanently lost contact with its peer, hence we must now
      *     <handle session hosing>.
@@ -443,8 +443,9 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
      *      depend on whether this is Server_session or Client_session.
      *   -# Upon reaching PEER state.
      *
-     * In phase 3, which is the long one, as of this writing do basically: `if !Base::hosed() { Base::hose(err_code; }`
-     * which invokes the session on-error handler that must have been provided by user to enter PEER state.
+     * In phase 3, which is the long one, as of this writing do basically:
+     * `if (!Base::hosed()) { Base::hose(err_code); }` which invokes the session on-error handler that must have been
+     * provided by user to enter PEER state.
      *
      * In phase 2: details omitted, but at a high level both Client_session and Server_session paths properly
      * deal with whatever might go wrong (on_master_channel_error() on server, and what-not).
@@ -474,8 +475,8 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
       // We are in thread W (of vanilla Server/Client_session_impl).
       if (*setup_done)
       {
-        FLOW_LOG_WARNING("Session [" << * this << "]: Internal-use (for SHM) channel reported "
-                         "error [" << err_code << "] [" << err_code.message() << "].  This occured after SHM-setup; "
+        FLOW_LOG_WARNING("Session [" << *this << "]: Internal-use (for SHM) channel reported "
+                         "error [" << err_code << "] [" << err_code.message() << "].  This occurred after SHM-setup; "
                          "almost certainly the session master channel and/or attempts to lend/borrow "
                          "will catch a problem or have caught it; "
                          "session will be hosed, or session opening will fail, depending on the situation.");
@@ -483,8 +484,8 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
       }
       else
       { // So-called phase 1 above.
-        FLOW_LOG_WARNING("Session [" << * this << "]: Internal-use (for SHM) channel reported "
-                         "error [" << err_code << "] [" << err_code.message() << "].  This occured during SHM-setup, "
+        FLOW_LOG_WARNING("Session [" << *this << "]: Internal-use (for SHM) channel reported "
+                         "error [" << err_code << "] [" << err_code.message() << "].  This occurred during SHM-setup, "
                          "so we will catch it or have caught it and will fail to open session.");
       }
     });
@@ -498,7 +499,7 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
   {
     /* This message recaps the trade-off between failing out here versus letting session-hosing-sensing occur
      * that we discussed in the comment inside the functor given to create() above. */
-    FLOW_LOG_WARNING("Session [" << * this << "]: Registering session-scope local Arena with borrow/lend engine: "
+    FLOW_LOG_WARNING("Session [" << *this << "]: Registering session-scope local Arena with borrow/lend engine: "
                      "failed (details likely above).  Assuming we are bug-free in using the SHM-provider API "
                      "this would occur only on internal SHM-provider IPC channel error; but due to certain internal "
                      "reasons the triggering Error_code has not reached this thread yet; reporting a more general "
@@ -514,7 +515,7 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
 
   if (app_shm_or_null && (!shm_session()->lend_arena(app_shm_or_null)))
   {
-    FLOW_LOG_WARNING("Session [" << * this << "]: Registering app-scope local Arena with borrow/lend engine: "
+    FLOW_LOG_WARNING("Session [" << *this << "]: Registering app-scope local Arena with borrow/lend engine: "
                      "failed (details likely above).  Assuming we are bug-free in using the SHM-provider API "
                      "this would occur only on internal SHM-provider IPC channel error; but due to certain internal "
                      "reasons the triggering Error_code has not reached this thread yet; reporting a more general "
@@ -528,7 +529,7 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
 
   *setup_done = true;
 
-  FLOW_LOG_INFO("Session [" << * this << "]: Successfully created session-scope Arena; and "
+  FLOW_LOG_INFO("Session [" << *this << "]: Successfully created session-scope Arena; and "
                 "borrow/lend engine Shm_session; registered the former to the latter; "
                 "registered app-scope arena too? = [" << bool(app_shm_or_null) << "].");
 

@@ -88,15 +88,15 @@ class Session_server;
  * So all we have to do is provide a modified `async_connect()` which does the above.  How?  Answer:
  *   - execute vanilla session::Client_session_impl::async_connect(); once that triggers the on-done handler:
  *   - set up `Shm_session` and `Arena` (though for the former there's a prerequisite async step to establish an
- *     interal-use IPC channel);
+ *     internal-use IPC channel);
  *   - invoke the user's original on-done handler.
  *
  * In `*this`, mechanically: the true implementation of the needed setup and accessors (explained above) is
- * split between shm::classic::Session_mv (common with `Server_session_impl`) and
+ * split between shm::arena_lend::jemalloc::Session_impl (common with `Server_session_impl`) and
  * shm::arena_lend::jemalloc::Client_session_impl, with the vanilla core in super-class
  * session::Client_session_impl.
  *
- * That's the key; then session::Client_session_mv adds movability around session::Server_session_impl; and lastly
+ * That's the key; then session::Client_session_mv adds movability around that Client_session_impl; and lastly
  * this type aliases to *that* (by way of `Session_mv`).  Session_mv completes the puzzle by pImpl-forwarding to the
  * added (SHM-focused) API.  (session::Client_session_mv only pImpl-forwards to the vanilla API.)
  *

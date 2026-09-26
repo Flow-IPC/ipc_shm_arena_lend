@@ -432,10 +432,14 @@ public:
    * Constructor.
    *
    * @param logger Used for logging messages.
+   * @param server_app The server to connect to: Test_shm_session_server::get_server_app() if it runs in this
+   *                   process, Test_shm_session_server::get_external_server_app() if in the external server
+   *                   program.  (They differ in executable path, which session-open verifies.)
    * @param client_id Identifier for a client; it should be unique per test run.
    * @param operation_mode The mode the client operates under.
    */
   Test_client(flow::log::Logger* logger,
+              const ipc::session::Server_app& server_app,
               unsigned int client_id = S_LOWEST_CLIENT_ID,
               Operation_mode operation_mode = Operation_mode::S_NORMAL) :
     flow::log::Log_context(logger, Log_component::S_TEST),
@@ -446,7 +450,7 @@ public:
     m_event_listener(nullptr),
     m_session(get_logger(),
               Test_shm_session_server::get_client_app(),
-              Test_shm_session_server::get_server_app(),
+              server_app,
               [&](const ipc::Error_code& ec)
               {
                 if (ec)
@@ -1460,10 +1464,12 @@ public:
   /**
    * Constructor.
    *
-   * @param logger The logger to use in the clients.
+   * @param test_harness The test fixture.
+   * @param server_app See Test_client constructor; passed to each client created.
    */
-  Test_client_manager(Shm_session_test& test_harness) :
+  Test_client_manager(Shm_session_test& test_harness, const ipc::session::Server_app& server_app) :
     m_test_harness(test_harness),
+    m_server_app(server_app),
     m_state(State::S_RESET)
   {
   }
@@ -1503,7 +1509,7 @@ public:
          cur_client_id < (Test_client::S_LOWEST_CLIENT_ID + num_clients);
          ++cur_client_id)
     {
-      auto client_ptr = make_unique<Test_client>(get_logger(), cur_client_id, operation_mode);
+      auto client_ptr = make_unique<Test_client>(get_logger(), m_server_app, cur_client_id, operation_mode);
       auto& client = *client_ptr;
       auto event_listener = create_event_listener(client);
       if (event_listener == nullptr)
@@ -1822,6 +1828,8 @@ private:
 
   /// The test fixture.
   Shm_session_test& m_test_harness;
+  /// See constructor.
+  const ipc::session::Server_app& m_server_app;
   /// Provides exclusive access to #m_state.
   mutable Mutex m_state_mutex;
   /// The current state for tracking stage progression.
@@ -1846,9 +1854,10 @@ public:
    * Constructor.
    *
    * @param test_harness The test fixture.
+   * @param server_app See Test_client_manager constructor.
    */
-  Test_object_client_manager(Shm_session_test& test_harness) :
-    Test_client_manager(test_harness)
+  Test_object_client_manager(Shm_session_test& test_harness, const ipc::session::Server_app& server_app) :
+    Test_client_manager(test_harness, server_app)
   {
   }
 
@@ -2035,6 +2044,18 @@ private:
 }; // class Test_object_client_manager
 
 /**
+ * Returns the server application specification a client should use, given how the test runs its server.
+ *
+ * @param server The in-process server object, or null if the server runs in the external server program.
+ *
+ * @return See above.
+ */
+const ipc::session::Server_app& server_app_for(const unique_ptr<Test_shm_session_server>& server)
+{
+  return server ? Test_shm_session_server::get_server_app() : Test_shm_session_server::get_external_server_app();
+}
+
+/**
  * Executes a series of tests by starting up a client, waiting for the server to complete, and waiting for the
  * client to finish.
  *
@@ -2052,7 +2073,7 @@ void execute_general_tests(Shm_session_test& test_harness,
   pool_id_t object_shm_pool_id = {};
   pool_offset_t object_pool_offset = {};
   {
-    Test_client client(test_harness.get_logger());
+    Test_client client(test_harness.get_logger(), server_app_for(server));
     Auto_event_listener event_listener(test_harness, client);
     client.set_event_listener(&event_listener);
 
@@ -2120,7 +2141,7 @@ void execute_multisession_tests(Shm_session_test& test_harness,
   pool_id_t object_shm_pool_id = {};
   pool_offset_t object_pool_offset = {};
   {
-    Test_object_client_manager client_manager(test_harness);
+    Test_object_client_manager client_manager(test_harness, server_app_for(server));
 
     // Start clients
     EXPECT_TRUE(client_manager.start());
@@ -2214,7 +2235,7 @@ void execute_disconnect_tests(Shm_session_test& test_harness,
   pool_id_t object_shm_pool_id = {};
   pool_offset_t object_pool_offset = {};
   {
-    Test_client client(test_harness.get_logger());
+    Test_client client(test_harness.get_logger(), server_app_for(server));
     Delayed_object_removal_event_listener event_listener(test_harness, client);
     client.set_event_listener(&event_listener);
 
@@ -2373,7 +2394,7 @@ void execute_crash_tests(Shm_session_test& test_harness)
    * processes at exit), so that the post-crash leak check below is attributable to our crashed server alone.
    * (Like the rest of this suite, this assumes no concurrent test runs on the machine.)  Ditto the server's
    * kernel-persistent run-dir (see remove_kernel_persistent_state() doc header) -- e.g., an earlier crashed
-   * run may have left a stale CNS (PID) file; a connect attempt reading it merely fails and gets retried,
+   * run may have left a stale CNS (PID file); a connect attempt reading it merely fails and gets retried,
    * so this is not strictly required -- but starting from a known-clean state reduces entropy. */
   remove_shm_objects_filesystem(S_SHM_OBJECT_NAME_PREFIX);
   Test_shm_session_server::remove_kernel_persistent_state();
@@ -2383,7 +2404,7 @@ void execute_crash_tests(Shm_session_test& test_harness)
   pool_id_t object_shm_pool_id = {};
   pool_offset_t object_pool_offset = {};
   {
-    Test_client client(test_harness.get_logger());
+    Test_client client(test_harness.get_logger(), Test_shm_session_server::get_external_server_app());
     Delayed_object_removal_event_listener event_listener(test_harness, client);
     client.set_event_listener(&event_listener);
     client.expect_abrupt_session_end(); // The server will die mid-choreography; that is this test's point.
@@ -2497,7 +2518,7 @@ void execute_allocation_performance_test(Shm_session_test& test_harness, size_t 
     return;
   }
 
-  Test_client_manager client_manager(test_harness);
+  Test_client_manager client_manager(test_harness, server_app_for(server));
   // Start clients
   client_manager.start(n_clients, Client_operation_mode::S_ALLOCATION_PERFORMANCE);
   // Wait for clients to finish
