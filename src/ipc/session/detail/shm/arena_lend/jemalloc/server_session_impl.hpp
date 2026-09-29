@@ -30,7 +30,6 @@
 #include "ipc/session/error.hpp"
 #include "ipc/transport/native_socket_stream_cfg.hpp"
 #include "ipc/transport/struc/struc_fwd.hpp"
-#include <boost/move/make_unique.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {
@@ -70,10 +69,10 @@ public:
                                                transport::struc::shm::Builder_base::S_MAX_SERIALIZATION_SEGMENT_SZ,
                                                true>>;
 
-  /// See shm::arena_lend::jemalloc::Server_session_mv counterpart for public description.
+  /// See shm::arena_lend::jemalloc::Server_session counterpart for public description.
   using Arena = typename Base::Arena;
 
-  /// See shm::arena_lend::jemalloc::Server_session_mv counterpart for public description.
+  /// See shm::arena_lend::jemalloc::Server_session counterpart for public description.
   using Structured_msg_builder_config = typename Base::Structured_msg_builder_config;
 
   // Constructors/destructor.
@@ -98,6 +97,8 @@ public:
    *
    * @param srv
    *        See Server_session_mv counterpart.
+   * @param mq_msg_size_limit
+   *        See Server_session_mv counterpart.
    * @param init_channels_by_srv_req
    *        See Server_session_mv counterpart.
    * @param mdt_from_cli_or_null
@@ -120,7 +121,7 @@ public:
   template<typename Session_server_impl_t,
            typename Task_err, typename Cli_app_lookup_func, typename Cli_namespace_func, typename Pre_rsp_setup_func,
            typename N_init_channels_by_srv_req_func, typename Mdt_load_func>
-  void async_accept_log_in(Session_server_impl_t* srv,
+  void async_accept_log_in(Session_server_impl_t* srv, size_t mq_msg_size_limit,
                            typename Base::Base::Channels* init_channels_by_srv_req,
                            typename Base::Base::Mdt_reader_ptr* mdt_from_cli_or_null,
                            typename Base::Base::Channels* init_channels_by_cli_req,
@@ -131,29 +132,29 @@ public:
                            Task_err&& on_done_func);
 
   /**
-   * See shm::arena_lend::jemalloc::Server_session_mv counterpart.
-   * @return See shm::arena_lend::jemalloc::Server_session_mv counterpart.
+   * See shm::arena_lend::jemalloc::Server_session counterpart.
+   * @return See shm::arena_lend::jemalloc::Server_session counterpart.
    */
   Arena* app_shm();
 
   /**
-   * See shm::arena_lend::jemalloc::Server_session_mv counterpart.
-   * @return See shm::arena_lend::jemalloc::Server_session_mv counterpart.
+   * See shm::arena_lend::jemalloc::Server_session counterpart.
+   * @return See shm::arena_lend::jemalloc::Server_session counterpart.
    */
   std::shared_ptr<Arena> app_shm_ptr();
 
   /**
-   * See shm::arena_lend::jemalloc::Server_session_mv counterpart.
+   * See shm::arena_lend::jemalloc::Server_session counterpart.
    *
    * @param segment1_sz
-   *        See shm::arena_lend::jemalloc::Server_session_mv counterpart.
-   * @return See shm::arena_lend::jemalloc::Server_session_mv counterpart.
+   *        See shm::arena_lend::jemalloc::Server_session counterpart.
+   * @return See shm::arena_lend::jemalloc::Server_session counterpart.
    */
   Structured_msg_builder_config app_shm_builder_config(size_t segment1_sz);
 
   /**
-   * See shm::arena_lend::jemalloc::Session_mv counterpart.
-   * @return See shm::arena_lend::jemalloc::Session_mv counterpart.
+   * See shm::arena_lend::jemalloc::Server_session counterpart.
+   * @return See shm::arena_lend::jemalloc::Server_session counterpart.
    */
   typename Structured_msg_builder_config::Builder::Session app_shm_lender_session();
 
@@ -199,7 +200,7 @@ template<typename Session_server_impl_t,
          typename Task_err, typename Cli_app_lookup_func, typename Cli_namespace_func, typename Pre_rsp_setup_func,
          typename N_init_channels_by_srv_req_func, typename Mdt_load_func>
 void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
-       (Session_server_impl_t* srv,
+       (Session_server_impl_t* srv, size_t mq_msg_size_limit,
         typename Base::Base::Channels* init_channels_by_srv_req,
         typename Base::Base::Mdt_reader_ptr* mdt_from_cli_or_null,
         typename Base::Base::Channels* init_channels_by_cli_req,
@@ -212,7 +213,6 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
   namespace asio_local = transport::asio_local_stream_socket::local_ns;
   using asio_local::connect_pair;
   using Peer_socket = transport::asio_local_stream_socket::Peer_socket<transport::Native_socket_stream_cfg::Protocol>;
-  using boost::movelib::make_unique;
 
   // The extra stuff to do on top of the base vanilla Server_session_impl.
   auto real_pre_rsp_setup_func
@@ -227,7 +227,7 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
     auto err_code = pre_rsp_setup_func();
     if (err_code)
     {
-      // Any Session_server-given setup failed => no point in doing our SHM-classic per-session setup.
+      // Any Session_server-given setup failed => no point in doing our SHM-jemalloc per-session setup.
       return err_code;
     }
     // else
@@ -240,7 +240,8 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
      * Incidentally Base::shm_session() must also be available (return non-null), in case the user wants to
      * access that guy directly.
      *
-     * m_app_shm first: please see our class doc header; then come back here.  To summarize:
+     * m_app_shm first: please see shm::arena_lend::jemalloc::Server_session doc header; then come back here.
+     * To summarize:
      *   - pre_rsp_setup_func() had to have created what we want app_shm() to return.
      *     - If it already existed by then (Client_app seen already), even better.
      *     - If that creation failed, then pre_rsp_setup_func() just failed, so we are not here.
@@ -256,7 +257,7 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
     return err_code; // == Error_code{}.
   }; // auto real_pre_rsp_setup_func =
 
-  Base::Base::async_accept_log_in(srv,
+  Base::Base::async_accept_log_in(srv, mq_msg_size_limit,
                                   init_channels_by_srv_req, mdt_from_cli_or_null, init_channels_by_cli_req,
                                   std::move(cli_app_lookup_func),
                                   std::move(cli_namespace_func),
@@ -271,7 +272,11 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
 
     if (async_err_code == session::error::Code::S_OBJECT_SHUTDOWN_ABORTED_COMPLETION_HANDLER)
     {
-      return; // Stuff is shutting down.  GTFO.
+      /* Stuff is shutting down.  We are being invoked from ~session::Server_session_impl(): our (and Base's) members
+       * are already destroyed; touch nothing of *this.  Just forward it: Session_server_impl reports it to the user's
+       * async_accept() handler, as its dtor contract promises. */
+      on_done_func(async_err_code);
+      return;
     }
     // else
 
@@ -311,8 +316,10 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
         auto msg = Base::master_channel()->create_msg();
         msg.body_root()->initJemallocShmSetup();
         msg.store_native_handle_or_null(std::move(remote_hndl));
-        // We don't care about contents of the ack (it's just an ack).
-        if ((!Base::master_channel()->sync_request(&msg, nullptr, &err_code)) // @todo Consider using finite timeout.
+        /* We don't care about contents of the ack (it's just an ack).  About the timeout: it merely bounds the wait
+         * on a misbehaving (trusted) peer, best-effort; see the comment on the analogous init-channel sync_request()
+         * in session::Server_session_impl. */
+        if ((!Base::master_channel()->sync_request(&msg, nullptr, Base::Base::Base::S_OPEN_CHANNEL_TIMEOUT, &err_code))
             && (!err_code))
         {
           /* Annoying corner case.  Incoming-direction error occurred on master_channel() before we could

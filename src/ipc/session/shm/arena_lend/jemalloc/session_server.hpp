@@ -32,7 +32,6 @@
 #include "ipc/transport/struc/struc_fwd.hpp"
 #include "ipc/transport/transport_fwd.hpp"
 #include "ipc/util/util_fwd.hpp"
-#include <boost/move/make_unique.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <string>
 
@@ -55,9 +54,9 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *
  * We use 2 of 2 available customization points of `private` super-class Session_server_impl.  We:
  *   - pass-up a `per_app_setup_func()` that, given the new session's desired Client_app, creates-if-needed the per-app
- *     SHM-arena and keeps it open as well as available via `this->app_shm(Client_app::m_name)`; and
+ *     SHM-arena and keeps it open as well as available via `this->app_shm(app)`; and
  *   - parameterize Session_server_impl on shm::arena_lend::jemalloc::Server_session which, during log-in, creates
- *     the per-session SHM-arena and keeps it open; saves `this->app_shm(Client_app::m_name)`;
+ *     the per-session SHM-arena and keeps it open; saves `this->app_shm_ptr(app)`;
  *     and partners with Client_session_impl to set up the lend/borrowing capability between us.
  *
  * shm::arena_lend::jemalloc::Server_session doc header delves deeply into the entire impl strategy for setting up
@@ -211,10 +210,10 @@ public:
 
   /**
    * Returns pointer to the per-`app` SHM-arena, whose lifetime extends until `*this` is destroyed;
-   * or null if the given Client_app has not yet opened at least 1 shm::arena_lend::jemalloc::Server_session via
-   * async_accept().  Alternatively you may use shm::arena_lend::jemalloc::Session_mv::app_shm() off any session object
-   * filled-out by `*this` async_accept(), as long as its Server_session_mv::client_app() equals
-   * `app` (by App::m_name equality).
+   * or null if that arena has not yet been successfully created (which is attempted during the log-in of the
+   * first client of `app` to reach `*this` via async_accept()).  Alternatively you may use
+   * shm::arena_lend::jemalloc::Server_session::app_shm() off any session object filled-out by `*this`
+   * async_accept(), as long as its Server_session_mv::client_app() equals `app` (by App::m_name equality).
    *
    * If non-null is returned, then the same pointer value shall be returned for all subsequent calls
    * with the same (by App::m_name equality) `app`.  The non-null pointers returned for any 2 calls, where `app`
@@ -224,19 +223,21 @@ public:
    * `lend_object()`, and `borrow_object()`.
    *
    * ### Perf ###
-   * Given the choice between Server_session_mv::app_shm() and the present method, the latter is somewhat
+   * Given the choice between Server_session::app_shm() and the present method, the latter is somewhat
    * slower; internally it involves a mutex-protected map lookup, while the former simply returns a cached
    * pointer as of this writing.
    *
-   * Generally it is also quite fast for the user to save any non-null value returned by either `app_shm()`;
+   * Generally it is also fine, and fastest, for the user to save any non-null value returned by either `app_shm()`;
    * the pointer returned shall always be the same after all.
    *
    * @internal
+   *
    * ### Thread safety ###
    * For internal use, namely by shm::arena_lend::jemalloc::Server_session_impl::async_accept_log_in() at least,
-   * it is guaranteed the app_shm() may be called on the same `*this` concurrently to itself
-   * and init_app_shm_as_needed().  Formally speaking this isn't publicly documented, as I (ygoldfel) didn't want
-   * to get users into any bad habit, but internally it does have this property -- as it is required.
+   * it is guaranteed that app_shm() and app_shm_ptr() may be called on the same `*this` concurrently to each other,
+   * themselves, and init_app_shm_as_needed().  Formally speaking this isn't publicly documented, as I (ygoldfel)
+   * didn't want to get users into any bad habit, but internally it does have this property -- as it is required.
+   *
    * @endinternal
    *
    * @param app
@@ -262,19 +263,19 @@ public:
   /**
    * Returns builder config suitable for capnp-serializing out-messages in SHM arena app_shm() for
    * the same `Client_app app`.  Alternatively you may use
-   * shm::arena_lend::jemalloc::Session_mv::app_shm_builder_config()
-   * off any session object filled-out by `*this` async_accept(), as long as its Server_session_mv::client_app() equals
-   * `app` (by App::m_name equality).
+   * shm::arena_lend::jemalloc::Server_session::app_shm_builder_config() off any session object filled-out by
+   * `*this` async_accept(), as long as its Server_session_mv::client_app() equals `app` (by App::m_name equality).
    *
    * Unlike app_shm() this method does not allow the case where `app_shm(app)` would have returned null.
    * In that case the present method yields undefined behavior (assertion may trip).
    *
    * ### Perf ###
-   * Given the choice between Server_session_mv::app_shm_builder_config() and the present method, the latter is somewhat
+   * Given the choice between Server_session::app_shm_builder_config() and the present method, the latter is somewhat
    * slower (reason: same as listed in app_shm() doc header).
    *
-   * Generally it is also quite fast for the user to save any value returned by either `app_shm_builder_config()`,
-   * as an equal-by-value `Config` object shall be returned for the same (by App::m_name equality) `app`.
+   * Generally it is also fine, and fastest, for the user to save any value returned by either
+   * `app_shm_builder_config()`, as an equal-by-value `Config` object shall be returned for the same
+   * (by App::m_name equality) `app`.
    *
    * @param app
    *        See app_shm().
@@ -352,7 +353,7 @@ private:
    *
    * Reminder: This whole premise is currently not a thing; the above is in case it becomes true in the future.
    * Oh, also, be sure in that case to not mess-up the thing where `app_name` is in the map but the "arena"
-   * is a null handle.  (As of this writing a failed `init_app_shm_as_needed` leaves null in the map for simplicity,
+   * is a null handle.  (As of this writing a failed init_app_shm_as_needed() leaves null in the map for simplicity,
    * so just make sure all that is properly handled still, if conceptual remove from `m_app_shm_by_name` becomes
    * possible.)
    *
@@ -366,10 +367,10 @@ private:
 
   // Data.
 
-  /// Identical to Session_server::m_srv_app_ref.  Used in init_app_shm_as_needed() name calc.
+  /// Identical to Session_server_impl::m_srv_app_ref.  Used in init_app_shm_as_needed() name calc.
   const Server_app& m_srv_app_ref;
 
-  /// Identical Session_base::m_srv_namespace.  Used in init_app_shm_as_needed() name calc.
+  /// Identical to Session_base::m_srv_namespace.  Used in init_app_shm_as_needed() name calc.
   Shared_name m_srv_namespace;
 
   /// Protects #m_app_shm_by_name.
@@ -377,7 +378,7 @@ private:
 
   /**
    * The per-app-scope SHM arenas by App::m_name.  If it's not in the map, it has not been needed yet.
-   * If it is but is null, it has but error caused it to not be set-up successfully.
+   * If it is but is null, it has been needed, but an error prevented its successful setup.
    */
   boost::unordered_flat_map<std::string, std::shared_ptr<Arena>> m_app_shm_by_name;
 
@@ -446,10 +447,7 @@ TEMPLATE_JEM_SESSION_SRV
 Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
 {
   using ipc::shm::arena_lend::jemalloc::Memory_manager;
-  using boost::movelib::make_unique;
   using std::make_shared;
-  using std::to_string;
-  using std::string;
 
   /* We are in some unspecified thread; actually *a* Session_server_impl thread Ws (a Server_session_impl thread W).
    * Gotta lock at least to protect from concurrent calls to ourselves on behalf of other async_accept()s. */
@@ -511,7 +509,6 @@ void CLASS_JEM_SESSION_SRV::app_shm_stats_tickle_and_schedule(const std::string&
   using util::Call_timing;
   using boost::chrono::seconds;
   using std::shared_ptr;
-  using std::string;
 
   /* If you read our doc header and possibly consult Session_impl::session_shm_stats_tickle_and_schedule() -- our
    * cousin -- then the below should be quite straightforward.
@@ -659,7 +656,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
 
   constexpr util::Fine_duration CLEANUP_PERIOD = seconds{30};
 
-  FLOW_LOG_TRACE("Client session [" << *this << "]: Periodic (or initial) cleanup starting.");
+  FLOW_LOG_TRACE("Session server [" << *this << "]: Periodic (or initial) cleanup starting.");
 
   /* This is just like Client_session_impl::cleanup(), except for some small differences explained therein; but
    * the main explanation is right here.  Read on.
@@ -711,7 +708,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
    *     header) name things in such a way as to make this pretty simple.
    *   - Determine PID of creator of given pool.  Solution: Our PID is encoded into the Shared_name due to the
    *     aforementioned ipc::session Shared_name semantics.
-   *   - Determne whether process with a certain PID is alive.  Solution: util::process_running().
+   *   - Determine whether process with a certain PID is alive.  Solution: util::process_running().
    *
    * A note on stats: Stats support for this sweep (scanned/removed/skipped counts and such) has been considered
    * and deliberately omitted.  Rationale: These events are rare by construction (crash aftermath); and the sweep
@@ -755,7 +752,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
     /* We could actually skip this next check -- then we'd be deleting client-created stuff too.  It doesn't seem
      * like there's any practical downside.  Just... I (ygoldfel) have really convinced myself by that text
      * in the big comment above regarding arena-lending SHM-providers being symmetrical in how each side deals
-     * with the resources they owned.  So going out of our way to clean server stuff by server, client stuff by
+     * with the resources they owned.  So going out of our way to clean server stuff by server, client stuff
      * by client.  @todo Reconsider maybe.  It's also not of huge import, this question: If it gets cleaned, cool. */
     if (String_view{the_rest.str()}.find_first_of(Shared_name::S_SEPARATOR,
                                                   SHM_SUBTYPE_PREFIX.size() + 1) != String_view::npos)
@@ -794,7 +791,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
   }); // remove_each_persistent_if()
   if (n_removed == 0)
   {
-    FLOW_LOG_TRACE("Session server [" << *this << "]: Cleanup finished: remove none.");
+    FLOW_LOG_TRACE("Session server [" << *this << "]: Cleanup finished: removed none.");
   }
   else
   {
