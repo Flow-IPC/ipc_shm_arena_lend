@@ -27,6 +27,8 @@
 
 #include "ipc/common.hpp"
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
+#include "ipc/shm/arena_lend/detail/arena_lend_fwd.hpp"
+#include "ipc/shm/bipc_ext/detail/sparse_managed_shm.hpp"
 #include <flow/util/util.hpp>
 #include <boost/interprocess/sync/mutex_family.hpp>
 #include <boost/interprocess/offset_ptr.hpp>
@@ -36,29 +38,43 @@ namespace ipc::shm::arena_lend::detail
 {
 
 /**
- * A boost.ipc-compliant memory-algorithm suitable for use in a `boost::interprocess::basic_managed_shared_memory`
- * whose mission is narrow: to allocate N-byte use-counts in Lend_tracker_pool.  (N is a compile-time constant,
- * namely #S_ALLOC_SZ.  Therefore in particular a `static_assert()` elsewhere guarantees that
- * `sizeof(Lend_tracker_pool::Atomic_use_ct::value_type) == Use_count_registry::S_ALLOC_SZ`.  When thinking about
+ * A boost.ipc-compliant memory-algorithm suitable for use in a bipc_ext::Sparse_managed_shm
+ * (which is a sparsely-commiting equivalent of `boost::interprocess::basic_managed_shared_memory`)
+ * whose mission is narrow: to allocate N-byte use-counts in Lend_tracker_pool.
+ * (N is a compile-time constant, namely #S_ALLOC_SZ.  Therefore in particular a `static_assert()` elsewhere guarantees
+ * that `sizeof(Lend_tracker_pool::Atomic_use_ct::value_type) == Use_count_registry::S_ALLOC_SZ`.  When thinking about
  * this generically, we recommend imagining N is either 1 or 4 so as to ballpark practical implications.)
  *
  * That is, it essentially works only for `allocate(S_ALLOC_SZ)` (N-byte allocations) and corresponding
  * deallocate() calls but is internally optimized to store such N-byte individual objects tightly and to use a
  * custom bitmap-based algorithm to find free slots quite quickly (and return them even more quickly).
  *
+ * @note We might refer here and elsewhere to a bipc_ext::Sparse_managed_shm.  See its docs for more info, but
+ *       for convenience the short version is: It is essentially a
+ *       `boost::interprocess::basic_managed_shared_memory`, except that (as a RAM-saving measure on Lend_tracker_pool's
+ *       part) it only sparsely commits its full size.  That is only pages that actually get touched (mainly by
+ *       our allocate()) are RAM-commited (<=> that RAM is taken <=> cannot be used by others until the whole thing
+ *       is removed).  `Sparse_managed_shm` = on-demand-RAM-committing/sparse `basic_managed_shared_memory`.
+ * @warning While Use_count_registry can be used as the memory-algorithm for the vanilla
+ *          `basic_managed_shared_memory`, this is probably not a good idea.  That is none of our concern per se,
+ *          as it does not change anything of what we do in a `*this`, but the assumed user Lend_tracker_pool
+ *          probably doesn't want to use-up the entire pool-size of RAM, even when only a few pages of it
+ *          are actually used.  So we explicitly call our supposed containing-guy, in comments here, a
+ *          `Sparse_managed_shm`.
+ *
  * ### Rationale ###
  * Why write it as a boost.ipc memory-algorithm specifically, particularly since it cannot be used for general
  * data but only N-byte objects (not to mention its, as of this writing, rigid size properties)?  Answer:
- * it is convenient to then create a boost.ipc `basic_managed_shared_memory` -- with Use_count_registry as a
+ * it is convenient to then create a boost.ipc `Sparse_managed_shm` -- with Use_count_registry as a
  * key template parameter thereof -- at which point stuff slots-into the appropriate vaddr location with great
  * ease of coding.  The algorithm of finding an N-byte slot efficiently would have been what it is here; and it
  * very much resembles a (narrow-use) memory-allocator; and we intended to use it in Lend_tracker_pool in SHM; so it
  * is quite a natural fit.
  *
  * ### How to use ###
- * Make a `basic_managed_shared_memory` M in the normal way but with Use_count_registry as a template parameter.
+ * Make a `Sparse_managed_shm` M in the normal way but with Use_count_registry as a template parameter.
  * Probably you'll want to use `null_index` as a template parameter as well; though maybe not (not our business).
- * Size the segment `"decltype(M)::segment_manager::get_min_size() + Use_count_registry::S_ASSUMED_BASE_OFFSET"`
+ * Size the segment `"decltype(M)::segment_manager::get_min_size() + Use_count_registry::base_offset()"`
  * (or larger, but there's no point).
  *
  * We assume you'll want a single `Metadata` struct which is the only thing a `*this` will allocate() other
@@ -114,7 +130,7 @@ namespace ipc::shm::arena_lend::detail
  *
  * Use_count_registry is, together with Lend_tracker_pool, based on the assumption that only one thread shall
  * ever do allocate() and deallocate() on a given `*this`.  Therefore it mandates the null "mutex" family
- * inside any containing `basic_managed_shared_memory`.
+ * inside any containing `Sparse_managed_shm`.
  *
  * For simplicity and resulting speed there is a rigid limit to how many N-byte use-counts can be stored in a
  * `*this`: #S_USE_COUNTS_CAPACITY (as of this writing 1 Mi a/k/a ~1 million) slots.  That is, it can represent
@@ -144,10 +160,10 @@ public:
 
   /**
    * This indicates that when using this as the memory-algorithm, we shall use no locking; this is a key
-   * assumption of our narrow use case (see class doc header).  In reality as of this writing the
-   * `basic_managed_shared_memory` that will instantiate us will also use `null_index` -- there will be no
-   * lookup of objects by name, etc. -- so actually setting this has no effect; but if that were to change
-   * then this would matter.
+   * assumption of our narrow use case (see class doc header).  (In reality as of this writing the
+   * `Sparse_managed_shm` that will instantiate us will also use `null_index` -- there will be no
+   * lookup of objects by name, etc. -- so actually setting this has no effect; but if that were to change,
+   * then this would matter.)
    */
   using Mutex_family = ::ipc::bipc::null_mutex_family;
 
@@ -157,7 +173,7 @@ public:
   /**
    * This alias is required for use in a `basic_managed_shared_memory`; `offset_ptr` is a solid default choice --
    * though in our use case we do not believe this is actually used by anything externally (definitely not
-   * internally).
+   * internally).  (Our use in `Sparse_managed_shm` may or may not require this but can't hurt.)
    */
   using Void_pointer = ::ipc::bipc::offset_ptr<void>;
 
@@ -170,7 +186,10 @@ public:
   /// The usual `size_type`.
   using size_type = size_t;
 
-  /// Required for things to build, but we do not supply an `allocate_many()`, so we set it to a dummy value.
+  /**
+   * Possibly required for things to build, but we do not supply an `allocate_many()`, so we set it to a dummy value.
+   * (Our use in `Sparse_managed_shm` may or may not require this but can't hurt.)
+   */
   using multiallocation_chain = int;
 
   /// Short-hand for arena_lend::stat::Obj_db_aux_pool_stats;
@@ -220,33 +239,6 @@ public:
   static constexpr size_t PayloadPerAllocation = 0;
 
   /**
-   * This (a bit of a hack) is a compile-time knob/constant containing the number of bytes assumed to be
-   * between the start of the SHM-pool (segment) storing us, and us (`*this`).
-   *
-   * ### Rationale ###
-   * Internally, we prefer to keep the main data area (where #S_USE_COUNTS_CAPACITY times #S_ALLOC_SZ bytes available
-   * to allocate()) aligned to the page size (and a multiple of page size), and certain subdivisions therein
-   * are also similarly aligned to/multiples of page size (4Ki bytes as of this writing/Linux/x86-64 at least),
-   * relative to the start of the containing SHM-pool.  Whether that's a worthwhile endeavour or not is not
-   * to be litigated here; but as of this writing we undertake it.
-   *
-   * So in order to undertake it successfully, knowing where `this` is and `extra_hdr_sz` passed to ctor (which
-   * specifies size of area *after* `*this` but before our data area sized #S_USE_COUNTS_CAPACITY) is not quite
-   * enough, because if the whole thing starts off a few bytes into the SHM-segment, then that slides the whole
-   * thing over we don't know how much.  (Note: `extra_hdr_sz` is used by `segment_manager` to store its stuff --
-   * though in our case as of this writing we have `null_index`, so perhaps it is zero... but we digress.)
-   *
-   * In reality as of this writing `basic_managed_shared_memory` happens to shove a little header into the
-   * pre-`*this` area.  It's hard to tell exactly, but I think it's where the segment size is stored for its
-   * internal purposes (is what scouring boost.ipc code seems to indicate)... but we digress again.
-   *
-   * Bottom line: it can be seen in boost.ipc source code that it's a little header <= #S_ALIGN_SZ, rounded up
-   * to #S_ALIGN_SZ.  So that's what we set this to now.  The hackiness is that technically that could change --
-   * perhaps to be a multiple of #S_ALIGN_SZ that is not 1x -- and until then this value is "empirically observed."
-   */
-  static constexpr size_t S_ASSUMED_BASE_OFFSET = S_ALIGN_SZ;
-
-  /**
    * Default page size.  We generally try to make larger vaddr areas sized as multiples of this and aligned
    * on this versus the start of the SHM-pool in which we reside.  That is not life-or-death whatsoever, but
    * we figure, if there will be stats about things like dirty pages, we might as well cleanly operate on entire
@@ -272,7 +264,7 @@ public:
   // Constructors/destructor.
 
   /**
-   * Constructs a `*this`, assumed to be in a SHM-pool (segment) at the time the `basic_managed_shared_memory` is
+   * Constructs a `*this`, assumed to be in a SHM-pool (segment) at the time the `Sparse_managed_shm` is
    * being created in SHM.  So the creating-side would use this ctor, whereas any opening-side(s) would
    * already work on a existing `*this` (already cted).
    *
@@ -290,13 +282,37 @@ public:
 
   /**
    * Size we require at max capacity (all #S_USE_COUNTS_CAPACITY times #S_ALLOC_SZ bytes used) for the containing
-   * SHM-pool, including us and the `extra_hdr_sz` for the segment manager, excluding #S_ASSUMED_BASE_OFFSET.
+   * SHM-pool, including us and the `extra_hdr_sz` for the segment manager, excluding base_offset().
    *
    * @param extra_hdr_sz
    *        See above.
    * @return See above.
    */
   static constexpr size_t get_min_size(size_t extra_hdr_sz);
+
+  /**
+   * The number of bytes between the start of the SHM-pool (segment) storing us and us (`*this`).  It is
+   * a #Lend_tracker_shm fact (its `S_SEGMENT_OFFSET`).  Use_count_registry itself does use it for the layout math
+   * in get_min_size() (and in stats) at least, so we declared it here.
+   *
+   * ### Rationale ###
+   * Internally we prefer to keep the main data area (where #S_USE_COUNTS_CAPACITY times #S_ALLOC_SZ bytes available
+   * to allocate()) aligned to the page size (and a multiple of page size), and certain subdivisions therein
+   * are also similarly aligned to/multiples of page size (4Ki bytes as of this writing/Linux/x86-64 at least),
+   * relative to the start of the containing SHM-pool.  Whether that's a worthwhile endeavour or not is not
+   * to be litigated here; but as of this writing we undertake it.
+   *
+   * So in order to undertake it successfully, knowing where `this` is and `extra_hdr_sz` passed to ctor (which
+   * specifies size of area *after* `*this` but before our data area sized #S_USE_COUNTS_CAPACITY) is not quite
+   * enough: the pool places `*this` not at byte 0 of itself but after a little header of its own, and that slides
+   * the whole thing over by that much.  (Trivia: that header is where boost.ipc's SHM-create-or-open algorithm
+   * keeps literally 32 bits of state -- whether the SHM-creating process has gotten as far as placing the
+   * segment-manager/memory-algorithm (the latter = us) into the just-created pool; SHM-opening processes spin on
+   * it before touching anything else -- padded to the segment-manager's alignment: #S_ALIGN_SZ as of this writing.)
+   *
+   * @return See above.
+   */
+  static constexpr size_t base_offset();
 
   /**
    * Allocates space out of #S_USE_COUNTS_CAPACITY times #S_ALLOC_SZ bytes available originally, and returns the
@@ -455,7 +471,7 @@ public:
    * standard signature imposed by boost.ipc; calling `basic_managed_shared_memory::allocate()` et al shall
    * invoke `this->allocate()` without passing it any stat-set or `prev_quanta_active`; `*this` is officially
    * a memory-algorithm.  Granted, since Lend_tracker_pool is the only actual user of Use_count_registry, it
-   * could simply bypass `basic_managed_shared_memory` allocate-API when allocating and just do something like
+   * could simply bypass `Sparse_managed_shm` allocate-API when allocating and just do something like
    * `m_pool.get_segment_manager()->get_memory_algorithm()->our_own_custom_allocate()`.  Yet we've decided, for
    * better or worse, to be a "fully" usable memory-algorithm impl (in quotes because it can still only allocate
    * one N-byte thing and then only 4-byte things, among other limitations); we're sticking to it; it might
@@ -606,6 +622,13 @@ private:
 
 // Template and constexpr implementations.
 
+constexpr size_t Use_count_registry::base_offset()
+{
+  return Lend_tracker_shm::S_SEGMENT_OFFSET;
+  /* Why aren't we a (still static constexpr) data member/constant?  That would've been fine too.  This matches
+   * the subtly related get_min_size() (which does need to be a function), so that seemed nice. */
+}
+
 constexpr size_t Use_count_registry::get_min_size(size_t extra_hdr_sz)
 {
   using flow::util::round_to_multiple;
@@ -619,7 +642,7 @@ constexpr size_t Use_count_registry::get_min_size(size_t extra_hdr_sz)
    * size of the SHM-pool; it is also the *exact* size actually (at max) *used*: we will specifically
    * set (see our ctor, where we set m_data_start_minus_this) the start of the NxUSE_COUNTS_CAPACITY-sized
    * allocate()-used area to get_min_size(extra_hdr_size) minus NxUSE_COUNTS_CAPACITY.  Empirically speaking, at least,
-   * as of this writing if one sets the SHM-pool size to `segment_manager::get_min_size() + S_ASSUMED_BASE_OFFSET`,
+   * as of this writing if one sets the SHM-pool size to `segment_manager::get_min_size() + base_offset()`,
    * it is enough, and things work; and if one sets it to a byte less -- a boost.ipc internal assertion trips
    * due to insufficient size.
    *
@@ -630,25 +653,25 @@ constexpr size_t Use_count_registry::get_min_size(size_t extra_hdr_sz)
    * multiple of PAGE_SZ.  Hence however much we think is conservatively required for that fake "struct" --
    * round *that* further up to PAGE_SZ... then the data area.
    *
-   * ...Oh... but also... see doc header for S_ASSUMED_BASE_OFFSET, then come back here.  Long story short:
+   * ...Oh... but also... see doc header for base_offset(), then come back here.  Long story short:
    * `*this` actually shall be placed after a short additional header (ALIGN_SZ-multiple-sized like the other
    * stuff), so include that in the calculation to leave the start of NxUSE_COUNTS_CAPACITY data area
    * PAGE_SZ-aligned versus the start of the containing SHM-pool. */
 
-  static_assert((S_ASSUMED_BASE_OFFSET % S_ALIGN_SZ) == 0, "boost.ipc is known to align this stringently.");
-  return round_to_multiple(S_ASSUMED_BASE_OFFSET
+  static_assert((base_offset() % S_ALIGN_SZ) == 0, "boost.ipc is known to align this stringently.");
+  return round_to_multiple(base_offset()
                              + round_to_multiple(sizeof(Header), S_ALIGN_SZ)
                              + round_to_multiple(extra_hdr_sz, S_ALIGN_SZ),
                            S_PAGE_SZ)
          + (S_USE_COUNTS_CAPACITY * S_ALLOC_SZ)
-         /* The sum so far = actual desired (min/forever) pool size, starting from byte 0 of ASSUMED_BASE_OFFSET-header
+         /* The sum so far = actual desired (min/forever) pool size, starting from byte 0 of base_offset()-header
           * and ending at last byte of our data-area.  And it's sized in such a way, if we did the rounding math
           * right, that data-area begins on a page's byte 0, relative to the pool start.  A bunch of slack likely
           * precedes this byte 0, due to the rounding-up of previous areas to the nearest PAGE_SZ.
           *
           * That's great.  However, we aren't being asked to return *that* size, but the size relative to `this`
-          * (== &m_header), which sits after ASSUMED_BASE_OFFSET bytes.  Hence: */
-         - S_ASSUMED_BASE_OFFSET;
+          * (== &m_header), which sits after base_offset() bytes.  Hence: */
+         - base_offset();
   /* @todo Check an above thing empirically: see if data-area minus actual-pool-start mod PAGE_SZ, is zero.
    * assert() or unit-test it somewhere.  Just be careful to get "actual-pool-start" at the right/sufficiently
    * high level (probably not in here), so that it is convincing without having to assume some of the same arithmetic

@@ -52,7 +52,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
   // using flow::util::construct_at; // C++20 => can conflict with incidentally included std:: counterpart.
   using boost::io::ios_all_saver;
 
-  const auto POOL_SZ = Pool::segment_manager::get_min_size() + Use_count_registry::S_ASSUMED_BASE_OFFSET;
+  const auto POOL_SZ = Pool::Segment_manager::get_min_size() + Use_count_registry::base_offset();
 
   log_while_locked([&](auto&& get_logger, auto&& get_log_component)
   {
@@ -72,7 +72,11 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
     util::op_with_possible_bipc_exception
       (logger_ptr, nullptr, classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR, "Lend_tracker_pool(): Pool()", [&]()
     {
-      m_pool.emplace(util::CREATE_ONLY, m_pool_name.native_str(), POOL_SZ, nullptr, perms);
+      m_pool.emplace(util::CREATE_ONLY, m_pool_name, POOL_SZ, perms);
+      /* The pool is sparse by design (Pool docs): we never commit() it, as that is the whole point (only the
+       * use-count quanta actually used shall take RAM).  So the SHM-object handle (FD) is useless to us;
+       * drop it (FDs are a resource). */
+      m_pool->close_shm_object_handle();
     });
   }); // log_while_locked()
 
@@ -94,7 +98,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
     flow::util::construct_at(hint, 0);
   }
 
-  assert((m_metadata == m_pool->get_segment_manager()->get_memory_algorithm().get_metadata<Metadata>())
+  assert((m_metadata == m_pool->core()->get_segment_manager()->get_memory_algorithm().get_metadata<Metadata>())
          && "By definition this should be that: we just made it!");
 
 } // Lend_tracker_pool::Lend_tracker_pool(Create_only)
@@ -114,10 +118,11 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
     util::op_with_possible_bipc_exception
       (get_logger(), nullptr, classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR, "Lend_tracker_pool(): Pool()", [&]()
     {
-      m_pool.emplace(util::OPEN_ONLY, m_pool_name.native_str());
+      m_pool.emplace(util::OPEN_ONLY, m_pool_name);
+      m_pool->close_shm_object_handle(); // See creator ctor.
     });
 
-    m_metadata = m_pool->get_segment_manager()->get_memory_algorithm().get_metadata<Metadata>();
+    m_metadata = m_pool->core()->get_segment_manager()->get_memory_algorithm().get_metadata<Metadata>();
 
     FLOW_LOG_INFO
       ("Lend-tracker pool [" << *this << "]: "
@@ -155,7 +160,7 @@ Lend_tracker_pool::~Lend_tracker_pool()
 
     if (m_stats)
     {
-      m_pool->get_segment_manager()->get_memory_algorithm().stats_record_at_deletion(m_stats);
+      m_pool->core()->get_segment_manager()->get_memory_algorithm().stats_record_at_deletion(m_stats);
     }
   }
   else
@@ -183,7 +188,8 @@ use_ct_idx_t Lend_tracker_pool::use_count_new()
   Atomic_use_ct* use_ct_ptr{};
   try
   {
-    // Cannot do the following due to null_index: m_pool->construct<Atomic_use_ct>(::ipc::bipc::anonymous_instance)(1).
+    /* Cannot do the following due to null_index:
+     *   m_pool->core()->construct<Atomic_use_ct>(::ipc::bipc::anonymous_instance)(1). */
     use_ct_ptr = static_cast<decltype(use_ct_ptr)>(pool_allocate(sizeof(*use_ct_ptr)));
   }
   catch (const exception& exc)
@@ -442,9 +448,9 @@ void Lend_tracker_pool::use_count_return_bc_unused(use_ct_idx_t* use_ct_idx_ptr,
     // else { Skip ~any cycle use on logging along fast-path. }
   } // else if (!was_not_counted_as_unused)
 
-  // Cannot do the following due to null_index: m_pool->destroy_ptr(use_ct_ptr).
+  // Cannot do the following due to null_index: m_pool->core()->destroy_ptr(use_ct_ptr).
   use_ct_ptr->~Atomic_use_ct();
-  m_pool->deallocate(use_ct_ptr);
+  m_pool->core()->deallocate(use_ct_ptr);
 
   use_ct_idx = 0;
 } // Lend_tracker_pool::use_count_return_bc_unused()
@@ -477,7 +483,7 @@ unsigned int Lend_tracker_pool::n_unused() const
 
 void* Lend_tracker_pool::pool_allocate(size_t sz)
 {
-  /* Basically we just want to forward to m_pool->allocate(sz) which really forwards to
+  /* Basically we just want to forward to m_pool->core()->allocate(sz) which really forwards to
    * Use_count_registry::allocate().  However, to get nice but performant stats in m_stats, follow
    * the protocol documented on Use_count_registry::stats_record().  (See also dtor + stats_record_at_deletion().)
    *
@@ -488,14 +494,14 @@ void* Lend_tracker_pool::pool_allocate(size_t sz)
    * shorter code; as for total perf impact... probably small.  Though it has not as of this writing been profiled. */
   if (m_stats)
   {
-    auto& mem_algo = m_pool->get_segment_manager()->get_memory_algorithm();
+    auto& mem_algo = m_pool->core()->get_segment_manager()->get_memory_algorithm();
     const auto qta = mem_algo.stat_quanta_active();
-    const auto ret = m_pool->allocate(sz);
+    const auto ret = m_pool->core()->allocate(sz);
     mem_algo.stats_record(qta, m_stats); // To restate some of aforementioned doc header: almost always no-op.
     return ret;
   }
   // else
-  return m_pool->allocate(sz);
+  return m_pool->core()->allocate(sz);
 }
 
 void Lend_tracker_pool::update_log_context(const flow::log::Log_context_mt* log_ctx,
@@ -516,10 +522,10 @@ std::ostream& operator<<(std::ostream& os, const Lend_tracker_pool& val)
 
   return os << (val.m_is_creator ? "adm" : "cli")
             << "[sh_name[" << val.m_pool_name << "] unused-cts[" << val.n_unused() << "] use-cts-used/free"
-               "[" << (((Use_count_registry::S_USE_COUNTS_CAPACITY * USE_CT_SZ) - val.m_pool->get_free_memory())
+               "[" << (((Use_count_registry::S_USE_COUNTS_CAPACITY * USE_CT_SZ) - val.m_pool->core()->get_free_memory())
                        / USE_CT_SZ)
             << '/'
-            << (val.m_pool->get_free_memory() / USE_CT_SZ) << "]]@" << &val;
+            << (val.m_pool->core()->get_free_memory() / USE_CT_SZ) << "]]@" << &val;
 }
 
 } // namespace ipc::shm::arena_lend::detail

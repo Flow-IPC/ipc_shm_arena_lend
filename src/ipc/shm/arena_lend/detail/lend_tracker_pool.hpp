@@ -28,12 +28,11 @@
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
 #include "ipc/shm/arena_lend/detail/use_count_registry.hpp"
 #include "ipc/shm/arena_lend/detail/arena_lend_fwd.hpp"
+#include "ipc/shm/bipc_ext/detail/sparse_managed_shm.hpp"
 #include "ipc/util/detail/util.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/shared_name.hpp"
 #include <flow/log/log.hpp>
-#include <boost/interprocess/managed_shared_memory.hpp>
-#include <boost/interprocess/indexes/null_index.hpp>
 #include <optional>
 #include <atomic>
 
@@ -170,9 +169,9 @@ namespace ipc::shm::arena_lend::detail
  *
  * ### Impl ###
  * In this case the impl should be reasonably clear from the above description combined with various comments
- * throughout.  The main point are these:
- *   - It keeps a boost.interprocess SHM-pool `basic_managed_shared_memory` but instead of any default/general
- *     allocation-algorithm we substitute our own Use_count_registry.
+ * throughout.  The main points are these:
+ *   - It keeps a #Lend_tracker_shm (almost = boost.interprocess SHM-pool `basic_managed_shared_memory`),
+ *     but instead of any default/general allocation-algorithm we substitute our own Use_count_registry.
  *   - Use_count_registry provides the compact use-count bitmap/array in the form of a very simple allocation-algo
  *     (it can only allocate use-count-integer-sized "objects").  This is where we plop our `atomic<>` use-counts.
  *   - It also provides some header space; in this area we place our Lend_tracker_pool::Metadata which is where we
@@ -495,8 +494,11 @@ private:
                   "which cannot work across processes; and lock-freedom implies address-freedom in practice; "
                   "address-freedom makes our cross-process (SHM) use-count ops work.  See also its doc header.");
 
-  /// Type of #m_pool.
-  using Pool = ::ipc::bipc::basic_managed_shared_memory<char, Use_count_registry, ::ipc::bipc::null_index>;
+  /**
+   * Type of #m_pool.  It is a bipc_ext::Sparse_managed_shm, as opposed to `bipc::managed_shared_memory`, so that
+   * the pool is sparse: a given use-count quantum takes RAM only once first used; see its doc header.
+   */
+  using Pool = Lend_tracker_shm;
 
   /// The header stored in #m_pool, ahead of the actual use-counts.
   struct Metadata

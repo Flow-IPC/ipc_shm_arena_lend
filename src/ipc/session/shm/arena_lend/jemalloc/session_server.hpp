@@ -46,6 +46,10 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * (ipc::shm::arena_lend::jemalloc).  Its API is identical to that of Session_server, except that it emits
  * #Server_session_obj that are shm::arena_lend::jemalloc::Server_session and not vanilla #Server_session.
  *
+ * @note Lifetime recommendations and requirements -- the destruction order among `*this`, its sessions and their
+ *       channels; how long the app_shm() arenas live -- are in the same-named section of session::Session_server
+ *       doc header.
+ *
  * @internal
  *
  * ### Implementation ###
@@ -209,7 +213,8 @@ public:
   void mq_msg_size_limit(size_t limit);
 
   /**
-   * Returns pointer to the per-`app` SHM-arena, whose lifetime extends until `*this` is destroyed;
+   * Returns pointer to the per-`app` SHM-arena, whose lifetime extends until `*this`, and every
+   * shm::arena_lend::jemalloc::Server_session of `app` from `*this`, are destroyed;
    * or null if that arena has not yet been successfully created (which is attempted during the log-in of the
    * first client of `app` to reach `*this` via async_accept()).  Alternatively you may use
    * shm::arena_lend::jemalloc::Server_session::app_shm() off any session object filled-out by `*this`

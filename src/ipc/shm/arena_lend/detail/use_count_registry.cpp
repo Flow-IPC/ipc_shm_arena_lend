@@ -327,11 +327,11 @@ size_t Use_count_registry::stats_record(size_t prev_quanta_active, Obj_db_aux_po
      *     that there is a potential hole in m_header.m_bitmap_words; the unused quanta's part of the bitmap.
      *     We already counted the *used* part in inc_sz above.  Therefore subtract it from this addition
      *     to inc_sz; the addition is to exclude the quanta.
-     *   - There's also the little pre-`*this` header that technically also takes memory, S_ASSUMED_BASE_OFFSET.
+     *   - There's also the little pre-`*this` header that technically also takes memory, base_offset().
      *     Including it is pedantic as hell (especially given that we're not, like, ultra-precise about which
      *     actual pages are actually resident -- among other things we assume the entire quantum is paged-in
      *     from the jump; not true).  And yet! */
-    inc_sz += ((m_header.m_data_start_minus_this - S_BITMAP_SZ) + S_ASSUMED_BASE_OFFSET);
+    inc_sz += ((m_header.m_data_start_minus_this - S_BITMAP_SZ) + base_offset());
 
     /* These two GAUGEs are to include the max possible values for m_use_ct_active_quanta and m_resident_sz
      * respectively; meaning one can see "total of m_use_ct_active_quanta of m_use_ct_quanta in-use" and
@@ -343,11 +343,11 @@ size_t Use_count_registry::stats_record(size_t prev_quanta_active, Obj_db_aux_po
      * per pool is not a compile-time decision; the perf impact should be negligible due to relative rarity
      * this code executing. */
     constexpr auto MAX_QUANTA = S_USE_COUNTS_CAPACITY / S_USE_COUNTS_CAPACITY_QUANTUM_SZ;
-    const auto mapped_sz = get_min_size(m_header.m_extra_hdr_sz) + S_ASSUMED_BASE_OFFSET;
+    const auto mapped_sz = get_min_size(m_header.m_extra_hdr_sz) + base_offset();
 
     static_assert(MAX_QUANTA == (S_BITMAP_SZ / S_BITMAP_QUANTUM_SZ), "Something is off somewhere....");
     assert((mapped_sz == (((MAX_QUANTA - quanta_added) * INC_PER_QTM_SZ) + inc_sz))
-           && "Something is off somewhere... get_min_size()+ASSUMED_BASE_OFFSET should = all hdr+all quanta.");
+           && "Something is off somewhere... get_min_size()+base_offset() should = all hdr+all quanta.");
 
     update_hi_wmark(&target_stats->m_use_ct_quanta_hi_wmark,
                     fetch_add(&target_stats->m_use_ct_quanta, MAX_QUANTA) + MAX_QUANTA);
@@ -377,7 +377,7 @@ size_t Use_count_registry::stats_record_at_deletion(Obj_db_aux_pool_stats* targe
   const auto quanta_active = quanta_active_x_bitmap_qtm_words / (S_BITMAP_QUANTUM_SZ / sizeof(bit_word_t));
   constexpr auto MAX_QUANTA = S_USE_COUNTS_CAPACITY / S_USE_COUNTS_CAPACITY_QUANTUM_SZ;
 
-  const auto mapped_sz = get_min_size(m_header.m_extra_hdr_sz) + S_ASSUMED_BASE_OFFSET;
+  const auto mapped_sz = get_min_size(m_header.m_extra_hdr_sz) + base_offset();
 
   fetch_sub(&target_stats->m_aux_pool_count, 1);
   fetch_sub(&target_stats->m_use_ct_quanta, MAX_QUANTA);

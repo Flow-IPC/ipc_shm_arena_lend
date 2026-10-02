@@ -26,7 +26,10 @@
 #pragma once
 
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
+#include "ipc/shm/bipc_ext/detail/bipc_ext_fwd.hpp"
 #include <flow/util/util_fwd.hpp>
+#include <boost/interprocess/interprocess_fwd.hpp>
+#include <boost/interprocess/indexes/null_index.hpp>
 #include <cstdint>
 #include <atomic>
 #include <ostream>
@@ -106,6 +109,14 @@ using pool_id_t = uint32_t;
  * those names with hierarchy and easy on-crash cleanup in mind.
  */
 using use_ct_idx_t = uint32_t;
+
+/**
+ * The managed-SHM-pool type underlying each Lend_tracker_pool: Use_count_registry as the memory-algorithm, no
+ * named-object index, sparse (so that only the use-count quanta actually used take RAM).  Defined here, outside
+ * both classes, because each needs it: Lend_tracker_pool keeps one; Use_count_registry::base_offset() must match
+ * its layout.
+ */
+using Lend_tracker_shm = shm::bipc_ext::Sparse_managed_shm<Use_count_registry, ::ipc::bipc::null_index>;
 
 // Free functions.
 

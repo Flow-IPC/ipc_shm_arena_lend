@@ -220,11 +220,11 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
        // Get the Session_server<> such that its core comprises the arg `srv`.
        srv = srv->this_session_srv(),
        pre_rsp_setup_func = std::move(pre_rsp_setup_func)]
-        () -> Error_code
+        (const Client_app& cli_app) -> Error_code
   {
     // We are in thread W.
 
-    auto err_code = pre_rsp_setup_func();
+    auto err_code = pre_rsp_setup_func(cli_app);
     if (err_code)
     {
       // Any Session_server-given setup failed => no point in doing our SHM-jemalloc per-session setup.
@@ -246,7 +246,7 @@ void CLASS_JEM_SRV_SESSION_IMPL::async_accept_log_in
      *     - If it already existed by then (Client_app seen already), even better.
      *     - If that creation failed, then pre_rsp_setup_func() just failed, so we are not here.
      *   - Parent session server's app_shm(<the Client_app>) = what we want. */
-    m_app_shm = srv->app_shm_ptr(*(Base::Base::Base::cli_app_ptr()));
+    m_app_shm = srv->app_shm_ptr(cli_app);
     assert(m_app_shm && "How can it be null, if pre_rsp_setup_func() returned success?  Contract broken internally?");
 
     /* Now session_shm(), shm_session(), and registering of the former (and of app_shm()) into shm_session().
