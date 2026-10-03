@@ -39,7 +39,7 @@ namespace ipc::shm::arena_lend::detail
 
 /**
  * A boost.ipc-compliant memory-algorithm suitable for use in a bipc_ext::Sparse_managed_shm
- * (which is a sparsely-commiting equivalent of `boost::interprocess::basic_managed_shared_memory`)
+ * (which is a sparsely-committing equivalent of `boost::interprocess::basic_managed_shared_memory`)
  * whose mission is narrow: to allocate N-byte use-counts in Lend_tracker_pool.
  * (N is a compile-time constant, namely #S_ALLOC_SZ.  Therefore in particular a `static_assert()` elsewhere guarantees
  * that `sizeof(Lend_tracker_pool::Atomic_use_ct::value_type) == Use_count_registry::S_ALLOC_SZ`.  When thinking about
@@ -53,7 +53,7 @@ namespace ipc::shm::arena_lend::detail
  *       for convenience the short version is: It is essentially a
  *       `boost::interprocess::basic_managed_shared_memory`, except that (as a RAM-saving measure on Lend_tracker_pool's
  *       part) it only sparsely commits its full size.  That is only pages that actually get touched (mainly by
- *       our allocate()) are RAM-commited (<=> that RAM is taken <=> cannot be used by others until the whole thing
+ *       our allocate()) are RAM-committed (<=> that RAM is taken <=> cannot be used by others until the whole thing
  *       is removed).  `Sparse_managed_shm` = on-demand-RAM-committing/sparse `basic_managed_shared_memory`.
  * @warning While Use_count_registry can be used as the memory-algorithm for the vanilla
  *          `basic_managed_shared_memory`, this is probably not a good idea.  That is none of our concern per se,
@@ -65,7 +65,7 @@ namespace ipc::shm::arena_lend::detail
  * ### Rationale ###
  * Why write it as a boost.ipc memory-algorithm specifically, particularly since it cannot be used for general
  * data but only N-byte objects (not to mention its, as of this writing, rigid size properties)?  Answer:
- * it is convenient to then create a boost.ipc `Sparse_managed_shm` -- with Use_count_registry as a
+ * it is convenient to then create a boost.ipc/extension `Sparse_managed_shm` -- with Use_count_registry as a
  * key template parameter thereof -- at which point stuff slots-into the appropriate vaddr location with great
  * ease of coding.  The algorithm of finding an N-byte slot efficiently would have been what it is here; and it
  * very much resembles a (narrow-use) memory-allocator; and we intended to use it in Lend_tracker_pool in SHM; so it
@@ -74,7 +74,7 @@ namespace ipc::shm::arena_lend::detail
  * ### How to use ###
  * Make a `Sparse_managed_shm` M in the normal way but with Use_count_registry as a template parameter.
  * Probably you'll want to use `null_index` as a template parameter as well; though maybe not (not our business).
- * Size the segment `"decltype(M)::segment_manager::get_min_size() + Use_count_registry::base_offset()"`
+ * Size the segment `"decltype(M)::Segment_manager::get_min_size() + Use_count_registry::base_offset()"`
  * (or larger, but there's no point).
  *
  * We assume you'll want a single `Metadata` struct which is the only thing a `*this` will allocate() other
@@ -468,7 +468,7 @@ public:
    * Why this dance with `prev_quanta_active`?  Why can't `*this` save it automatically?  For that matter why
    * not just pass a `target_stats` to allocate() and have it update everything automatically?  Answer: As for
    * the latter: that is certainly doable and would simplify the API (fewer methods), but allocate() has a
-   * standard signature imposed by boost.ipc; calling `basic_managed_shared_memory::allocate()` et al shall
+   * standard signature imposed by boost.ipc; calling `Sparse_managed_shm::allocate()` et al shall
    * invoke `this->allocate()` without passing it any stat-set or `prev_quanta_active`; `*this` is officially
    * a memory-algorithm.  Granted, since Lend_tracker_pool is the only actual user of Use_count_registry, it
    * could simply bypass `Sparse_managed_shm` allocate-API when allocating and just do something like
@@ -569,7 +569,7 @@ private:
     const size_t m_data_start_minus_this;
 
     /**
-     * How much of of the data area is in use, in bytes; i.e., the count of 1-bits in #m_bitmap_words,
+     * How much of the data area is in use, in bytes; i.e., the count of 1-bits in #m_bitmap_words,
      * times #S_ALLOC_SZ; a/k/a `S_USE_COUNTS_CAPACITY * S_ALLOC_SZ - get_free_memory()`.
      */
     size_t m_allocated_sz;
