@@ -519,20 +519,48 @@ public:
    * running totals across all `Shm_session`s in this process -- and (optionally) output a copy of similar information
    * broken down by arena, each identified and in ascending order by stat::Uniq_arena_id
    * Borrower_pool_stats::m_uniq_arena_id.  See stat::Borrower_pool_stats doc header for background on interpreting
-   * the data; some related notes follow.
+   * the data; some related notes are below.
    *
+   * @note The returned-by-ref Borrower_pool_stats has its Borrower_pool_stats::m_uniq_arena_id all-zeroes, as it
+   *       is aggregated info, not per-arena.
+   * @note (Assume `per_arena_stats_sz_limit_or_0 = 0`, and no eviction of historical per-arena data has occurred.)
+   *       The returned totals could almost be computed by summing the per-arena `Borrower_pool_stats` (via
+   *       `flow::util::stat::stats_sum()`) -- except the `HI_WMARK`s, which are accurate only on the returned
+   *       totals (continuously updated there); that historical info is lost when split by arena across time.
+   * @note In each stat-set in `*per_arena_stats` Borrower_pool_stats::m_n_borrowed_arenas cannot exceed 1.
+   *
+   * ### Concurrency semantics ###
    * The returned (totals) reference is to live `atomic<>`s which can change at any moment concurrently;
    * hence even values grabbed in immediate succession can be slightly mutually incoherent.  Consume via
    * `flow::util::stat::load()` / `stats_assign()` / `print()` (et al); see `flow::util::stat` doc header.
    *
-   * @note The returned-by-ref Borrower_pool_stats has its Borrower_pool_stats::m_uniq_arena_id all-zeroes, as it
-   *       is aggregated info, not per-arena.
-   * @note Each element in out-arg `*per_arena_stats`, by contrast, is a snapshot copy as of this call; it will
-   *       not change on return.
-   * @note The returned totals could almost be computed by summing the per-arena `Borrower_pool_stats` (via
-   *       `flow::util::stat::stats_sum()`) -- except the `HI_WMARK`s, which are accurate only on the returned
-   *       totals (continuously updated there); that historical info is lost when split by arena across time.
-   * @note In each stat-set in `*per_arena_stats` Borrower_pool_stats::m_n_borrowed_arenas cannot exceed 1.
+   * Each element in out-arg `*per_arena_stats`, by contrast, is a snapshot copy as of this call; it will
+   * not change on return.
+   *
+   * ### Limits on result size `per_arena_stats->size()` ###
+   * There are two limits, one user-controlled and one (usually much larger) not.
+   *
+   * The limit you can control is the in-arg `per_arena_stats_sz_limit_or_0`, if set to non-zero.  Supposing
+   * we internally have history of N, greater than `per_arena_stats_sz_limit_or_0`, per-arena stat-sets:
+   * We shall output only `per_arena_stats_sz_limit_or_0` of them.  This is useful for practical purposes
+   * when, say, logging all the results; it might be not too useful to print hundreds of stat-sets.
+   *
+   * @note `*n_arenas_omitted` is set to the number of stat-sets thus dropped past `per_arena_stats_sz_limit_or_0`.
+   *
+   * There is also an internal limit, which is a constant.  To avoided unbounded growth of overall per-arena
+   * stats here, we irreversibly forget an old stat-set, if we are about to go past this limit.  Therefore
+   * (even with `per_arena_stats_sz_limit_or_0 = 0` a/k/a infinity) `per_arena_stats->size()` shall not exceed
+   * this large internal limit.
+   *
+   * If arena-stat-sets are omitted due to the limit in-arg, and/or arena-stat-sets are forgotten due to the
+   * internal growth limit, the *oldest* (according to the same age criterion) arenas are omitted/forgotten.
+   * This *age* is determined by the following critierion: time passed since the last time a stat-modifying event
+   * has occurred for that arena.  Namely:
+   *   - the arena is borrowed through a session (opposing Shm_session::lend_arena());
+   *   - the arena is unborrowed through a session (as of this writing: local Shm_session borrowing it is destroyed);
+   *   - a pool through the arena was unborrowed (ditto);
+   *   - a pool through the arena was borrowed (opposing process allocated in arena, and that allocation
+   *     necessitated the creation -- and therefore automatic lending -- of a new SHM-pool in the arena).
    *
    * ### Thread safety ###
    * Safe to call concurrently with anything on any `Shm_session` (or none).
@@ -541,10 +569,18 @@ public:
    *        If null, ignored; else cleared, then loaded with per-arena stat copies (the `unique_ptr` wrapper is
    *        for your convenience -- cheap moves; and the stat-sets are not natively copyable due to their `atomic`
    *        members).  Sorted ascending by Uniq_arena_id::m_id1 (owner-PID), then `m_id2` (per-process ordinal).
+   * @param per_arena_stats_sz_limit_or_0
+   *        (Ignored if `per_arena_stats` is null.)  If not zero, result `per_arena_stats->size()` is limited to
+   *        at most this many elements, with most-recently updated stat-sets given precedence.
+   * @param n_arenas_omitted
+   *        (Ignored if `per_arena_stats` is null.)  `*n_arenas_omitted` shall be set to the number of stat-sets
+   *        internally available but omitted from `*per_arena_stats` due to `per_arena_stats_sz_limit_or_0`.
+   *        (If `per_arena_stats_sz_limit_or_0 == 0`, `*n_arenas_omitted` shall be zero.)
    * @return See above (the across-all-`Shm_session`s totals).
    */
   static const Borrower_pool_stats&
-    borrower_pool_stats_process_wide(Borrower_pool_stats_list* per_arena_stats = nullptr);
+    borrower_pool_stats_process_wide(Borrower_pool_stats_list* per_arena_stats = nullptr,
+                                     size_t per_arena_stats_sz_limit_or_0 = 0, size_t* n_arenas_omitted = nullptr);
 
   /**
    * Resets borrower_pool_lookup_global_stats() and borrower_pool_stats_process_wide().  The formal meaning of a reset

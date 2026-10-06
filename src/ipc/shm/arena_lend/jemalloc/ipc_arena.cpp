@@ -40,6 +40,7 @@
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string.hpp>
+#include <string>
 
 namespace ipc::shm::arena_lend::jemalloc
 {
@@ -208,13 +209,14 @@ void Ipc_arena::destroy()
                                                                { return ostream_op_string(arena_id); }),
                             ", ") << "]."); // BTW: reminder: they're in sorted order in m_arenas.
   {
-    Info_dump dump; // Full verbosity, multi-line.
+    Info_dump dump; // Full verbosity, multi-line. / Avoid unneeded info_dump() by placing it inside log-macro.
     dump.m_fmt.m_verbose = false; // Don't need the many-pages jemalloc-dump.  They can log it themselves if desired.
-    info_dump(&dump,
-              Call_timing::S_POSSIBLY_UNSAFE); // See jemalloc::Memory_manager doc header for explanation.
+
     FLOW_LOG_INFO("Ipc_arena [" << this << "] shutdown: "
-                  "~Final state (includes ~final this-arena + ~current global):"
-                  "\n" << dump << '.'); // Note: no newline at end of info_dump.
+                  "~Final state (includes ~final this-arena + ~current global):\n"
+                  << (info_dump(&dump,
+                                Call_timing::S_POSSIBLY_UNSAFE), // See jemalloc::Memory_manager docs explanation.
+                      dump) << '.'); // Note: no newline at end of info_dump.
   }
 
   /* This is also required but is orthogonal to the much-discussed _admin-oriented stuff and lacks its complexities.
@@ -1372,11 +1374,15 @@ void Ipc_arena::info_dump(Info_dump* target_info_dump, util::Call_timing call_ti
 {
   using flow::util::stat::stats_assign;
   using std::vector;
+  using std::string;
 
   assert(target_info_dump);
   target_info_dump->m_mem_mgr_stats = mem_mgr_consume_ok(call_timing) ? memory_manager_stats()
                                                                       : vector<Memory_manager_stats>{};
-  target_info_dump->m_mem_mgr_stats_dump = get_jemalloc_memory_manager()->stats_dump_to_string();
+  // Info_dump_format contract allows us to not even collect this now.
+  target_info_dump->m_mem_mgr_stats_dump = target_info_dump->m_fmt.m_verbose
+                                             ? get_jemalloc_memory_manager()->stats_dump_to_string()
+                                             : string{};
 
   sharded_stats(&target_info_dump->m_sharded_stats);
   stats_assign(&target_info_dump->m_pool_stats, pool_stats());

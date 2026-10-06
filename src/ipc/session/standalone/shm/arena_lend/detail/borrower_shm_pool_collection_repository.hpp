@@ -34,6 +34,7 @@
 #include "ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp"
 #include "ipc/session/standalone/shm/arena_lend/detail/arena_lend_fwd.hpp"
 #include <flow/util/action_registry.hpp>
+#include <flow/util/linked_hash_map.hpp>
 #include <flow/log/log.hpp>
 #include <boost/unordered/unordered_flat_map.hpp>
 #include <boost/range/adaptor/map.hpp>
@@ -405,10 +406,15 @@ public:
    * meaning of `per_arena_stats` and the returned totals.
    *
    * @param per_arena_stats
-   *        See jemalloc::Shm_session::borrower_pool_stats_process_wide().
+   *        See above.
+   * @param per_arena_stats_sz_limit_or_0
+   *        See above.
+   * @param n_arenas_omitted
+   *        See above.
    * @return See above.
    */
-  const Borrower_pool_stats& stats(Borrower_pool_stats_list* per_arena_stats) const;
+  const Borrower_pool_stats& stats(Borrower_pool_stats_list* per_arena_stats,
+                                   size_t per_arena_stats_sz_limit_or_0, size_t* n_arenas_omitted) const;
 
   /// Resets stats().  The formal meaning of a reset is discussed in `flow::util::stat` doc header.
   void stats_reset();
@@ -460,6 +466,22 @@ private:
   using Core_rev = ipc::shm::arena_lend::detail::Shm_pool_repo_lookup_core_rev
                      <Borrower_shm_pool_collection_repository, false, Shm_arena>;
 
+  // Constants.
+
+  /**
+   * The maximum `.size()` of #m_per_arena_borrower_pool_stats; once reached, and a `Stat_set` is to be
+   * inserted, the LRU `Stat_set` is erased from that map.
+   *
+   * @see #m_per_arena_borrower_pool_stats doc header for discussion of the LRU-eviction algorithm.
+   *
+   * ### Value ###
+   * We ran some experiments indicating how long stats()/stats_reset()/pretty-print of stats() takes and chose
+   * a value well below the point where those times stopped being reasonable.  Since the value is still pretty high
+   * (e.g., a user is likely to pass a much lower, nonzero `per_arena_stats_sz_limit_or_0` to stats()),
+   * subjectively speaking, we feel this worked out OK.
+   */
+  static constexpr size_t S_N_PER_ARENA_BORROWER_POOL_STATS_SZ_LIMIT = 1000;
+
   // Constructors.
 
   /// Constructor.  Zero-arg due to singleton pattern.
@@ -498,8 +520,8 @@ private:
    * Regarding perf: basically same thing; there shall be potentially multiple `Shm_session`s around, but
    * not so many that the frequency-of-stat-updates picture is fundamentally changed.
    *
-   * Regarding concurrency/locking: basically same thing; no locking required.  (Watch out, though, as
-   * #m_per_arena_borrower_pool_stats has a different story due to maintaining a key-set, being a map.)
+   * Regarding concurrency/locking: basically same thing; no locking required.  (Watch out, though,
+   * as #m_per_arena_borrower_pool_stats has a different story due to maintaining a key-set, being a map.)
    * Regarding semantics: this PoV for a Borrower_pool_stats is fully non-degenerate.  That should be clear
    * having read the aforementioned doc header, but we emphasize: A first-registering of a SHM-pool here
    * (its Pool_rc_data::m_use_count goes 0=>1 <=> new Pool_rc_data is created/inserted) means
@@ -514,7 +536,13 @@ private:
    * Carries the totals from #m_borrower_pool_stats but broken-down by arena/collection *ever* borrowed, each
    * as identified by #Uniq_collection_id.
    *
-   * @note Key semantic point: A particular Uniq_collection_id X being in m_collection_data_map does imply
+   * LRU eviction: To avoid unbounded growth evicts the LRU (least recently touched
+   * stats-wise arena, identified by `Uniq_collection_id`) entry on insertion having reached a certain max
+   * size.  "Touching stats-wise" is defined as any of the 4 APIs `[de]register_{collection|shm_pool}()` invoked
+   * for that `Uniq_collection_id`.
+   *
+   * @note Key semantic point: (Assume no eviction has occurred.)
+   *       A particular Uniq_collection_id X being in m_collection_data_map does imply
    *       it is in `m_per_arena_borrower_pool_stats`; but the reverse is not necessarily the case:
    *       The key-set here is historical; an arena being borrowed, then unborrowed, does not delete it from
    *       this map.  Its then being borrowed again would, for example, increment its
@@ -524,6 +552,10 @@ private:
    *       The only vaguely degenerate semantic thing is that here Borrower_pool_stats::m_n_borrowed_arenas
    *       cannot exceed 1: an arena is either currently being borrowed by 1+ `Shm_session`s, or it is not.
    *
+   * @note Usually the entries in #m_per_arena_borrower_pool_stats combined match the totals
+   *       in #m_borrower_pool_stats.  This stops being fully true, *if* and (past) when the former grows
+   *       large enough to require the LRU-removal of entries from then on, on subsequent insertions.
+   *
    * ### Thread safety ###
    * While at the level of an individual Borrower_pool_stats there are no particular worries -- it is all `atomic`s
    * already -- here we also have the key-set of this map; it can be modified on behalf of, e.g., 2+
@@ -532,20 +564,54 @@ private:
    * Use the same mutex + lock-sections as #m_rc_pools_by_id and/or #m_collection_data_map when reading or
    * modifying #m_per_arena_borrower_pool_stats.
    *
-   * Subtlety: The stat-members themselves are `atomic<>`s, so one could say the mutex need not be locked, once
-   * the key-set is established; the actual stat-set update can be done outside the lock-section.  (This would
-   * require pointer-stability for each Borrower_pool_stats, and we use an `Own<>` wrapper around each stat-set;
-   * this also means cheap moves when key-set is modified.  Could also use a `_node_` map -- but whatever.)  However
-   * in this particular case semantically it is probably incorrect to rely on this and could result in some split-second
-   * temporary unpleasant results for some GAUGEs (and even possibly permanently unpleasant results in derived
-   * HI_WMARKs), particularly if arena X is un-borrowed through one session while being borrowed through another
-   * right then.  We could reason it out carefully and explain here, but cognitively we
-   * feel it is best to simply not have to worry about reasoning it out:
-   * just keep it within the same lock-section as the associated non-stats `m_` modification.  Then the
-   * stat-sets will always reflect the same reality as what is being measured, end of.
-   * Perf-wise, these updates are rare with little to no contention, so it does not matter.
+   * Reasons:
+   *   - LRU-eviction (discussed some more below) means keys are sometimes removed from the map.  Hence it's
+   *     not safe to lock, get key set, unlock, do things to entries in the key set; use-after-free could occur.
+   *     Even if that were not true (no removal ever):
+   *   - It's, in subtle fashion, still wrong, even though we store `Own<>` wrappers which gives pointer stability.
+   *     Details omitted, but it means semantically at least temporarily unpleasant values could be saved for
+   *     some GAUGEs (and therefore even possibly permanently unpleasant results in derived
+   *     HI_WMARKs could be saved), particularly if arena X is un-borrowed through one session while being borrowed
+   *     through another right then.  If locking in-tandem with #m_rc_pools_by_id et al, though, we always
+   *     save the actual statistical picture.
+   *
+   * ### The LRU eviction: Rationale ###
+   * This is pretty straightforward, meaning the above explanation pretty much covers it; as usual minutiae are
+   * at least explained in methods.  One thing to add: What are we trying to avoid, exactly, when eventually
+   * evicting old entries?  We said it's about unbounded growth, which is true by definition, but it's really
+   * about two things:
+   *   - The obvious one: RAM use on account of the global `*this`.
+   *   - The less obvious one: In stats() (and stats_reset() for that matter), it is necessary to iterate
+   *     through all of `m_per_arena_borrower_pool_stats`.  If it can get huge, then that'll take a while.
+   *     Also stats() copies stuff from there onto a user container.  (There's also then a lengthy, if rare, lock
+   *     involved.)
+   *
+   * So that's why we do it at all.
+   *
+   * Another question concerns the choice of what determines the LRU/MRU order.  To restate, touching arena =
+   * register_collection(), deregister_collection() of a given arena +
+   * register_shm_pool(), deregister_shm_pool() of a pool pertaining to a given arena.  In other words:
+   * touched/LRU/MRU = "the stats for it changed."  So if we're forced to forget an arena, then its stats have
+   * been unchanged for the longest.
+   *
+   * We chose this ultimately because it's simple to understand and, hopefully, within reason as to what
+   * is useful to a user.  Taking these 1 at a time:
+   *   - Simple?  Yes: A `Stat_set` is modified <=> touched.  Hard to be simpler.
+   *     - It also exactly matches the order in which stats() optionally emits these stats up to a
+   *       (presumably lower) readability limit of `per_arena_stats_sz_limit_or_0` per-arena `Stat_set`s.
+   *   - Usable?  More or less, but it's arguable.  An uptime/use-case resulting in (as of this writing)
+   *     1,000 borrowed arenas since process start means we are justified in throwing some away.  At that point
+   *     as long as the eviction-criterion is not plainly silly, I as a user am probably OK.  "It hasn't changed,
+   *     so it's less active, so let's get rid of that one, if we must" feels not-plainly-silly.  It's definitely
+   *     not a slam dunk either though: it ignores whether an arena is *currently* being borrowed or not; so
+   *     arena A that was recently unborrowed (<=> session closed as of this writing) would stay in, while arena
+   *     B that is still borrowed, but with zero further activity (these stats-wise... the SHM objects in the
+   *     pools may well be being read, borrowed, etc.) for a longer time, would be evicted.
+   *
+   * That was written before deploying this in the field for the first time, so we may get field feedback to
+   * modify this policy.
    */
-  boost::unordered_flat_map<Uniq_collection_id, Own<Borrower_pool_stats>> m_per_arena_borrower_pool_stats;
+  flow::util::Linked_hash_map<Uniq_collection_id, Own<Borrower_pool_stats>> m_per_arena_borrower_pool_stats;
 }; // class Borrower_shm_pool_collection_repository
 
 // Template implementations.
@@ -649,17 +715,55 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::register_collection(o
     }
 
     { // Stats.
-      Borrower_pool_stats* per_arena_stats_ptr;
-      auto& per_arena_stats_own = m_per_arena_borrower_pool_stats[key]; // Insert or find.
-      if (per_arena_stats_own)
+      Borrower_pool_stats* per_arena_stats_ptr = nullptr; // There is a case where this stays as-is.
+      const auto iter = m_per_arena_borrower_pool_stats.find(key);
+      if (iter == m_per_arena_borrower_pool_stats.end())
       {
-        per_arena_stats_ptr = per_arena_stats_own.get();
-      }
-      else
+        if (novel)
+        {
+          m_per_arena_borrower_pool_stats[key].reset(per_arena_stats_ptr = new Borrower_pool_stats);
+          per_arena_stats_ptr->m_uniq_arena_id.m_id1 = uint64_t(owner_id);
+          per_arena_stats_ptr->m_uniq_arena_id.m_id2 = uint64_t(collection_id);
+
+          // That new per-arena stat-set is MRU... but have we reached the size where we'll need to evict LRU?
+          if (m_per_arena_borrower_pool_stats.size() > S_N_PER_ARENA_BORROWER_POOL_STATS_SZ_LIMIT)
+          {
+            m_per_arena_borrower_pool_stats.erase(--m_per_arena_borrower_pool_stats.past_oldest());
+            assert((m_per_arena_borrower_pool_stats.size() == S_N_PER_ARENA_BORROWER_POOL_STATS_SZ_LIMIT)
+                   && "Some bug in the simple LRU/MRU algorithm?");
+          }
+
+          /* Note: That (combined with the 4 touch() calls throughout this class) = our LRU-eviction policy;
+           * but it's not the only possible policy.  See m_per_arena_borrower_pool_stats doc header for discussion
+           * of this choice/possible alternative. */
+        }
+        /* else if (!novel): // && (key not in m_per_arena_borrower_pool_stats)
+         *   Do not insert `key` yet; and leave `per_arena_stats_ptr == nullptr` for below.  The reason is
+         *   a bit subtle.  Firstly, !novel here wouldn't even be possible normally; it can only happen if
+         *   the LRU-ejection seen above happened for this `key` earlier (so m_per_arena_borrower_pool_stats got too
+         *   big, etc.).  So if that did happen, and since then `key`-arena did get unborrowed/deregistered the
+         *   same # of times that it had been registered, and now that `key`-arena is being borrowed/registered
+         *   again (hence `novel == false` now), suppose we allowed m_per_arena...[key] to be inserted now.
+         *   Seems fine, but now suppose later it gets deregistered.  ACCUMULATORs will be fine as always, more or
+         *   less, but take a GAUGE -- say, m_n_borrowed_arenas -- which is (naturally) unsigned.  We wouldn't
+         *   ++ it below during this register_collection(); but the later deregister_collection() would `--` it.
+         *   So it would become -1 (underflow).  We could make it signed, but then it would be a weird-looking
+         *   result.  We just don't want any of that junk, not to even reason about it further; in other places
+         *   too (like we can't claim it's always either 1 or 0 anymore, which as of this writing is assert()ed
+         *   and stated in docs).  Essentially: we were forced to junk that arena's data by the LRU considerations --
+         *   we didn't want to (all else being equal), but we had to so as to avoid unbounded growth of the map.
+         *   So continuing that, we are applying that junk-it policy for that arena... until things "even out."
+         *   Once the # of register_collection()s and deregister_collection()s for it become equal -- `novel`
+         *   becomes true for it -- then there's no reason not to keep those stats.  (In any case, if novel=true
+         *   then we don't even know if `key` was junked in the past, so we have to insert it, even if we didn't
+         *   want to for some reason.) */
+      } // if (key not in m_per_arena_borrower_pool_stats)
+      else // if (key in m_per_arena_borrower_pool_stats)
       {
-        per_arena_stats_own.reset(per_arena_stats_ptr = new Borrower_pool_stats);
-        per_arena_stats_ptr->m_uniq_arena_id.m_id1 = uint64_t(owner_id);
-        per_arena_stats_ptr->m_uniq_arena_id.m_id2 = uint64_t(collection_id);
+        per_arena_stats_ptr = iter->second.get();
+        m_per_arena_borrower_pool_stats.touch(iter);
+        /* It is now MRU again.  Perf: touch() is a constant-time few ptr assignments.  Plus there aren't typically
+         * so many arenas being juggled at a given time as to make this a frequent non-no-op anyway. */
       }
 
       /* This next part could -- one could say -- be outside of the lock-section.  It is not.  Why?
@@ -670,16 +774,24 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::register_collection(o
        *   - m_borrower_pool_stats: Keep it here as well to avoid having to worry about it (and perf-wise still
        *     does not matter) and for consistency. */
 
-      fetch_add(&m_borrower_pool_stats.m_arena_register_count, 1);
-      fetch_add(&per_arena_stats_ptr->m_arena_register_count, 1);
-      if (novel)
+      if (per_arena_stats_ptr)
       {
-        fetch_add(&m_borrower_pool_stats.m_arena_first_register_count, 1);
-        fetch_add(&per_arena_stats_ptr->m_arena_first_register_count, 1);
-        update_hi_wmark(&m_borrower_pool_stats.m_n_borrowed_arenas_hi_wmark,
-                        fetch_add(&m_borrower_pool_stats.m_n_borrowed_arenas, 1) + 1);
-        update_hi_wmark(&per_arena_stats_ptr->m_n_borrowed_arenas_hi_wmark,
-                        fetch_add(&per_arena_stats_ptr->m_n_borrowed_arenas, 1) + 1);
+        fetch_add(&per_arena_stats_ptr->m_arena_register_count, 1);
+        if (novel)
+        {
+          fetch_add(&per_arena_stats_ptr->m_arena_first_register_count, 1);
+          update_hi_wmark(&per_arena_stats_ptr->m_n_borrowed_arenas_hi_wmark,
+                          fetch_add(&per_arena_stats_ptr->m_n_borrowed_arenas, 1) + 1);
+        }
+      }
+      { // Same deal, for the total-stats guy.
+        fetch_add(&m_borrower_pool_stats.m_arena_register_count, 1);
+        if (novel)
+        {
+          fetch_add(&m_borrower_pool_stats.m_arena_first_register_count, 1);
+          update_hi_wmark(&m_borrower_pool_stats.m_n_borrowed_arenas_hi_wmark,
+                          fetch_add(&m_borrower_pool_stats.m_n_borrowed_arenas, 1) + 1);
+        }
       }
     } // Stats.
   }); // Tl_copy_fwd::s_registry.while_locked() // Locks and unlocks central mutex 1.
@@ -716,26 +828,52 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_collection
     }
 
     { // Stats.
-      const auto per_arena_stats_ptr = m_per_arena_borrower_pool_stats[key].get();
-      assert(per_arena_stats_ptr && "How did we manage not to insert `key` in earlier register_collection()?  Bug?");
-
-      // See note in register_collection() w/r/t why the following is inside lock-section instead of outside.
-
-      fetch_add(&m_borrower_pool_stats.m_arena_deregister_count, 1);
-      fetch_add(&per_arena_stats_ptr->m_arena_deregister_count, 1);
-      if (novel)
+      const auto iter = m_per_arena_borrower_pool_stats.find(key);
+      if (iter != m_per_arena_borrower_pool_stats.end())
       {
-        fetch_add(&m_borrower_pool_stats.m_arena_last_deregister_count, 1);
-        fetch_add(&per_arena_stats_ptr->m_arena_last_deregister_count, 1);
-        fetch_sub(&m_borrower_pool_stats.m_n_borrowed_arenas, 1);
+        const auto per_arena_stats_ptr = iter->second.get();
 
+        // See note in register_collection() w/r/t why the following is inside lock-section instead of outside.
+
+        fetch_add(&per_arena_stats_ptr->m_arena_deregister_count, 1);
+        if (novel)
+        {
+          fetch_add(&per_arena_stats_ptr->m_arena_last_deregister_count, 1);
 #ifndef NDEBUG
-        const auto prev_val =
+          const auto prev_val =
 #endif
-        fetch_sub(&per_arena_stats_ptr->m_n_borrowed_arenas, 1);
-        assert((prev_val == 1)
-               && "Per-arena m_n_borrowed_arenas should only ever be 0 or 1.  Bug in register_collection()?");
-      } // if (novel)
+          fetch_sub(&per_arena_stats_ptr->m_n_borrowed_arenas, 1);
+          assert((prev_val == 1)
+                 && "Per-arena m_n_borrowed_arenas should only ever be 0 or 1.  Bug in register_collection()?");
+        } // if (novel)
+
+        m_per_arena_borrower_pool_stats.touch(iter);
+        // It is now MRU again.  Perf: same comment as in register_collection().
+      } // if (key in m_per_arena_borrower_pool_stats)
+      /* else if (key not in m_per_arena_borrower_pool_stats):
+       *   Normally this won't happen, as a thing must be registered before it can be deregistered, and the former
+       *   would have inserted `key`, but there is a corner case: an, apparently, incredibly long-lived
+       *   session/arena, such that a massive # of others have been more recently messed-with than the last time
+       *   this one was touched stats-wise.  It would then get evicted; and it is conceivable that finally the
+       *   borrowing finally ended now... but too late: no per-arena stats to update.  There isn't a great way
+       *   to deal with it without producing some odd-looking values in the individual `Borrower_pool_stats`.  This
+       *   case is basically pathological, so they'll just have to make do without this particular arena's stats.
+       *   (It is even conceivable that *another* session would be opened to borrow that same arena -- hence
+       *   register_collection(), in the !novel case, will insert it and even make it MRU anew.  Why only if !novel?
+       *   See register_collection() itself; but in short: it also helps avoid odd-looking values due to imbalance
+       *   of [de]register_collection() calls.)
+       *
+       *   (By "odd-looking" we mean potentially documented-invariant- (possibly assert()-) breaking.  E.g.
+       *   m_n_borrowed_arenas, per arena, should be in [0, 1] according to docs and an assert() as of this writing.) */
+
+      { // Same deal, for the total-stats guy.
+        fetch_add(&m_borrower_pool_stats.m_arena_deregister_count, 1);
+        if (novel)
+        {
+          fetch_add(&m_borrower_pool_stats.m_arena_last_deregister_count, 1);
+          fetch_sub(&m_borrower_pool_stats.m_n_borrowed_arenas, 1);
+        }
+      }
     } // Stats.
   }); // Tl_copy_fwd::s_registry.while_locked() // Locks and unlocks central mutex 1.
 } // Borrower_shm_pool_collection_repository::deregister_collection()
@@ -801,25 +939,42 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::register_shm_pool(own
     }
 
     { // Stats.
-      const auto per_arena_stats_ptr = m_per_arena_borrower_pool_stats[key].get();
-      assert(per_arena_stats_ptr && "How did we manage not to insert `key` in earlier register_collection()?  Bug?");
-
-      // See note in register_collection() w/r/t why the following is inside lock-section instead of outside.
-
-      fetch_add(&m_borrower_pool_stats.m_pool_register_count, 1);
-      fetch_add(&per_arena_stats_ptr->m_pool_register_count, 1);
-      if (new_shm_pool)
+      const auto iter = m_per_arena_borrower_pool_stats.find(key);
+      if (iter != m_per_arena_borrower_pool_stats.end())
       {
-        fetch_add(&m_borrower_pool_stats.m_pool_open_count, 1);
-        fetch_add(&per_arena_stats_ptr->m_pool_open_count, 1);
-        update_hi_wmark(&m_borrower_pool_stats.m_n_open_pools_hi_wmark,
-                        fetch_add(&m_borrower_pool_stats.m_n_open_pools, 1) + 1);
-        update_hi_wmark(&per_arena_stats_ptr->m_n_open_pools_hi_wmark,
-                        fetch_add(&per_arena_stats_ptr->m_n_open_pools, 1) + 1);
-        update_hi_wmark(&m_borrower_pool_stats.m_mapped_sz_hi_wmark,
-                        fetch_add(&m_borrower_pool_stats.m_mapped_sz, pool_size) + pool_size);
-        update_hi_wmark(&per_arena_stats_ptr->m_mapped_sz_hi_wmark,
-                        fetch_add(&per_arena_stats_ptr->m_mapped_sz, pool_size) + pool_size);
+        const auto per_arena_stats_ptr = iter->second.get();
+
+        // See note in register_collection() w/r/t why the following is inside lock-section instead of outside.
+
+        fetch_add(&per_arena_stats_ptr->m_pool_register_count, 1);
+        if (new_shm_pool)
+        {
+          fetch_add(&per_arena_stats_ptr->m_pool_open_count, 1);
+          update_hi_wmark(&per_arena_stats_ptr->m_n_open_pools_hi_wmark,
+                          fetch_add(&per_arena_stats_ptr->m_n_open_pools, 1) + 1);
+          update_hi_wmark(&per_arena_stats_ptr->m_mapped_sz_hi_wmark,
+                          fetch_add(&per_arena_stats_ptr->m_mapped_sz, pool_size) + pool_size);
+        }
+
+        m_per_arena_borrower_pool_stats.touch(iter);
+        // It is now MRU again.  Perf: same comment as in register_collection().
+      } // if (key in m_per_arena_borrower_pool_stats)
+      /* else if (key not in m_per_arena_borrower_pool_stats):
+       *   Normally this won't happen, as... <see comment similar spot in deregister_collection()>.
+       *   So in this case some arena gets registered and then not touched for ages stats-wise, and then
+       *   suddenly some allocation owner-side triggers a SHM-pool creation.  We'll just have to not record
+       *   that stats-event for it either. */
+
+      { // Same deal, for the total-stats guy.
+        fetch_add(&m_borrower_pool_stats.m_pool_register_count, 1);
+        if (new_shm_pool)
+        {
+          fetch_add(&m_borrower_pool_stats.m_pool_open_count, 1);
+          update_hi_wmark(&m_borrower_pool_stats.m_n_open_pools_hi_wmark,
+                          fetch_add(&m_borrower_pool_stats.m_n_open_pools, 1) + 1);
+          update_hi_wmark(&m_borrower_pool_stats.m_mapped_sz_hi_wmark,
+                          fetch_add(&m_borrower_pool_stats.m_mapped_sz, pool_size) + pool_size);
+        }
       }
     } // Stats.
   }); // Tl_copy_fwd::s_registry.while_locked() // Locks and unlocks central mutex 1.
@@ -890,21 +1045,38 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
     }
 
     { // Stats.
-      const auto per_arena_stats_ptr = m_per_arena_borrower_pool_stats[key].get();
-      assert(per_arena_stats_ptr && "How did we manage not to insert `key` in earlier register_collection()?  Bug?");
-
-      // See note in register_collection() w/r/t why the following is inside lock-section instead of outside.
-
-      fetch_add(&m_borrower_pool_stats.m_pool_deregister_count, 1);
-      fetch_add(&per_arena_stats_ptr->m_pool_deregister_count, 1);
-      if (removed_pool_base)
+      const auto iter = m_per_arena_borrower_pool_stats.find(key);
+      if (iter != m_per_arena_borrower_pool_stats.end())
       {
-        fetch_add(&m_borrower_pool_stats.m_pool_close_count, 1);
-        fetch_add(&per_arena_stats_ptr->m_pool_close_count, 1);
-        fetch_sub(&m_borrower_pool_stats.m_n_open_pools, 1);
-        fetch_sub(&per_arena_stats_ptr->m_n_open_pools, 1);
-        fetch_sub(&m_borrower_pool_stats.m_mapped_sz, removed_pool_size);
-        fetch_sub(&per_arena_stats_ptr->m_mapped_sz, removed_pool_size);
+        const auto per_arena_stats_ptr = iter->second.get();
+
+        // See note in register_collection() w/r/t why the following is inside lock-section instead of outside.
+
+        fetch_add(&per_arena_stats_ptr->m_pool_deregister_count, 1);
+        if (removed_pool_base)
+        {
+          fetch_add(&per_arena_stats_ptr->m_pool_close_count, 1);
+          fetch_sub(&per_arena_stats_ptr->m_n_open_pools, 1);
+          fetch_sub(&per_arena_stats_ptr->m_mapped_sz, removed_pool_size);
+        }
+
+        m_per_arena_borrower_pool_stats.touch(iter);
+        // It is now MRU again.  Perf: same comment as in register_collection().
+      } // if (key in m_per_arena_borrower_pool_stats)
+      /* else if (key not in m_per_arena_borrower_pool_stats):
+       *   Normally this won't happen, as... <see comment similar spot in register_shm_pool()>.
+       *   So in this case some arena gets registered and then not touched for ages stats-wise, and then
+       *   perhaps a relevant session ends; each pool in the arena gets deregistered.
+       *   We'll just have to not record that stats-event for it either. */
+
+      { // Same deal, for the total-stats guy.
+        fetch_add(&m_borrower_pool_stats.m_pool_deregister_count, 1);
+        if (removed_pool_base)
+        {
+          fetch_add(&m_borrower_pool_stats.m_pool_close_count, 1);
+          fetch_sub(&m_borrower_pool_stats.m_n_open_pools, 1);
+          fetch_sub(&m_borrower_pool_stats.m_mapped_sz, removed_pool_size);
+        }
       }
     } // Stats.
   }); // Tl_copy_fwd::s_registry.while_locked() // Locks and unlocks central mutex 1.
@@ -1011,7 +1183,7 @@ std::vector<ipc::shm::arena_lend::stat::Shm_pool_info>
 template<typename Shm_arena_t>
 const ipc::shm::arena_lend::stat::Borrower_pool_stats&
   Borrower_shm_pool_collection_repository<Shm_arena_t>::stats
-    (Borrower_pool_stats_list* per_arena_stats) const
+    (Borrower_pool_stats_list* per_arena_stats, size_t per_arena_stats_sz_limit_or_0, size_t* n_arenas_omitted) const
 {
   using flow::util::stat::stats_assign;
   using boost::adaptors::map_values;
@@ -1022,33 +1194,51 @@ const ipc::shm::arena_lend::stat::Borrower_pool_stats&
 
   if (per_arena_stats)
   {
-    vector<Borrower_pool_stats*> stats_ptrs;
-
     // Locks and unlocks central mutex 1.
     Tl_copy_fwd::s_registry.while_locked([&](auto&&...)
     {
+      /* Reminder: m_per_arena_borrower_pool_stats goes from newest()/begin() to past_oldest()/end(); hence
+       * so will this range. */
       const auto stats_ptrs_rng
         = m_per_arena_borrower_pool_stats | map_values | transformed([](const auto& own) -> auto { return own.get(); });
-      /* Note that m_per_arena_borrower_pool_stats[X] is never erased, so not erased under us outside the lock;
-       * and Own<>::get() is obviously stable. */
 
-      stats_ptrs.insert(stats_ptrs.begin(), stats_ptrs_rng.begin(), stats_ptrs_rng.end());
-    });
+      // Stop after n_ptrs most-recently-touched entries.
+      size_t n_ptrs = m_per_arena_borrower_pool_stats.size();
+      (per_arena_stats_sz_limit_or_0 != 0) && (per_arena_stats_sz_limit_or_0 < n_ptrs)
+        && (n_ptrs = per_arena_stats_sz_limit_or_0);
 
-    sort(stats_ptrs, [](auto stats_ptr_a, auto stats_ptr_b) -> bool
-    {
-      return tie(stats_ptr_a->m_uniq_arena_id.m_id1, stats_ptr_a->m_uniq_arena_id.m_id2)
-             <
-             tie(stats_ptr_b->m_uniq_arena_id.m_id1, stats_ptr_b->m_uniq_arena_id.m_id2);
-    });
+      n_arenas_omitted && (*n_arenas_omitted = (m_per_arena_borrower_pool_stats.size() - n_ptrs));
 
-    per_arena_stats->resize(stats_ptrs.size());
-    auto stats_ptr_it = stats_ptrs.begin();
-    for (auto& target_stats : *per_arena_stats)
-    {
-      target_stats.reset(new Borrower_pool_stats);
-      stats_assign(target_stats.get(), **(stats_ptr_it++));
-    }
+      // Could instead compactly do make_iterator_range(rng.begin(), next(rng.begin(), n)).  Longer but IMO clearer:
+      vector<Borrower_pool_stats*> stats_ptrs;
+      stats_ptrs.reserve(n_ptrs);
+      for (const auto stats_ptr : stats_ptrs_rng)
+      {
+        stats_ptrs.push_back(stats_ptr);
+        if (stats_ptrs.size() == n_ptrs) { break; }
+      }
+
+      /* Careful... even though stats() is a rare call, one might still prefer to not do the remaining steps
+       * under lock unnecessarily.  Own<> ensures pointer stability for the ptrs in stats_ptrs, so that's all
+       * fine.  Unfortunately, though, the LRU-eviction in register_collection() can erase elements from
+       * m_per_arena_borrower_pool_stats, so dereferencing a saved ptr from stats_ptrs can be a use-after-free.
+       * So just stay under lock here until done-done. */
+
+      sort(stats_ptrs, [](auto stats_ptr_a, auto stats_ptr_b) -> bool
+      {
+        return tie(stats_ptr_a->m_uniq_arena_id.m_id1, stats_ptr_a->m_uniq_arena_id.m_id2)
+               <
+               tie(stats_ptr_b->m_uniq_arena_id.m_id1, stats_ptr_b->m_uniq_arena_id.m_id2);
+      });
+
+      per_arena_stats->resize(stats_ptrs.size());
+      auto stats_ptr_it = stats_ptrs.begin();
+      for (auto& target_stats : *per_arena_stats)
+      {
+        target_stats.reset(new Borrower_pool_stats);
+        stats_assign(target_stats.get(), **(stats_ptr_it++));
+      }
+    }); // Tl_copy_fwd::s_registry.while_locked() // Locks and unlocks central mutex 1.
   } // if (per_arena_stats)
 
   return m_borrower_pool_stats;
@@ -1060,24 +1250,32 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::stats_reset()
   using flow::util::stat::stats_reset;
   using boost::adaptors::map_values;
   using boost::adaptors::transformed;
-  using std::vector;
 
   stats_reset(&m_borrower_pool_stats, Borrower_pool_stats{}); // The across-all-arenas totals.
 
   /* Reset each per-arena slab too, for coherence with the totals.  As in stats(): the key-set is mutated only
-   * under central mutex 1, and entries are never erased; so gather the pointers under the lock, then reset
-   * outside it (the resets write live `atomic`s -- standard under-concurrency stat behavior). */
-  vector<Borrower_pool_stats*> stats_ptrs;
+   * under central mutex 1, and ptrs are stable, but entries are sometimes LRU-erased; so do everything under
+   * the lock.  (Orthogonally: The resets write live `atomic`s -- standard under-concurrency stat behavior.) */
   Tl_copy_fwd::s_registry.while_locked([&](auto&&...)
   {
     const auto rng = m_per_arena_borrower_pool_stats | map_values
                        | transformed([](const auto& own) -> auto { return own.get(); });
-    stats_ptrs.insert(stats_ptrs.begin(), rng.begin(), rng.end());
+    for (auto* const stats_ptr : rng)
+    {
+      stats_reset(stats_ptr, Borrower_pool_stats{});
+    }
   });
-  for (auto* const stats_ptr : stats_ptrs)
-  {
-    stats_reset(stats_ptr, Borrower_pool_stats{});
-  }
+
+  /* One might wonder, here, why not "just" m_per_arena_borrower_pool_stats.clear() here instead of the
+   * range-fu + stats_reset() dance above?  It might be particularly tempting knowing how we have that LRU-eviction
+   * mechanism in register_collection(), trying to keep this thing at most a certain size.  A reset opportunistically
+   * making that size=0 sounds pretty nice!
+   *
+   * It would be wrong, just because of how flow::util::stat stats work.  Only ACCUMULATORs get zeroed by resets,
+   * so if that's all we had, then it would be fine (if brittle, as ACCs-only now doesn't mean ACCs only forever).
+   * GAUGEs in particular are untouched by proper stat-resets, so blowing them away (effectively zeroing them)
+   * would be wrong.  (Why do we blow them away in the LRU-eviction case anyway?  Answer: We're forced to do it,
+   * and we give up those stat-chunks willingly to avoid unbounded growth of m_per_arena_borrower_pool_stats.) */
 } // Borrower_shm_pool_collection_repository::stats_reset()
 
 } // namespace ipc::session::shm::arena_lend::detail

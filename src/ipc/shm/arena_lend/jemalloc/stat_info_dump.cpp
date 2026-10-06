@@ -46,12 +46,12 @@ std::ostream& operator<<(std::ostream& os, const Arena_info_dump& val)
                         : (ln = (ln_ln = " | "), verbose = false);
                         // As advertised (can't print jemalloc-stats-dump without lots of newlines).
 
-  if (verbose) // (Implies multiline.)
+  if (verbose && (!val.m_mem_mgr_stats_dump.empty())) // (`verbose` implies multiline.)
   {
     os << "jemalloc_dump/GLOBAL: DUMP_START[[[\n" << val.m_mem_mgr_stats_dump // By contract: newline-terminated.
        << "]]]END_DUMP" << ln;
   }
-  else
+  else // if (!verbose) || (for whatever reason no dump saved)
   {
     os << "jemalloc_dump/GLOBAL: [non-verbose/skipped]" << ln;
   }
@@ -133,10 +133,23 @@ std::ostream& operator<<(std::ostream& os, const Shm_session_info_dump& val)
     for (const auto& stats : brw_pool_stats_vec)
     {
       ++idx;
-      os << "arena[" << idx << '/' << n_arenas << "]: [" << print(stats) << ']'
-         << ((idx == n_arenas) ? ln : ln_ln);
+      os << "arena[" << idx << '/' << n_arenas << "]: [" << print(stats) << ']';
+
+      if (idx == n_arenas)
+      {
+        const auto n_omitted = val.m_borrower_pool_stats_process_wide_per_arena_n_omitted;
+        if (n_omitted == 0)
+        {
+          os << ln;
+        }
+        else
+        {
+          os << ln_ln
+             << "+omitted[" << n_omitted << ']' << ln;
+        }
+      } // if (idx == n_arenas)
     }
-  }
+  } // else // if (!brw_pool_stats_vec.empty())
 
   os << "borrower_pool_lookup/GLOBAL: [" << print(val.m_borrower_pool_lookup_global_stats) << ']' << ln;
 

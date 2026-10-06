@@ -28,9 +28,9 @@
 #include "ipc/util/shared_name_fwd.hpp"
 #include <flow/log/log_fwd.hpp>
 #include <flow/util/action_registry.hpp>
+#include <flow/util/stat/stat_fwd.hpp>
 #include <sys/types.h>
 #include <cstddef>
-#include <string>
 #include <memory>
 
 /**
@@ -175,7 +175,8 @@ struct Memory_manager_stats;
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix, const Owner_obj_stats* src_stats, Owner_obj_stats* target_stats,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
+                   const Owner_obj_stats* src_stats, Owner_obj_stats* target_stats,
                    Visitor&& visitor);
 
 /**
@@ -195,7 +196,7 @@ void declare_stats(std::string name_prefix, const Owner_obj_stats* src_stats, Ow
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Zombie_obj_reaper_stats* src_stats, Zombie_obj_reaper_stats* target_stats, Visitor&& visitor);
 
 /**
@@ -215,7 +216,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Sharded_stats* src_stats, Sharded_stats* target_stats, Visitor&& visitor);
 
 /**
@@ -235,7 +236,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Obj_db_aux_pool_stats* src_stats, Obj_db_aux_pool_stats* target_stats, Visitor&& visitor);
 
 /**
@@ -255,7 +256,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Obj_db_aux_pool_global_stats* src_stats, Obj_db_aux_pool_global_stats* target_stats,
                    Visitor&& visitor);
 
@@ -276,7 +277,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Owner_pool_stats* src_stats, Owner_pool_stats* target_stats, Visitor&& visitor);
 
 /**
@@ -296,7 +297,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Pool_stats* src_stats, Pool_stats* target_stats, Visitor&& visitor);
 
 /**
@@ -316,7 +317,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Owner_pool_lookup_global_stats* src_stats, Owner_pool_lookup_global_stats* target_stats,
                    Visitor&& visitor);
 
@@ -337,7 +338,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Borrower_pool_stats* src_stats, Borrower_pool_stats* target_stats, Visitor&& visitor);
 
 /**
@@ -357,7 +358,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Borrower_pool_lookup_global_stats* src_stats, Borrower_pool_lookup_global_stats* target_stats,
                    Visitor&& visitor);
 
@@ -378,7 +379,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Shm_pool_info* src_stats, Shm_pool_info* target_stats, Visitor&& visitor);
 
 /**
@@ -398,7 +399,7 @@ void declare_stats(std::string name_prefix,
  *        See above.
  */
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Memory_manager_stats* src_stats, Memory_manager_stats* target_stats, Visitor&& visitor);
 
 } // namespace ipc::shm::arena_lend::stat

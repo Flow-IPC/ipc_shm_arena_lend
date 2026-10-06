@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 #include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp"
 #include "ipc/shm/arena_lend/borrower_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
@@ -31,6 +32,11 @@
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
+#include <flow/util/stat/stat_set.hpp>
+#include <flow/common.hpp>
+#include <algorithm>
+#include <iostream>
+#include <sstream>
 
 using ipc::test::Test_logger;
 using std::make_shared;
@@ -291,5 +297,80 @@ TEST(Borrower_shm_pool_collection_repository_test, Mutation_visibility)
   EXPECT_TRUE(owner_collection->remove_shm_pool(owner_pool_b));
   EXPECT_TRUE(ensure_empty_collection_at_destruction(owner_collection));
 } // TEST(Borrower_shm_pool_collection_repository_test, Mutation_visibility)
+
+/* XXX Temporary benchmark (not a test): measures the per-arena borrower-stats map's cost as a function of its size,
+ * to choose the bound on it.  DISABLED_ because the map never shrinks: the fake arenas it leaves behind would skew
+ * any later test (in the same process) that looks at per-arena stats.  Run it alone:
+ *   libipc_unit_test.exec --gtest_also_run_disabled_tests \
+ *     --gtest_filter='Borrower_shm_pool_collection_repository_test.DISABLED_XXX_bench_per_arena_stats'
+ * Each step registers + immediately deregisters more arenas (= the "ancient arenas" state that accumulates in
+ * production), then times (best of N_REPS) the ops that walk the map. */
+TEST(Borrower_shm_pool_collection_repository_test, DISABLED_XXX_bench_per_arena_stats)
+{
+  using ipc::session::shm::arena_lend::Borrower_pool_stats_list;
+  using flow::util::stat::print;
+  using flow::Fine_clock;
+  using flow::Fine_duration;
+  using boost::chrono::microseconds;
+  using boost::chrono::round;
+  using std::ostringstream;
+
+  constexpr owner_id_t OWNER_ID = 4242; // Distinct from all other TESTs' owner IDs.
+  constexpr unsigned int N_REPS = 5;
+  constexpr size_t STEPS[] = { 1000, 4000, 16000, 64000 }; // Cumulative total arenas ever registered.
+
+  auto& repository = Repository::get_instance();
+  const auto pool_name_base = create_test_pool_name_base();
+
+  const auto best_of = [&](const auto& op) -> Fine_duration
+  {
+    auto best = Fine_duration::max();
+    for (unsigned int rep = 0; rep != N_REPS; ++rep)
+    {
+      const auto start = Fine_clock::now();
+      op();
+      best = std::min(best, Fine_duration{Fine_clock::now() - start});
+    }
+    return best;
+  };
+  const auto us = [](Fine_duration d) { return round<microseconds>(d).count(); };
+
+  collection_id_t next_collection_id = 1000000; // Distinct from all other TESTs' collection IDs.
+  size_t n_ever = 0;
+  for (const auto n_target : STEPS)
+  {
+    for (; n_ever != n_target; ++n_ever)
+    {
+      repository.register_collection(OWNER_ID, next_collection_id, Shared_name(pool_name_base));
+      repository.deregister_collection(OWNER_ID, next_collection_id);
+      ++next_collection_id;
+    }
+
+    const auto d_totals = best_of([&]() { repository.stats(nullptr, 0, nullptr); });
+    const auto d_list = best_of([&]()
+    {
+      Borrower_pool_stats_list list;
+      repository.stats(&list, 0, nullptr);
+    });
+    const auto d_reset = best_of([&]() { repository.stats_reset(); });
+    Borrower_pool_stats_list list;
+    repository.stats(&list, 0, nullptr);
+    const auto n_entries = list.size(); // (Includes any left by earlier TESTs in this process, if any.)
+    const auto d_print = best_of([&]()
+    {
+      ostringstream os;
+      for (const auto& stats : list)
+      {
+        os << print(*stats) << '\n';
+      }
+    });
+
+    std::cout << "XXX bench: entries [" << n_entries << "]: "
+              << "stats(totals) [" << us(d_totals) << " us]; "
+              << "stats(+list) [" << us(d_list) << " us] = [" << (double(us(d_list)) / n_entries) << " us/entry]; "
+              << "stats_reset() [" << us(d_reset) << " us] = [" << (double(us(d_reset)) / n_entries) << " us/entry]; "
+              << "print(list) [" << us(d_print) << " us] = [" << (double(us(d_print)) / n_entries) << " us/entry].\n";
+  }
+} // TEST(Borrower_shm_pool_collection_repository_test, DISABLED_XXX_bench_per_arena_stats)
 
 } // namespace ipc::session::shm::arena_lend::test

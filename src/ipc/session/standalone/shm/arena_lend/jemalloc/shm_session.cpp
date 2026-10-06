@@ -126,11 +126,10 @@ Shm_session::~Shm_session()
 
   // Log ~final info/stats.
   {
-    Info_dump dump; // Multi-line.
-    info_dump(&dump);
+    Info_dump dump; // Multi-line. / Avoid unneeded info_dump() by placing it inside log-macro.
     FLOW_LOG_INFO("Shm_session [" << this << "] shutdown: "
                   "~Final state (includes ~final this-session + ~current global):"
-                  "\n" << dump << '.'); // Note: no newline at end of info_dump.
+                  "\n" << (info_dump(&dump), dump) << '.'); // Note: no newline at end of info_dump.
   }
 
   /* For this thread W (m_serial_task_loop) we started at session start:
@@ -574,15 +573,26 @@ void Shm_session::info_dump(Info_dump* target_info_dump, [[maybe_unused]] util::
   using boost::adaptors::transformed;
   using std::vector;
 
+  /* Non-verbose output limits collection (and therefore output) of m_borrower_pool_stats_process_wide_per_arena
+   * to this many per-arena stat-sets (most-recently updated first).  Yes, we are allowed by advertised
+   * Info_dump_format semantics to check m_verbose when collecting (here) as well as when printing (operator<<).
+   *
+   * ->m_borrower_pool_stats_process_wide_per_arena_n_omitted stores how many are omitted, if any.
+   * operator<<() can print that info. */
+  constexpr size_t PITHY_N_ARENAS_MAX = 20;
+
   assert(target_info_dump);
 
   stats_assign(&target_info_dump->m_borrower_pool_stats, borrower_pool_stats());
   {
     auto& target_vec = target_info_dump->m_borrower_pool_stats_process_wide_per_arena;
+    const bool verbose = target_info_dump->m_fmt.m_verbose;
 
     Borrower_pool_stats_list vec;
     stats_assign(&target_info_dump->m_borrower_pool_stats_process_wide_total, // <-- attn.
-                 borrower_pool_stats_process_wide(&vec));
+                 borrower_pool_stats_process_wide
+                   (&vec, verbose ? 0 : PITHY_N_ARENAS_MAX,
+                    &target_info_dump->m_borrower_pool_stats_process_wide_per_arena_n_omitted));
     /* borrower_pool_stats_process_wide() sets a vector<Own<X>>, while target_vec in *target_info_dump is
      * just vector<X>.  Why the dichotomy?  Answer: It is a bit subtle and subjective.  The individual
      * stat-accessors are a lower-level thing, intended to be user-friendly but tight -- e.g., don't copy
@@ -628,9 +638,12 @@ const Shm_session::Borrower_pool_lookup_global_stats& Shm_session::borrower_pool
 }
 
 const Shm_session::Borrower_pool_stats&
-  Shm_session::borrower_pool_stats_process_wide(Borrower_pool_stats_list* per_arena_stats) // Static.
+  Shm_session::borrower_pool_stats_process_wide(Borrower_pool_stats_list* per_arena_stats,
+                                                size_t per_arena_stats_sz_limit_or_0,
+                                                size_t* n_arenas_omitted) // Static.
 {
-  return detail::Borrower_shm_pool_collection_repository<Arena>::get_instance().stats(per_arena_stats);
+  return detail::Borrower_shm_pool_collection_repository<Arena>::get_instance()
+           .stats(per_arena_stats, per_arena_stats_sz_limit_or_0, n_arenas_omitted);
 }
 
 void Shm_session::global_stats_reset() // Static.

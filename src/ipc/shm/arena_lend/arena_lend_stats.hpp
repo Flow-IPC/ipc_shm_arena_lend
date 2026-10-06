@@ -1545,7 +1545,8 @@ struct Memory_manager_stats
 // Template implementations.
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix, const Owner_obj_stats* src_stats, Owner_obj_stats* target_stats,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
+                   const Owner_obj_stats* src_stats, Owner_obj_stats* target_stats,
                    Visitor&& visitor)
 {
   FLOW_UTIL_STAT_DECLARE(m_sync_destroy_count, ACCUMULATOR);
@@ -1553,7 +1554,7 @@ void declare_stats(std::string name_prefix, const Owner_obj_stats* src_stats, Ow
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Zombie_obj_reaper_stats* src_stats, Zombie_obj_reaper_stats* target_stats, Visitor&& visitor)
 {
   FLOW_UTIL_STAT_DECLARE(m_scans, ACCUMULATOR);
@@ -1570,7 +1571,7 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Obj_db_aux_pool_stats* src_stats, Obj_db_aux_pool_stats* target_stats, Visitor&& visitor)
 {
   FLOW_UTIL_STAT_DECLARE(m_aux_pool_count, GAUGE);
@@ -1586,7 +1587,7 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Obj_db_aux_pool_global_stats* src_stats, Obj_db_aux_pool_global_stats* target_stats,
                    Visitor&& visitor)
 {
@@ -1599,7 +1600,7 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Owner_pool_stats* src_stats, Owner_pool_stats* target_stats, Visitor&& visitor)
 {
   FLOW_UTIL_STAT_DECLARE(m_pool_create_count, ACCUMULATOR);
@@ -1610,21 +1611,23 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Pool_stats* src_stats, Pool_stats* target_stats, Visitor&& visitor)
 {
-  declare_stats(name_prefix + "owner.",
+  using flow::util::stat::Stat_name;
+
+  declare_stats(Stat_name{name_prefix, "owner."},
                 src_stats ? &src_stats->m_owner_pool : nullptr,
                 target_stats ? &target_stats->m_owner_pool : nullptr,
                 visitor);
-  declare_stats(name_prefix + "dbaux.",
+  declare_stats(Stat_name{name_prefix, "dbaux."},
                 src_stats ? &src_stats->m_obj_db_aux_pool : nullptr,
                 target_stats ? &target_stats->m_obj_db_aux_pool : nullptr,
                 visitor);
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Borrower_pool_stats* src_stats, Borrower_pool_stats* target_stats, Visitor&& visitor)
 {
   FLOW_UTIL_STAT_DECLARE(m_uniq_arena_id.m_id1, GAUGE);
@@ -1646,7 +1649,7 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Owner_pool_lookup_global_stats* src_stats, Owner_pool_lookup_global_stats* target_stats,
                    Visitor&& visitor)
 {
@@ -1655,7 +1658,7 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Borrower_pool_lookup_global_stats* src_stats, Borrower_pool_lookup_global_stats* target_stats,
                    Visitor&& visitor)
 {
@@ -1666,7 +1669,8 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix, const Shm_pool_info* src_stats, Shm_pool_info* target_stats,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
+                   const Shm_pool_info* src_stats, Shm_pool_info* target_stats,
                    Visitor&& visitor)
 {
   FLOW_UTIL_STAT_DECLARE(m_id, GAUGE);
@@ -1677,7 +1681,7 @@ void declare_stats(std::string name_prefix, const Shm_pool_info* src_stats, Shm_
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Memory_manager_stats* src_stats, Memory_manager_stats* target_stats, Visitor&& visitor)
 {
   FLOW_UTIL_STAT_DECLARE(m_uniq_arena_id.m_id1, GAUGE);
@@ -1707,32 +1711,36 @@ void declare_stats(std::string name_prefix,
 }
 
 template<typename Visitor>
-void declare_stats(std::string name_prefix,
+void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Sharded_stats* src_stats, Sharded_stats* target_stats,
                    Visitor&& visitor)
 {
-  name_prefix += "obj."; // Similar rationale as in `declare_stats(shm::classic::stat::Arena_stats)`.
-  declare_stats(name_prefix + "own.",
+  using flow::util::stat::Stat_name;
+
+  // Similar rationale as in `declare_stats(shm::classic::stat::Arena_stats)`.
+  const Stat_name obj_prefix{name_prefix, "obj."};
+  declare_stats(Stat_name{obj_prefix, "own."},
                 src_stats ? &src_stats->m_owner_obj : nullptr,
                 target_stats ? &target_stats->m_owner_obj : nullptr,
                 visitor);
-  declare_stats(name_prefix + "own.", // Same prefix; the names in m_owner[_arena_lend] are chosen synergistically.
+  // Same prefix; the names in m_owner[_arena_lend] are chosen synergistically.
+  declare_stats(Stat_name{obj_prefix, "own."},
                 src_stats ? &src_stats->m_owner_obj_arena_lend : nullptr,
                 target_stats ? &target_stats->m_owner_obj_arena_lend : nullptr,
                 visitor);
-  declare_stats(name_prefix + "lnd.",
+  declare_stats(Stat_name{obj_prefix, "lnd."},
                 src_stats ? &src_stats->m_lend_obj : nullptr,
                 target_stats ? &target_stats->m_lend_obj : nullptr,
                 visitor);
-  declare_stats(name_prefix, // Individual names are chosen so that "live." (or whatever) would be unnecessary.
+  declare_stats(obj_prefix, // Individual names are chosen so that "live." (or whatever) would be unnecessary.
                 src_stats ? &src_stats->m_live_obj : nullptr,
                 target_stats ? &target_stats->m_live_obj : nullptr,
                 visitor);
-  declare_stats(name_prefix + "zombie.",
+  declare_stats(Stat_name{obj_prefix, "zombie."},
                 src_stats ? &src_stats->m_zombie_obj_reaper_main : nullptr,
                 target_stats ? &target_stats->m_zombie_obj_reaper_main : nullptr,
                 visitor);
-  declare_stats(name_prefix + "zb.drn.",
+  declare_stats(Stat_name{obj_prefix, "zb.drn."},
                 src_stats ? &src_stats->m_zombie_obj_reaper_drain : nullptr,
                 target_stats ? &target_stats->m_zombie_obj_reaper_drain : nullptr,
                 visitor);

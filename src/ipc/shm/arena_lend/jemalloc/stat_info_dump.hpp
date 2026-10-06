@@ -73,10 +73,12 @@ struct Arena_info_dump
    *
    * @note Info_dump_format::m_verbose specifically controls whether -- if available in the first
    *       place -- #m_mem_mgr_stats_dump (as from jemalloc::Memory_manager::stats_dump_to_ostream())
-   *       shall be included in the output (`true` <=> yes).  However:
+   *       shall be included in the output (`true` <=> yes).  Additionally if `false` at Ipc_arena::info_dump()
+   *       call, then #m_mem_mgr_stats_dump is not genereated (empty string saved). / However:
    * @note Info_dump_format::m_multiline being `false` shall cause printing as-if `m_verbose == false`
    *       regardless of its actual value.  (It is not reasonable to print jemalloc's huge #m_mem_mgr_stats_dump,
-   *       if newlines are not allowed.)
+   *       if newlines are not allowed.)  `m_multiline` does not affect `info_dump()` generating/saving or not
+   *       generating/saving the dump (only `m_verbose` is consulted for that).
    */
   util::stat::Info_dump_format m_fmt;
 
@@ -145,6 +147,12 @@ struct Shm_session_info_dump
 
   /// Global stats from: `static` Shm_session::borrower_pool_stats_process_wide(): the per-arena out-arg.
   std::vector<arena_lend::stat::Borrower_pool_stats> m_borrower_pool_stats_process_wide_per_arena;
+
+  /**
+   * If `m_fmt.m_verbose == false` at Shm_session::info_dump() time, this is the # (possibly zero) of entries excluded
+   * from #m_borrower_pool_stats_process_wide_per_arena to keep it small; otherwise zero (as then none is omitted).
+   */
+  size_t m_borrower_pool_stats_process_wide_per_arena_n_omitted = 0;
 
   /// Global stats from: `static` Shm_session::borrower_pool_lookup_global_stats().
   arena_lend::stat::Borrower_pool_lookup_global_stats m_borrower_pool_lookup_global_stats;
