@@ -533,8 +533,8 @@ private:
   Borrower_pool_stats m_borrower_pool_stats;
 
   /**
-   * Carries the totals from #m_borrower_pool_stats but broken-down by arena/collection *ever* borrowed, each
-   * as identified by #Uniq_collection_id.
+   * Carries the totals from #m_borrower_pool_stats but broken-down by arena/collection *ever* borrowed (modulo
+   * the LRU eviction below), each as identified by #Uniq_collection_id.
    *
    * LRU eviction: To avoid unbounded growth evicts the LRU (least recently touched
    * stats-wise arena, identified by `Uniq_collection_id`) entry on insertion having reached a certain max
@@ -610,6 +610,14 @@ private:
    *
    * That was written before deploying this in the field for the first time, so we may get field feedback to
    * modify this policy.
+   *
+   * @todo Consider adding a public `stats_forget_by_arena()` which would lock, clear
+   * Borrower_shm_pool_collection_repository::m_per_arena_borrower_pool_stats, unlock; this would be available
+   * for tests that would like to start with/leave a clean slate for this set of stat; possibly even
+   * available via forward (like stats_reset()) by a public-facing API like `Shm_session`.  The impl is
+   * simple and correct (won't create imbalanced stats or anything like that).  For tests it may be quite helpful
+   * (as of this writing has not been needed though).  Would tentatively avoid making a public-facing forwarder,
+   * though, as it feels fussy; the whole mechanism should already just work, when it comes to production use.
    */
   flow::util::Linked_hash_map<Uniq_collection_id, Own<Borrower_pool_stats>> m_per_arena_borrower_pool_stats;
 }; // class Borrower_shm_pool_collection_repository

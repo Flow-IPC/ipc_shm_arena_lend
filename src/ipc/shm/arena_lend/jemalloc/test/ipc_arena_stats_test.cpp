@@ -27,6 +27,8 @@
 #include "ipc/shm/arena_lend/jemalloc/memory_manager.hpp"
 #include "ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp"
 #include "ipc/shm/arena_lend/detail/stats.hpp"
+#include "ipc/shm/arena_lend/test/test_shm_object.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include <jemalloc/jemalloc.h>
 #include "ipc/util/process_credentials.hpp"
 #include "ipc/test/test_logger.hpp"
@@ -37,6 +39,7 @@
 #include <array>
 #include <iostream>
 #include <memory>
+#include <string>
 
 /* Tests of the SHM-jemalloc (Ipc_arena/Shm_session) stats/info surface.  This is a bigger area than its
  * SHM-classic counterpart (see pool_arena_stats_test.cpp -- some DNA shared); it is covered in batches; for
@@ -1020,10 +1023,98 @@ TEST(Ipc_arena_stats_test, info_dumps_and_globals)
   FLOW_LOG_INFO("Owner-side info-dump, multiline (for the eyeball):\n" << dump);
   dump.m_fmt.m_multiline = false;
   FLOW_LOG_INFO("Same, single-line: [" << dump << "].");
+  /* The verbose borrower-side dump includes the full process-wide per-arena breakdown: up to ~1,000 entries,
+   * if other TESTs left many (e.g., Borrower_shm_pool_collection_repository_test.Per_arena_stats_limits does).
+   * So print it but don't log it; the non-verbose one below is logged for the eyeball. */
   session_dump.m_fmt.m_multiline = true;
-  FLOW_LOG_INFO("Borrower-side info-dump, multiline (for the eyeball):\n" << session_dump);
+  EXPECT_FALSE(ostream_op_string(session_dump).empty());
   session_dump.m_fmt.m_multiline = false;
-  FLOW_LOG_INFO("Same, single-line: [" << session_dump << "].");
+  EXPECT_FALSE(ostream_op_string(session_dump).empty());
+  EXPECT_EQ(session_dump.m_borrower_pool_stats_process_wide_per_arena_n_omitted, 0u); // Verbose: nothing omitted.
+
+  /* Non-verbose dumps: Info_dump_format::m_verbose = false *before* info_dump() (its contract allows the snapshot
+   * to consult it, not just the printing):
+   *   - Owner-side: the expensive jemalloc firehose string is not even collected (the curated stats still are).
+   *   - Borrower-side: the process-wide per-arena breakdown is trimmed to the most-recently-touched few (~tens,
+   *     as of this writing); the number of the rest is saved in the dump and printed.  To ensure there is
+   *     something to trim, first add a bunch of (dead) fake arenas to the process-wide borrower repository. */
+  {
+    Arena::Info_dump pithy_dump;
+    pithy_dump.m_fmt.m_verbose = false;
+    arena->info_dump(&pithy_dump, util::Call_timing::S_ALWAYS_SAFE);
+    EXPECT_TRUE(pithy_dump.m_mem_mgr_stats_dump.empty());
+    EXPECT_GE(pithy_dump.m_mem_mgr_stats.size(), 1u);
+    pithy_dump.m_fmt.m_multiline = true;
+    EXPECT_NE(ostream_op_string(pithy_dump).find("jemalloc_dump/GLOBAL: [non-verbose/skipped]"), string::npos);
+
+    /* m_verbose changed between snapshot and output (advised against, but must not misbehave: at worst wasted
+     * work, a "skipped" note, or a long output).  Owner side: verbose snapshot, non-verbose output => skipped... */
+    const auto skipped_str = "jemalloc_dump/GLOBAL: [non-verbose/skipped]";
+    dump.m_fmt.m_multiline = true;
+    dump.m_fmt.m_verbose = false;
+    EXPECT_NE(ostream_op_string(dump).find(skipped_str), string::npos);
+    EXPECT_EQ(ostream_op_string(dump).find("DUMP_START"), string::npos);
+    // ...and non-verbose snapshot, verbose output => nothing was collected, so skipped all the same.
+    pithy_dump.m_fmt.m_verbose = true;
+    EXPECT_NE(ostream_op_string(pithy_dump).find(skipped_str), string::npos);
+    EXPECT_EQ(ostream_op_string(pithy_dump).find("DUMP_START"), string::npos);
+  }
+  {
+    /* Above Linux's PID ceiling (2^22): cannot clash with real arenas, keyed by our PID (+ small ordinals); and
+     * distinct from the fake IDs in borrower_shm_pool_collection_repository_test.cpp (see FAKE_OWNER_ID_BASE there). */
+    constexpr arena_lend::owner_id_t FAKE_OWNER_ID = 2000000000;
+    constexpr arena_lend::collection_id_t N_FAKES = 100; // Comfortably more than "~tens."
+    auto& repository = session::shm::arena_lend::detail::Borrower_shm_pool_collection_repository<Ipc_arena>
+                         ::get_instance();
+    const auto pool_name_base = arena_lend::test::create_test_pool_name_base();
+    for (arena_lend::collection_id_t coll_id = 1; coll_id <= N_FAKES; ++coll_id)
+    {
+      repository.register_collection(FAKE_OWNER_ID, coll_id, Shared_name(pool_name_base));
+      repository.deregister_collection(FAKE_OWNER_ID, coll_id);
+    }
+
+    Shm_session_t::Info_dump pithy_session_dump;
+    pithy_session_dump.m_fmt.m_verbose = false;
+    srv_shm_session->info_dump(&pithy_session_dump, util::Call_timing::S_ALWAYS_SAFE);
+    Shm_session_t::Borrower_pool_stats_list all_list;
+    Shm_session_t::borrower_pool_stats_process_wide(&all_list);
+
+    const auto& pithy_list = pithy_session_dump.m_borrower_pool_stats_process_wide_per_arena;
+    const auto n_omitted = pithy_session_dump.m_borrower_pool_stats_process_wide_per_arena_n_omitted;
+    EXPECT_GE(pithy_list.size(), 1u);
+    EXPECT_LT(pithy_list.size(), size_t(N_FAKES));
+    EXPECT_EQ(pithy_list.size() + n_omitted, all_list.size());
+    // The most recently touched entry (the last fake) is in there.
+    EXPECT_TRUE(std::any_of(pithy_list.begin(), pithy_list.end(), [&](const auto& stats)
+    {
+      return (stats.m_uniq_arena_id.m_id1 == uint64_t(FAKE_OWNER_ID))
+             && (stats.m_uniq_arena_id.m_id2 == uint64_t(N_FAKES));
+    }));
+
+    const auto omitted_str = "+omitted[" + std::to_string(n_omitted) + ']';
+    pithy_session_dump.m_fmt.m_multiline = true;
+    const auto pithy_str = ostream_op_string(pithy_session_dump);
+    EXPECT_NE(pithy_str.find(omitted_str), string::npos);
+    // Each arena on its own line (as a sub-item).
+    ASSERT_GE(pithy_list.size(), 2u);
+    EXPECT_NE(pithy_str.find("\n  - arena[2/"), string::npos);
+    EXPECT_NE(pithy_str.find("\n  - arena[" + std::to_string(pithy_list.size()) + '/'), string::npos);
+    FLOW_LOG_INFO("Borrower-side info-dump, non-verbose, multiline (for the eyeball):\n" << pithy_session_dump);
+    pithy_session_dump.m_fmt.m_multiline = false;
+    EXPECT_NE(ostream_op_string(pithy_session_dump).find(omitted_str), string::npos);
+    FLOW_LOG_INFO("Same, single-line: [" << pithy_session_dump << "].");
+
+    /* Borrower side, m_verbose changed between snapshot and output (see owner-side counterpart above): the output
+     * follows the snapshot.  Non-verbose snapshot, verbose output => still trimmed, with the omitted-count... */
+    pithy_session_dump.m_fmt.m_verbose = true;
+    EXPECT_NE(ostream_op_string(pithy_session_dump).find(omitted_str), string::npos);
+    // ...and verbose snapshot (from before the fakes), non-verbose output => untrimmed (all arenas), none omitted.
+    session_dump.m_fmt.m_verbose = false;
+    const auto session_str = ostream_op_string(session_dump);
+    const auto n_all = std::to_string(session_dump.m_borrower_pool_stats_process_wide_per_arena.size());
+    EXPECT_NE(session_str.find("arena[" + n_all + '/' + n_all + ']'), string::npos);
+    EXPECT_EQ(session_str.find("+omitted["), string::npos);
+  }
 
   /* The global resets (both static): ACCUMULATORs zero absolutely (delta discipline moot from here);
    * GAUGEs (live TL-cache entries, live aux handles) persist; their HWMs re-seed. */
@@ -1406,7 +1497,8 @@ TEST(Ipc_arena_stats_test, arena_and_session_lifecycle)
   const auto br_dump = [&](util::String_view label)
   {
     Shm_session_t::Borrower_pool_stats_list list;
-    Shm_session_t::borrower_pool_stats_process_wide(&list);
+    // Most-recently-touched few only: ours (other TESTs may have left many old entries; no need to print those).
+    Shm_session_t::borrower_pool_stats_process_wide(&list, 20);
     for (const auto& entry : list)
     {
       FLOW_LOG_INFO("Borrower per-arena breakdown (" << label << "): arena "

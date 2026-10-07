@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 #include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 #include "ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp"
+#include "ipc/shm/arena_lend/arena_lend_stats.hpp"
 #include "ipc/shm/arena_lend/borrower_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
@@ -32,11 +33,6 @@
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
-#include <flow/util/stat/stat_set.hpp>
-#include <flow/common.hpp>
-#include <algorithm>
-#include <iostream>
-#include <sstream>
 
 using ipc::test::Test_logger;
 using std::make_shared;
@@ -56,9 +52,14 @@ using pool_id_t = ipc::shm::arena_lend::Borrower_shm_pool_collection::pool_id_t;
 using detail::owner_id_t;
 using detail::collection_id_t;
 
-const owner_id_t OWNER_ID_0 = 10;
-const owner_id_t OWNER_ID_1 = 20;
-const owner_id_t OWNER_ID_2 = 30; // Used by the lookup-oriented TESTs only (state-independence from the others).
+/* Fake owner IDs (owner ID = owner process's PID): all above Linux's PID ceiling (2^22), so none can equal a real
+ * process's PID -- notably our own, which (with small in-process ordinals as collection IDs) keys the real arenas
+ * of any live sessions.  Distinct offsets keep different TESTs' (or groups of TESTs') entries apart. */
+const owner_id_t FAKE_OWNER_ID_BASE = 1000000000;
+const owner_id_t OWNER_ID_0 = FAKE_OWNER_ID_BASE + 10;
+const owner_id_t OWNER_ID_1 = FAKE_OWNER_ID_BASE + 20;
+// Used by the lookup-oriented TESTs only (state-independence from the others):
+const owner_id_t OWNER_ID_2 = FAKE_OWNER_ID_BASE + 30;
 const collection_id_t COLLECTION_ID_0 = 1;
 const collection_id_t COLLECTION_ID_1 = 2;
 
@@ -298,79 +299,187 @@ TEST(Borrower_shm_pool_collection_repository_test, Mutation_visibility)
   EXPECT_TRUE(ensure_empty_collection_at_destruction(owner_collection));
 } // TEST(Borrower_shm_pool_collection_repository_test, Mutation_visibility)
 
-/* XXX Temporary benchmark (not a test): measures the per-arena borrower-stats map's cost as a function of its size,
- * to choose the bound on it.  DISABLED_ because the map never shrinks: the fake arenas it leaves behind would skew
- * any later test (in the same process) that looks at per-arena stats.  Run it alone:
- *   libipc_unit_test.exec --gtest_also_run_disabled_tests \
- *     --gtest_filter='Borrower_shm_pool_collection_repository_test.DISABLED_XXX_bench_per_arena_stats'
- * Each step registers + immediately deregisters more arenas (= the "ancient arenas" state that accumulates in
- * production), then times (best of N_REPS) the ops that walk the map. */
-TEST(Borrower_shm_pool_collection_repository_test, DISABLED_XXX_bench_per_arena_stats)
+/* The bounded per-arena stats breakdown: stats() reports per-arena stat-sets for at most a fixed number of
+ * arenas, forgetting the least-recently-touched one when that number would be exceeded.  ("Touched" = any of
+ * [de]register_collection(), [de]register_shm_pool() for that arena.)  Covered here:
+ *   - The cap holds; a stat-touched live arena survives churn that evicts an untouched live arena of the same age.
+ *     (The touch is via register_shm_pool(), so that path's touch is covered too.)
+ *   - stats() trimming: `per_arena_stats_sz_limit_or_0` keeps the N most recently touched (output still sorted by
+ *     ID); `*n_arenas_omitted` counts the rest; a limit at or above the size (or 0) omits nothing; and with a null
+ *     list neither is touched.
+ *   - An arena evicted while still borrowed: its further register/deregister events skip its (absent) per-arena
+ *     stat-set without re-inserting it (so no unbalanced gauges; e.g., no assert trip on the last deregister);
+ *     once fully unborrowed, a fresh borrowing gets a fresh stat-set, its accumulators starting from zero.
+ *   - The totals stay exact throughout, eviction notwithstanding.
+ * Uses a fake owner ID and fake collection IDs, except for the one real pool (needed for register_shm_pool()).
+ * Leaves (dead) fake per-arena entries behind in the process-wide repository; harmless for other TESTs, which
+ * only look for their own arenas' entries. */
+TEST(Borrower_shm_pool_collection_repository_test, Per_arena_stats_limits)
 {
   using ipc::session::shm::arena_lend::Borrower_pool_stats_list;
-  using flow::util::stat::print;
-  using flow::Fine_clock;
-  using flow::Fine_duration;
-  using boost::chrono::microseconds;
-  using boost::chrono::round;
-  using std::ostringstream;
+  using ipc::shm::arena_lend::stat::Borrower_pool_stats;
 
-  constexpr owner_id_t OWNER_ID = 4242; // Distinct from all other TESTs' owner IDs.
-  constexpr unsigned int N_REPS = 5;
-  constexpr size_t STEPS[] = { 1000, 4000, 16000, 64000 }; // Cumulative total arenas ever registered.
+  const owner_id_t OWNER_ID = FAKE_OWNER_ID_BASE + 40; // See FAKE_OWNER_ID_BASE.
+  constexpr collection_id_t COLL_ID_L = 1; // Live throughout; touched mid-churn => survives eviction.
+  constexpr collection_id_t COLL_ID_V = 2; // Live but untouched during churn => evicted while live.
+  constexpr collection_id_t COLL_ID_CHURN_0 = 100; // Churned (register + deregister) arenas: from here up.
+  constexpr size_t SZ_LIMIT = 1000; // Per docs: the internal limit, "as of this writing."
+  constexpr size_t N_CHURN_1 = 500;
+  constexpr size_t N_CHURN_2 = 600; // N_CHURN_1 + N_CHURN_2 > SZ_LIMIT: V gets evicted; L (touched between) not.
 
   auto& repository = Repository::get_instance();
+  Test_logger logger;
   const auto pool_name_base = create_test_pool_name_base();
+  const auto SHM_POOL_SIZE = ipc::shm::arena_lend::jemalloc::Jemalloc_pages::get_page_size();
 
-  const auto best_of = [&](const auto& op) -> Fine_duration
+  const auto totals = [&]() -> const Borrower_pool_stats& { return repository.stats(nullptr, 0, nullptr); };
+  const auto t0_reg = totals().m_arena_register_count.load();
+  const auto t0_first_reg = totals().m_arena_first_register_count.load();
+  const auto t0_dereg = totals().m_arena_deregister_count.load();
+  const auto t0_last_dereg = totals().m_arena_last_deregister_count.load();
+  const auto t0_n_arenas = totals().m_n_borrowed_arenas.load();
+  const auto t0_n_pools = totals().m_n_open_pools.load();
+
+  // Full per-arena list (no trimming); and find-our-entry-in-it (null if absent).
+  const auto all_entries = [&]() -> Borrower_pool_stats_list
   {
-    auto best = Fine_duration::max();
-    for (unsigned int rep = 0; rep != N_REPS; ++rep)
-    {
-      const auto start = Fine_clock::now();
-      op();
-      best = std::min(best, Fine_duration{Fine_clock::now() - start});
-    }
-    return best;
-  };
-  const auto us = [](Fine_duration d) { return round<microseconds>(d).count(); };
-
-  collection_id_t next_collection_id = 1000000; // Distinct from all other TESTs' collection IDs.
-  size_t n_ever = 0;
-  for (const auto n_target : STEPS)
-  {
-    for (; n_ever != n_target; ++n_ever)
-    {
-      repository.register_collection(OWNER_ID, next_collection_id, Shared_name(pool_name_base));
-      repository.deregister_collection(OWNER_ID, next_collection_id);
-      ++next_collection_id;
-    }
-
-    const auto d_totals = best_of([&]() { repository.stats(nullptr, 0, nullptr); });
-    const auto d_list = best_of([&]()
-    {
-      Borrower_pool_stats_list list;
-      repository.stats(&list, 0, nullptr);
-    });
-    const auto d_reset = best_of([&]() { repository.stats_reset(); });
     Borrower_pool_stats_list list;
-    repository.stats(&list, 0, nullptr);
-    const auto n_entries = list.size(); // (Includes any left by earlier TESTs in this process, if any.)
-    const auto d_print = best_of([&]()
+    size_t n_omitted = 12345;
+    repository.stats(&list, 0, &n_omitted);
+    EXPECT_EQ(n_omitted, 0u);
+    return list;
+  };
+  const auto find_entry
+    = [&](const Borrower_pool_stats_list& list, collection_id_t coll_id) -> const Borrower_pool_stats*
+  {
+    for (const auto& entry : list)
     {
-      ostringstream os;
-      for (const auto& stats : list)
+      if ((entry->m_uniq_arena_id.m_id1 == uint64_t(OWNER_ID)) && (entry->m_uniq_arena_id.m_id2 == uint64_t(coll_id)))
       {
-        os << print(*stats) << '\n';
+        return entry.get();
       }
-    });
+    }
+    return nullptr;
+  };
 
-    std::cout << "XXX bench: entries [" << n_entries << "]: "
-              << "stats(totals) [" << us(d_totals) << " us]; "
-              << "stats(+list) [" << us(d_list) << " us] = [" << (double(us(d_list)) / n_entries) << " us/entry]; "
-              << "stats_reset() [" << us(d_reset) << " us] = [" << (double(us(d_reset)) / n_entries) << " us/entry]; "
-              << "print(list) [" << us(d_print) << " us] = [" << (double(us(d_print)) / n_entries) << " us/entry].\n";
+  collection_id_t next_churn_id = COLL_ID_CHURN_0;
+  const auto churn = [&](size_t n)
+  {
+    for (size_t idx = 0; idx != n; ++idx)
+    {
+      repository.register_collection(OWNER_ID, next_churn_id, Shared_name(pool_name_base));
+      repository.deregister_collection(OWNER_ID, next_churn_id);
+      ++next_churn_id;
+    }
+  };
+
+  // L and V borrowed (same age); churn; touch L (via a pool opening); churn more.
+  repository.register_collection(OWNER_ID, COLL_ID_L, Shared_name(pool_name_base));
+  repository.register_collection(OWNER_ID, COLL_ID_V, Shared_name(pool_name_base));
+  churn(N_CHURN_1);
+
+  auto owner_collection = make_shared<Test_shm_pool_collection>(&logger, COLL_ID_L, Shared_name(pool_name_base));
+  auto owner_pool = owner_collection->create_shm_pool(SHM_POOL_SIZE);
+  const auto pool_id = owner_pool->get_id();
+  repository.register_shm_pool(OWNER_ID, COLL_ID_L, pool_id, SHM_POOL_SIZE); // Touches L.
+
+  churn(N_CHURN_2);
+  const auto last_churn_id = next_churn_id - 1;
+
+  { // The cap; who survived.
+    const auto list = all_entries();
+    EXPECT_EQ(list.size(), SZ_LIMIT);
+
+    const auto entry_l = find_entry(list, COLL_ID_L);
+    ASSERT_TRUE(entry_l) << "Touched mid-churn: must have survived eviction.";
+    EXPECT_EQ(entry_l->m_arena_register_count.load(), 1u);
+    EXPECT_EQ(entry_l->m_n_borrowed_arenas.load(), 1u);
+    EXPECT_EQ(entry_l->m_pool_open_count.load(), 1u);
+    EXPECT_EQ(entry_l->m_n_open_pools.load(), 1u);
+    EXPECT_EQ(entry_l->m_mapped_sz.load(), SHM_POOL_SIZE);
+
+    EXPECT_FALSE(find_entry(list, COLL_ID_V)) << "Untouched during churn: must have been evicted (while live).";
+    EXPECT_FALSE(find_entry(list, COLL_ID_CHURN_0)) << "Oldest churned: must have been evicted.";
+    EXPECT_TRUE(find_entry(list, last_churn_id));
+    /* Exactly SZ_LIMIT survive = L + all of churn-2 + the newest (SZ_LIMIT - 1 - N_CHURN_2) of churn-1; so the
+     * boundary inside churn-1 is precisely known. */
+    const auto oldest_surviving_churn_1_id = collection_id_t(COLL_ID_CHURN_0 + N_CHURN_1 - (SZ_LIMIT - 1 - N_CHURN_2));
+    EXPECT_TRUE(find_entry(list, oldest_surviving_churn_1_id));
+    EXPECT_FALSE(find_entry(list, oldest_surviving_churn_1_id - 1));
   }
-} // TEST(Borrower_shm_pool_collection_repository_test, DISABLED_XXX_bench_per_arena_stats)
+
+  { // stats() trimming.
+    constexpr size_t N_SHOWN = 10;
+    Borrower_pool_stats_list list;
+    size_t n_omitted = 12345;
+    repository.stats(&list, N_SHOWN, &n_omitted);
+    ASSERT_EQ(list.size(), N_SHOWN);
+    EXPECT_EQ(n_omitted, SZ_LIMIT - N_SHOWN);
+    // The N_SHOWN most recently touched = the last N_SHOWN churned; output sorted ascending by ID.
+    for (size_t idx = 0; idx != N_SHOWN; ++idx)
+    {
+      EXPECT_EQ(list[idx]->m_uniq_arena_id.m_id1, uint64_t(OWNER_ID));
+      EXPECT_EQ(list[idx]->m_uniq_arena_id.m_id2, uint64_t(last_churn_id - (N_SHOWN - 1) + idx));
+    }
+
+    n_omitted = 12345;
+    repository.stats(&list, SZ_LIMIT * 5, &n_omitted); // Limit above size: nothing omitted.
+    EXPECT_EQ(list.size(), SZ_LIMIT);
+    EXPECT_EQ(n_omitted, 0u);
+
+    n_omitted = 12345;
+    repository.stats(nullptr, N_SHOWN, &n_omitted); // Null list: out-arg not touched.
+    EXPECT_EQ(n_omitted, 12345u);
+  }
+
+  /* V, evicted while live: borrow it again (use-count 2) -- must not re-insert it (that would be a stat-set
+   * missing its first borrowing); then unborrow twice (the last time would trip the per-arena 0-or-1 gauge
+   * assert, if V had been wrongly re-inserted). */
+  repository.register_collection(OWNER_ID, COLL_ID_V, Shared_name(pool_name_base));
+  EXPECT_FALSE(find_entry(all_entries(), COLL_ID_V));
+  repository.deregister_collection(OWNER_ID, COLL_ID_V);
+  repository.deregister_collection(OWNER_ID, COLL_ID_V);
+  EXPECT_FALSE(find_entry(all_entries(), COLL_ID_V));
+  EXPECT_EQ(totals().m_n_borrowed_arenas.load(), t0_n_arenas + 1); // Just L now.
+
+  // V borrowed afresh (fully unborrowed in between): new stat-set, from zero.
+  repository.register_collection(OWNER_ID, COLL_ID_V, Shared_name(pool_name_base));
+  {
+    const auto list = all_entries();
+    const auto entry_v = find_entry(list, COLL_ID_V);
+    ASSERT_TRUE(entry_v);
+    EXPECT_EQ(entry_v->m_arena_register_count.load(), 1u);
+    EXPECT_EQ(entry_v->m_arena_first_register_count.load(), 1u);
+    EXPECT_EQ(entry_v->m_arena_deregister_count.load(), 0u);
+    EXPECT_EQ(entry_v->m_n_borrowed_arenas.load(), 1u);
+  }
+  repository.deregister_collection(OWNER_ID, COLL_ID_V);
+
+  // Unborrow L (pool first, as in real life).
+  repository.deregister_shm_pool(OWNER_ID, COLL_ID_L, pool_id);
+  repository.deregister_collection(OWNER_ID, COLL_ID_L);
+  {
+    const auto list = all_entries();
+    const auto entry_l = find_entry(list, COLL_ID_L);
+    ASSERT_TRUE(entry_l);
+    EXPECT_EQ(entry_l->m_n_borrowed_arenas.load(), 0u);
+    EXPECT_EQ(entry_l->m_n_open_pools.load(), 0u);
+    EXPECT_EQ(entry_l->m_pool_close_count.load(), 1u);
+    EXPECT_EQ(entry_l->m_mapped_sz.load(), 0u);
+  }
+
+  /* Totals: exact despite all the eviction.  Registrations: L 1; V 3 (initial, again, afresh); churn.  Of
+   * those, "first" (0 -> 1) ones: all but V's second.  Likewise for deregistrations/"last" ones. */
+  const size_t n_churn = N_CHURN_1 + N_CHURN_2;
+  EXPECT_EQ(totals().m_arena_register_count.load() - t0_reg, 1 + 3 + n_churn);
+  EXPECT_EQ(totals().m_arena_first_register_count.load() - t0_first_reg, 1 + 2 + n_churn);
+  EXPECT_EQ(totals().m_arena_deregister_count.load() - t0_dereg, 1 + 3 + n_churn);
+  EXPECT_EQ(totals().m_arena_last_deregister_count.load() - t0_last_dereg, 1 + 2 + n_churn);
+  EXPECT_EQ(totals().m_n_borrowed_arenas.load(), t0_n_arenas);
+  EXPECT_EQ(totals().m_n_open_pools.load(), t0_n_pools);
+
+  EXPECT_TRUE(owner_collection->remove_shm_pool(owner_pool));
+  EXPECT_TRUE(ensure_empty_collection_at_destruction(owner_collection));
+} // TEST(Borrower_shm_pool_collection_repository_test, Per_arena_stats_limits)
 
 } // namespace ipc::session::shm::arena_lend::test

@@ -209,9 +209,10 @@ void Ipc_arena::destroy()
                                                                { return ostream_op_string(arena_id); }),
                             ", ") << "]."); // BTW: reminder: they're in sorted order in m_arenas.
   {
-    Info_dump dump; // Full verbosity, multi-line. / Avoid unneeded info_dump() by placing it inside log-macro.
-    dump.m_fmt.m_verbose = false; // Don't need the many-pages jemalloc-dump.  They can log it themselves if desired.
-
+    /* Don't need the many-pages jemalloc-dump (verbose=false).  multiline=true is fine however.
+     * Avoid unneeded info_dump() by placing it inside log-macro. */
+    Info_dump dump;
+    dump.m_fmt.m_verbose = false;
     FLOW_LOG_INFO("Ipc_arena [" << this << "] shutdown: "
                   "~Final state (includes ~final this-arena + ~current global):\n"
                   << (info_dump(&dump,

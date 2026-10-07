@@ -148,6 +148,10 @@ std::ostream& operator<<(std::ostream& os, const Shm_session_info_dump& val)
              << "+omitted[" << n_omitted << ']' << ln;
         }
       } // if (idx == n_arenas)
+      else
+      {
+        os << ln_ln;
+      }
     }
   } // else // if (!brw_pool_stats_vec.empty())
 

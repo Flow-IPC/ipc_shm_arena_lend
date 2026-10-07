@@ -74,7 +74,7 @@ struct Arena_info_dump
    * @note Info_dump_format::m_verbose specifically controls whether -- if available in the first
    *       place -- #m_mem_mgr_stats_dump (as from jemalloc::Memory_manager::stats_dump_to_ostream())
    *       shall be included in the output (`true` <=> yes).  Additionally if `false` at Ipc_arena::info_dump()
-   *       call, then #m_mem_mgr_stats_dump is not genereated (empty string saved). / However:
+   *       call, then #m_mem_mgr_stats_dump is not generated (empty string saved).  However:
    * @note Info_dump_format::m_multiline being `false` shall cause printing as-if `m_verbose == false`
    *       regardless of its actual value.  (It is not reasonable to print jemalloc's huge #m_mem_mgr_stats_dump,
    *       if newlines are not allowed.)  `m_multiline` does not affect `info_dump()` generating/saving or not
@@ -135,7 +135,10 @@ struct Shm_session_info_dump
   /**
    * Print-format knobs in effect at `ostream << *this` time.
    *
-   * @note Info_dump_format::m_verbose has no effect.
+   * @note Info_dump_format::m_verbose specifically controls whether #m_borrower_pool_stats_process_wide_per_arena
+   *       gathers/prints all (potentially hundreds) past borrowed arenas' stuff; if `false` then only up to
+   *       ~tens (as of this writing) are saved, and if any were thus omitted this is
+   *       saved/printed in #m_borrower_pool_stats_process_wide_per_arena_n_omitted.
    */
   util::stat::Info_dump_format m_fmt;
 

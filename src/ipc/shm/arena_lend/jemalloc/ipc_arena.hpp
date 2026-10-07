@@ -421,7 +421,8 @@ public:
    * memory_manager_stats_reset(), etc.
    *
    * @param target_info_dump
-   *        The non-`->m_fmt` parts shall be assigned.
+   *        The non-`->m_fmt` parts shall be assigned.  `->m_fmt.m_verbose` is also consulted (so set it, if desired,
+   *        before calling); see util::Info_dump_format::m_verbose.
    * @param call_timing
    *        See util::Call_timing doc header(s).  Reminder: By convention: If your code can guarantee that
    *        reasons for making this unsafe cannot exist in the chosen build/otherwise environment, then

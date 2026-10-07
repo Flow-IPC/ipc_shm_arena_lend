@@ -1000,7 +1000,8 @@ struct Uniq_arena_id
  *
  * The complexity continues: the above talks of the BR's PoV; but there is also:
  *   - BR's PoV, but broken down by *ever-borrowed arena*.  (An arena, in this context, is identified by a
- *     machine-wide-unique, between boots, ID: owner/PID + in-process-ordinal-ID.)
+ *     machine-wide-unique, between boots, ID: owner/PID + in-process-ordinal-ID.)  (Subject to culling of old
+ *     per-arena stats; see session::shm::arena_lend::jemalloc::Shm_session::borrower_pool_stats_process_wide().)
  *     - A given arena X can be borrowed via session SAB, then unborrowed when SAB closes; then borrowed again
  *       via fully-subsequent session SAB2.  Accumulators like pool-open-count for pool P1 will carry-over
  *       throughout and shall persist during any gap when X isn't borrowed by anything.  Nothing is degenerate;

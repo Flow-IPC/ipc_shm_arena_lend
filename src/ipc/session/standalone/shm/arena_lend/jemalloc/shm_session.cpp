@@ -126,7 +126,11 @@ Shm_session::~Shm_session()
 
   // Log ~final info/stats.
   {
-    Info_dump dump; // Multi-line. / Avoid unneeded info_dump() by placing it inside log-macro.
+    /* Don't need all (could be e.g. hundreds) of past-per-arena stats for the global Borrower_..._repository;
+     * so verbose=false.  multiline=true is fine however.
+     * Avoid unneeded info_dump() by placing it inside log-macro. */
+    Info_dump dump;
+    dump.m_fmt.m_verbose = false;
     FLOW_LOG_INFO("Shm_session [" << this << "] shutdown: "
                   "~Final state (includes ~final this-session + ~current global):"
                   "\n" << (info_dump(&dump), dump) << '.'); // Note: no newline at end of info_dump.

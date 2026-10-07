@@ -119,6 +119,11 @@ std::string Category::message(int val) const // Virtual.
     return "Session opening: While trying to transmit resource for internal-IPC use in an arena-lending SHM-provider, "
            "server encountered incoming-direction channel error whose exact nature could not be determined at that "
            "exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.";
+  case Code::S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
+    return "Session opening: While setting up resources for internal-IPC use in an arena-lending SHM-provider, it "
+           "was found that the session master channel's transport had been hosed by an error whose exact nature was "
+           "not available at that exact moment.  Logs will indicate that exact nature; meanwhile session opening "
+           "failed.";
 
   case Code::S_END_SENTINEL:
     assert(false && "SENTINEL: Not an error.  "
@@ -140,6 +145,8 @@ util::String_view Category::code_symbol(Code code) // Static.
     return "SHM_ARENA_LEND_FAILED";
   case Code::S_SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
     return "SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR";
+  case Code::S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
+    return "MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR";
 
   case Code::S_END_SENTINEL:
     return "END_SENTINEL";

@@ -492,7 +492,8 @@ public:
    * (See Ipc_arena::info_dump() doc header -- same deal.)
    *
    * @param target_info_dump
-   *        The non-`->m_fmt` parts shall be assigned.
+   *        The non-`->m_fmt` parts shall be assigned.  `->m_fmt.m_verbose` is also consulted (so set it, if desired,
+   *        before calling); see util::Info_dump_format::m_verbose.
    * @param call_timing
    *        This is ignored and can be left at its default.  It is present for generic-programming synergy
    *        versus jemalloc::Ipc_arena versus SHM-classic's classic::Pool_arena.  The latter, in the land of
@@ -547,14 +548,14 @@ public:
    *
    * @note `*n_arenas_omitted` is set to the number of stat-sets thus dropped past `per_arena_stats_sz_limit_or_0`.
    *
-   * There is also an internal limit, which is a constant.  To avoided unbounded growth of overall per-arena
-   * stats here, we irreversibly forget an old stat-set, if we are about to go past this limit.  Therefore
-   * (even with `per_arena_stats_sz_limit_or_0 = 0` a/k/a infinity) `per_arena_stats->size()` shall not exceed
-   * this large internal limit.
+   * There is also an internal limit, which is a constant; as of this writing 1,000.  To avoid unbounded growth
+   * of overall per-arena stats here, we irreversibly forget an old stat-set, if we are about to go past this limit.
+   * Therefore (even with `per_arena_stats_sz_limit_or_0 = 0` a/k/a infinity) `per_arena_stats->size()` shall
+   * not exceed this large internal limit.
    *
    * If arena-stat-sets are omitted due to the limit in-arg, and/or arena-stat-sets are forgotten due to the
    * internal growth limit, the *oldest* (according to the same age criterion) arenas are omitted/forgotten.
-   * This *age* is determined by the following critierion: time passed since the last time a stat-modifying event
+   * This *age* is determined by the following criterion: time passed since the last time a stat-modifying event
    * has occurred for that arena.  Namely:
    *   - the arena is borrowed through a session (opposing Shm_session::lend_arena());
    *   - the arena is unborrowed through a session (as of this writing: local Shm_session borrowing it is destroyed);
@@ -573,7 +574,8 @@ public:
    *        (Ignored if `per_arena_stats` is null.)  If not zero, result `per_arena_stats->size()` is limited to
    *        at most this many elements, with most-recently updated stat-sets given precedence.
    * @param n_arenas_omitted
-   *        (Ignored if `per_arena_stats` is null.)  `*n_arenas_omitted` shall be set to the number of stat-sets
+   *        (Ignored if `per_arena_stats` is null; or if `n_arenas_omitted` is itself null.)
+   *        `*n_arenas_omitted` shall be set to the number of stat-sets
    *        internally available but omitted from `*per_arena_stats` due to `per_arena_stats_sz_limit_or_0`.
    *        (If `per_arena_stats_sz_limit_or_0 == 0`, `*n_arenas_omitted` shall be zero.)
    * @return See above (the across-all-`Shm_session`s totals).

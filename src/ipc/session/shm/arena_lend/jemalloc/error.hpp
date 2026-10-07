@@ -76,6 +76,13 @@ enum class Code
    */
   S_SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR,
 
+  /**
+   * Session opening: While setting up resources for internal-IPC use in an arena-lending SHM-provider, it was found
+   * that the session master channel's transport had been hosed by an error whose exact nature was not available at
+   * that exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.
+   */
+  S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR,
+
   /// SENTINEL: Not an error.  This Code must never be issued by an error/success-emitting API; I/O use only.
   S_END_SENTINEL
 }; // enum class Code
