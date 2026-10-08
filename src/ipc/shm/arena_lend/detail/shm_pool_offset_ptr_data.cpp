@@ -247,7 +247,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
      * before the full 32-bit # fully wraps around, meaning when it goes from 00...0 to 01...1 to 10...0; and
      * then a 2nd time when it goes from 11...1 to 0...0).  If that occurs, we need to skip the 0.
      * (@todo Maybe WARNING if this shockingly unlikely thing does get observed?) */
-  } // Sh_lock sh_lock(*s_pool_id_mutex_or_none)
+  } // Sh_lock sh_lock{*s_pool_id_mutex_or_none}
 
   return id;
 } // Shm_pool_offset_ptr_data_base::generate_pool_id()

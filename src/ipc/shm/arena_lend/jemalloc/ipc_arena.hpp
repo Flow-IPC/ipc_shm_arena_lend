@@ -36,16 +36,20 @@
 #include "ipc/shm/arena_lend/detail/obj_disposer.hpp"
 #include "ipc/shm/stl/stateless_allocator.hpp"
 #include "ipc/shm/stl/arena_activator.hpp"
+#include "ipc/shm/classic/error.hpp" // @todo: Yes, this (`classic`? here?) is a bit odd.  See constructing_obj().
 #include "ipc/util/util.hpp"
 #include "ipc/util/util_fwd.hpp"
+#include "ipc/util/detail/util.hpp"
 #include <flow/log/log.hpp>
 #include <flow/util/util.hpp>
+#include <boost/interprocess/exceptions.hpp>
 #include <unordered_map>
 #include <map>
 #include <set>
 #include <type_traits>
 #include <memory>
 #include <vector>
+#include <new>
 
 namespace ipc::shm::arena_lend::jemalloc
 {
@@ -173,7 +177,7 @@ public:
   // Types.
 
   /**
-   * Fancy pointer type used by ipc::shm::stl::Stateless_allocator.
+   * Fancy pointer type used by #Allocator.
    *
    * @tparam Pointed_type
    *         The type contained within the pointer.
@@ -265,20 +269,23 @@ public:
    * in this process -- but only after (1) the returned handle's `shared_ptr` group reaches ref-count zero,
    * *and* (2) the same happens to any similar `Handle<T>` returned by Shm_session::borrow_object().
    *
+   * Does not return null.  Throws on any error (details below).
+   *
    * @see Class doc header for an overview of related ops including lend/borrow.  That'll explain how the
    *      aforementioned `borrow_object()` call -- probably in another process! -- is connected to the
    *      handle returned here.
    *      (Spoiler alert: `p = a->construct()` => `blob = session->lend_object(p)`
    *      => `p2 = their_session->borrow_object(copy_of_blob_ipced_over_to_us)`.)
    *
-   * ### [De]allocation propagation via STL-allocator ###
+   * [De]allocation propagation via STL-allocator
+   * --------------------------------------------
    * What if `T` is not a plain old data type?  Let's say specifically (as recommended for Flow-IPC users dealing
    * with non-PoDs in SHM) that `T` is (or contains... but let's keep it simple) an STL-compliant container such as
    * `vector<char>` or `flow::util::Basic_blob`.  `sizeof(T)` then likely won't be holding the actual data;
    * it'll need to allocate a buffer of size N.  Let's say you used the T ctor that would immediately allocate
    * N bytes.  Then, for this to work properly (as opposed to allocating N bytes in regular heap: unhelpful),
    * `T` must be configured with a SHM-aware allocator that will call `allocate(N)` via this `Ipc_arena` when
-   * needed.  shm::stl::Stateless_allocator provides this.  So construct() itself will `allocate(sizeof(T))`,
+   * needed.  #Allocator provides this.  So construct() itself will `allocate(sizeof(T))`,
    * invoke `T{...}`; that will propagate any allocating to the allocator; that will in turn `allocate(N)`.
    * Conversely, when SHM-jemalloc decides to garbage-collect (see above), it will invoke `~T()`; that will
    * propagate deallocation of the N-buffer to the allocator; allocator in turn will `deallocate(...)` via
@@ -289,14 +296,74 @@ public:
    * and/or deallocations after ctor `T{...}` here and dtor `~T()` at GC-time.  The same principles apply:
    * `T` (e.g. `vector`) code tells allocator to [de]allocate; allocator forwards to `this->[de]allocate()`.
    * However!  The allocator must know which `Ipc_arena` to in fact use.  If you are using `Stateless_allocator`
-   * (as we recommend) then you will need to use shm::stl::Arena_activator to thread-locally set the "current"
-   * arena to `this`, in-scope of any potentially-[de]allocating ops (e.g.: `vector::resize()`).
+   * (#Allocator) (as we recommend) then you will need to use shm::stl::Arena_activator (#Activator) to
+   * thread-locally set the "current" arena to `this`, in-scope of any potentially-[de]allocating ops (e.g.:
+   * `vector::resize()`).
    *
    * @note For ctor `T{...}` call (in construct()) and GC-time dtor `T()` call we automatically activate `*this`
    *       for purposes of `T` allocator ops.
    *
-   * ### Lifetime versus `*this` arena ###
+   * Integration with shm::stl::Stateless_allocator (#Allocator)
+   * -----------------------------------------------------------
+   * This method, bracketing the invocation of the `T` ctor, sets the thread-local
+   * `shm::stl::Arena_activator<Pool_arena>` context to `this`.  Therefore the caller need not do so.
+   * If `T` does not store an STL-compliant structure that uses `Stateless_allocator`, then this is harmless
+   * albeit a small perf hit (also skipped for all trivially-destructible `T`).  If `T` does do so, then it is a
+   * convenience.
+   *
+   * Arguably more importantly: The returned `shared_ptr` is such that when garbage-collection of the created
+   * data structure does occur -- which may occur in this process, but via lend_object() and borrow_object()
+   * may well occur in another process -- the `T::~T()` *dtor* call shall also be bracketed by the aforementioned
+   * context.  Again: If `T` does not rely on `Stateless_allocator`, then it's harmless; but if it *does*, then
+   * doing this is quite essential.  That is because the user cannot, typically (or at least sufficiently easily),
+   * control the per-thread allocator context at the time of dtor call -- simply because who knows who or what
+   * will be running when the cross-process ref-count reaches 0.
+   *
+   * Lifetime versus `*this` arena
+   * -----------------------------
    * Please read "Interrelated lifetimes" in class doc header.
+   *
+   * Errors
+   * ------
+   * ### On `allocate(sizeof(T))` failing ###
+   * The first step in this method is to allocate the outer-layer buffer sized for the new `T` itself.  If this
+   * fails: the method throws as allocate(); namely it throws `std::bad_alloc`.
+   *
+   * @see allocate() doc header which describes the relevant throwing semantics.  In short: the known
+   *      (all non-mainstream) causes are environmental limits -- chiefly the per-process open-file-descriptor
+   *      limit, as SHM-jemalloc keeps one descriptor open per SHM-pool -- and an absurdly large `sizeof(T)`.
+   *      Contrast with, say, classic::Pool_arena::allocate() which can fail simply because the user-decided
+   *      and unchangeable (for a given arena) overall pool capacity is exceeded.
+   *
+   * ### What else can fail? ###
+   * construct() in SHM-jemalloc, following the initial `allocate(sizeof(T))` and the ctor `T{...}`,
+   * performs further setup that assures the aforementioned cross-process GC.  A problem can occur.  In all
+   * cases, as a result, an exception is thrown upon undoing preceding successful steps.
+   *
+   * As with allocate() essentially all problems are of a non-mainstream nature/environmental limits.  There are
+   * however a couple that *could* be of specific interest.
+   *
+   *   - Internally the GC system can only handle up to a certain large # of live `construct()`ed objects *per thread*.
+   *     As of this writing it is about 1 million.  This is not a problem for most applications, but it is possible.
+   *     - Result: throws `std::bad_alloc` after logging a WARNING.  Note this is the same result,
+   *       exception-type-wise, as allocate() failing.  Both do indicate, usually, some kind of capacity problem.
+   *   - Internally the GC system will need to create a (typically small, in terms of actual RAM use) auxilliary
+   *     named SHM-pool.  This can fail, though again it is unlikely in a setup that is basically working.
+   *     - Result: throws `flow::error::Runtime_error` (itself an `std::runtime_error`) after logging a warning.
+   *       An `Error_code` and an error string are available through the exception object.
+   *   - Any other issue: Throws an exception.
+   *
+   * Last, and in fact not least:
+   *
+   * ### If `T` constructor throws ###
+   * The thrown exception propagates to our caller upon undoing the `allocate(sizeof(T))` preceding the ctor call.
+   *
+   * Corollary + context: A particular sub-case of this is that, while executing `T` ctor, a subordinate --
+   * typically/recommendedly via allocator-furnished container-containing type `T` -- `allocate()` threw `bad_alloc`.
+   * We guarantee that our `allocate(sizeof(T))` is undone.  In addition: A properly coded (at all nesting-layers)
+   * container-containing type `T`, using (at all nesting-layers) a proper SHM-supporting allocator shall undo all
+   * `allocate()`s that had succeeded up to the one that failed.  This method itself can only take care of its
+   * own `allocate()`, which as just noted it does.
    *
    * @tparam T
    *         The object type to be created.
@@ -305,7 +372,7 @@ public:
    * @param ctor_args
    *        The arguments passed to the constructor of T.
    *
-   * @return A shared pointer to an object created in shared memory.
+   * @return A shared pointer to an object created in shared memory.  Not null.
    */
   template<typename T, typename... Ctor_args>
   Handle<T> construct(Ctor_args&&... ctor_args);
@@ -314,19 +381,78 @@ public:
    * Performs a non-garbage-collected allocation of a buffer in SHM.
    *
    * @warning It is irregular, though not formally disallowed, for the end user to invoke this except inside
-   *          STL-allocator code.  We provide shm::stl::Stateless_allocator which shall do so for you, and we
-   *          recommend you use that instead of rolling your own.
+   *          STL-allocator code.  We provide shm::stl::Stateless_allocator (#Allocator) which shall do so for
+   *          you, and we recommend you use that instead of rolling your own.
    *
-   * ### Perf notes ###
+   * On failure to allocate
+   * ----------------------
+   * The topic of how this acts on "failure to allocate" is arguably subtler than one might assume, mainly in
+   * that it's not so simple to define what "failure to allocate" means.  We discuss that lower-down; but first
+   * the actual semantic:
+   *
+   * ### What allocate() does on failure to allocate ###
+   * If it is impossible to allocate the `n` bytes: Throws exception `std::bad_alloc`.
+   *
+   * @note This is intended to be consistent across
+   *       SHM-providers like SHM-jemalloc and SHM-classic (classic::Pool_arena::allocate()).
+   *
+   * It is salient that an allocator's (e.g., our #Allocator) `allocate()` may forward to us and is
+   * allowed to "throw exceptions" (no particular exception type is mandated or recommended).  So we are
+   * behaving consistently with letting an allocator's `allocate()` simply forward to this method (of some `*this`)
+   * and let it throw.  There is no need to check for null return.
+   *
+   * ### What is failure to allocate? ###
+   * OK, so what should one do if this allocate() (or, e.g., `construct<T>()` that calls it 1+ times) in fact
+   * throws `bad_alloc`?  Could one simply let the `bad_alloc` (if any) be thrown uncaught?  That depends,
+   * naturally, on what occurred to result in this reported "failure to allocate."
+   *
+   * The meat-and-potatoes facts, presented for concreteness at the risk of describing some impl details, are as
+   * follows:
+   *   - To allocate N bytes, here, is to ask jemalloc (a-la `malloc()`) to allocate an N-buffer in a particular
+   *     segregated *jemalloc-arena* A.  Basically the `malloc()`-like API returns null <=> failure to allocate.
+   *     (We detect this internally and throw as advertised.)
+   *   - This arena A does not have any total size that can be exceeded (cf.: classic::Pool_arena).  As with
+   *     vanilla `malloc()`, extents (vaddr areas) -- mapped (potentially sparsely) to actual RAM blocks -- are used
+   *     in some fashion, and when none is sufficient for a given allocate-request, a new extent (vaddr area) is
+   *     created by jemalloc corresponding to more RAM blocks (potentially sparsely).
+   *   - We internally configure arena A so as to run some tricky Flow-IPC (SHM-jemalloc) code, via *extent hooks*,
+   *     so when a new extent is needed (prev bullet) we'll map it to SHM as opposed to regular heap (+ more
+   *     activities).  If such a hook is invoked, it executes synchronously within allocate() here.
+   *
+   * That's the happy path; so how can it fail?  Black-boxily speaking:
+   *   - jemalloc code itself might fail in some way.
+   *     - The known (non-mainstream) causes are environmental limits -- chiefly the per-process open-file-descriptor
+   *       limit, as SHM-jemalloc keeps one descriptor open per SHM-pool -- and an absurdly large N.
+   *   - Flow-IPC code itself might fail in some way (and would, potentially, log WARNING(s) as to what that was).
+   *
+   * That said:
+   *   - *We do not know of a mainstream situation where this happens*.  Unlike with `Pool_arena` in SHM-classic
+   *     there is no arena max-size.  Moreover, at least in Linux, running out of SHM (<=> tmpfs max-use limit reached)
+   *     in a sparse setup like ours means a brutal, unavoidable crash (SIGBUS); so jemalloc-allocate is unlikely
+   *     to be the thing that fails.  Instead a subsequent touching of an in-extent page, possibly long after
+   *     allocate() returns, is typically that thing: Something tries to write into a page's area (4Ki bytes wide
+   *     usually); the page is not backed by RAM yet; OS tried to commit page; cannot (limit reached) => crash.
+   *   - *We internally nevertheless treat it, defensively, as possible*.  So we throw `bad_alloc` as noted.
+   *   - Informally: Because of the first bullet above, we suggest that user code *may* treat the possibility
+   *     of allocate() (or construct(), or other container-driven allocations) failing as being only as serious
+   *     as a heap-alloc failure (e.g., when heap `new` throws `bad_alloc`).  That is often defensibly taken to mean,
+   *     "it's environmental/an act of god; just let it throw; don't catch it."
+   *     - However: If writing code that is generic irrespectively of which SHM-arena/SHM-provider is acting, then
+   *       potentially take the opposite approach.  E.g., classic::Pool_arena::allocate() and `construct<T>()`
+   *       definitely can fail with `bad_alloc`, and often one wants to be defensive/ready for this.  So generic
+   *       code might want to treat the Ipc_arena counterpart APIs defensively as well.
+   *
+   * Perf notes
+   * ----------
    * A jemalloc thread cache will be used with this allocation automatically.  See deallocate() also.
    * (As of this writing preprocessor symbol `IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE` can be defined
    * to forego tcaching entirely.)
    *
    * @param size
    *        The allocation size, which must be greater than zero.
-   * @return Upon success, a non-null pointer to the base address of the allocation; otherwise, nullptr.
+   * @return A non-null pointer to the base address of the allocation.
    */
-  void* allocate(std::size_t size) override;
+  void* allocate(size_t size) override;
 
   /**
    * Undoes allocate(): deallocates a previously allocated, by this arena, buffer in SHM.
@@ -759,7 +885,7 @@ protected:
    *
    * @return Upon success, the created memory pool; otherwise, nullptr.
    */
-  void* create_shm_pool(void* address, std::size_t size, std::size_t alignment, bool* zero,
+  void* create_shm_pool(void* address, size_t size, size_t alignment, bool* zero,
                         bool* commit, arena_id_t arena_id);
 
   /**
@@ -775,7 +901,7 @@ protected:
    *        See above.
    * @return See above.
    */
-  bool optional_remove_shm_pool(void* address, std::size_t size, bool committed, arena_id_t arena_id);
+  bool optional_remove_shm_pool(void* address, size_t size, bool committed, arena_id_t arena_id);
 
   /**
    * jemalloc extent hook impl.  See jemalloc docs for in/out semantics.
@@ -790,7 +916,7 @@ protected:
    *        See above.
    * @return See above.
    */
-  bool remove_shm_pool(void* address, std::size_t size, bool committed, arena_id_t arena_id);
+  bool remove_shm_pool(void* address, size_t size, bool committed, arena_id_t arena_id);
 
   /**
    * jemalloc extent hook impl.  See jemalloc docs for in/out semantics.
@@ -807,7 +933,7 @@ protected:
    *        See above.
    * @return See above.
    */
-  bool commit_memory_pages(void* address, std::size_t size, std::size_t offset, std::size_t length,
+  bool commit_memory_pages(void* address, size_t size, size_t offset, size_t length,
                            arena_id_t arena_id);
 
   /**
@@ -825,8 +951,8 @@ protected:
    *        See above.
    * @return See above.
    */
-  bool decommit_memory_pages(void* address, std::size_t size, std::size_t offset,
-                             std::size_t length, arena_id_t arena_id);
+  bool decommit_memory_pages(void* address, size_t size, size_t offset,
+                             size_t length, arena_id_t arena_id);
 
   /**
    * jemalloc extent hook impl.  See jemalloc docs for in/out semantics.
@@ -843,7 +969,7 @@ protected:
    *        See above.
    * @return See above.
    */
-  bool purge_forced_memory_pages(void* address, std::size_t size, std::size_t offset, std::size_t length,
+  bool purge_forced_memory_pages(void* address, size_t size, size_t offset, size_t length,
                                  arena_id_t arena_id);
 
   /**
@@ -883,8 +1009,8 @@ protected:
    *        See above.
    * @return See above.
    */
-  bool merge_memory_pages(const void* address_a, std::size_t size_a,
-                          const void* address_b, std::size_t size_b,
+  bool merge_memory_pages(const void* address_a, size_t size_a,
+                          const void* address_b, size_t size_b,
                           bool committed, arena_id_t arena_id);
 
 
@@ -949,6 +1075,16 @@ private:
   void start_impl(unsigned int n_arenas);
 
   /**
+   * Helper core of allocate() that, in reaction to jemalloc-allocate failure, simply returns null (no futher action
+   * such as logging or throwing).  It's just tactically convenient to split it up like that.
+   *
+   * @param size
+   *        See allocate().
+   * @return Null if allocate() shall throw; else non-null (<=> success).
+   */
+  void* allocate_impl(size_t size);
+
+  /**
    * Extent hook impl helper for certain extent hooks: given a jemalloc extent at `address` of `size`
    * bytes, and a sub-range within it at `offset` bytes extending for `length` bytes, locates the SHM pool
    * in #m_shm_pools containing the extent and computes the offset of the sub-range relative to the pool's base address.
@@ -974,9 +1110,9 @@ private:
    *        (i.e., offset-within-pool-of(`address`) + `offset`).
    * @return `true` on success; `false` if validation fails.
    */
-  bool compute_pool_and_offset(void* address, std::size_t size, std::size_t offset,
-                               std::size_t length, util::String_view use_case,
-                               std::shared_ptr<Shm_pool>& pool, std::size_t& pool_offset) const;
+  bool compute_pool_and_offset(void* address, size_t size, size_t offset,
+                               size_t length, util::String_view use_case,
+                               std::shared_ptr<Shm_pool>& pool, size_t& pool_offset) const;
 
   /**
    * jemalloc extent hook impl: forwards to similarly named member function of the proper `this` (which
@@ -999,7 +1135,7 @@ private:
    * @return See above.
    */
   static void* create_shm_pool_handler(extent_hooks_t* extent_hooks, void* address,
-                                       std::size_t size, std::size_t alignment,
+                                       size_t size, size_t alignment,
                                        bool* zero, bool* commit, unsigned arena_id);
 
   /**
@@ -1019,7 +1155,7 @@ private:
    * @return See above.
    */
   static bool optional_remove_shm_pool_handler(extent_hooks_t* extent_hooks, void* address,
-                                               std::size_t size, bool committed, unsigned arena_id);
+                                               size_t size, bool committed, unsigned arena_id);
 
   /**
    * jemalloc extent hook impl: forwards to similarly named member function of the proper `this` (which
@@ -1037,7 +1173,7 @@ private:
    *        See above.
    */
   static void remove_shm_pool_handler(extent_hooks_t* extent_hooks, void* address,
-                                      std::size_t size, bool committed, unsigned arena_id);
+                                      size_t size, bool committed, unsigned arena_id);
 
   /**
    * jemalloc extent hook impl: forwards to similarly named member function of the proper `this` (which
@@ -1058,8 +1194,8 @@ private:
    * @return See above.
    */
   static bool commit_memory_pages_handler(extent_hooks_t* extent_hooks, void* address,
-                                          std::size_t size, std::size_t offset,
-                                          std::size_t length, unsigned arena_id);
+                                          size_t size, size_t offset,
+                                          size_t length, unsigned arena_id);
 
   /**
    * jemalloc extent hook impl: forwards to similarly named member function of the proper `this` (which
@@ -1080,8 +1216,8 @@ private:
    * @return See above.
    */
   static bool decommit_memory_pages_handler(extent_hooks_t* extent_hooks, void* address,
-                                            std::size_t size, std::size_t offset,
-                                            std::size_t length, unsigned arena_id);
+                                            size_t size, size_t offset,
+                                            size_t length, unsigned arena_id);
 
   /**
    * jemalloc extent hook impl: forwards to similarly named member function of the proper `this` (which
@@ -1102,8 +1238,8 @@ private:
    * @return See above.
    */
   static bool purge_forced_memory_pages_handler(extent_hooks_t* extent_hooks, void* address,
-                                                std::size_t size, std::size_t offset,
-                                                std::size_t length, unsigned arena_id);
+                                                size_t size, size_t offset,
+                                                size_t length, unsigned arena_id);
 
   /**
    * jemalloc extent hook impl: forwards to similarly named member function of the proper `this` (which
@@ -1126,7 +1262,7 @@ private:
    * @return See above.
    */
   static bool split_memory_pages_handler(extent_hooks_t* extent_hooks, void* address,
-                                         std::size_t size, std::size_t size_a, std::size_t size_b,
+                                         size_t size, size_t size_a, size_t size_b,
                                          bool committed, unsigned arena_id);
 
   /**
@@ -1150,8 +1286,8 @@ private:
    * @return See above.
    */
   static bool merge_memory_pages_handler(extent_hooks_t* extent_hooks,
-                                         void* address_a, std::size_t size_a,
-                                         void* address_b, std::size_t size_b,
+                                         void* address_a, size_t size_a,
+                                         void* address_b, size_t size_b,
                                          bool committed, unsigned arena_id);
 
   /**
@@ -1317,19 +1453,56 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
 {
   using arena_lend::detail::Thread_lcl_obj_db_admin;
   using arena_lend::detail::use_ct_idx_t;
+  using util::op_with_possible_bipc_exception;
   using Disposer = arena_lend::detail::Owner_obj_disposer_and_mdt<Ipc_arena>;
+  using Bipc_bad_alloc = ::ipc::bipc::bad_alloc;
+  using Std_bad_alloc = std::bad_alloc;
   // using flow::util::construct_at; // C++20 => can conflict with incidentally included std:: counterpart.
   constexpr bool HAS_TRIVIAL_DTOR = std::is_trivially_destructible_v<T>;
 
   Thread_lcl_obj_db_admin<Ipc_arena>::this_thread_piggy_scan(); // Opportunistic!
 
+  // No space => throws Std_bad_alloc as advertised.  Nothing else to clean up yet; let it rip.
   void* const addr = allocate(sizeof(T));
 
-  pool_id_t lend_tracker_pool_id;
-  use_ct_idx_t use_ct_idx;
-  Thread_lcl_obj_db_admin<Ipc_arena>::this_thread_obj_db()
-    ->constructing_obj(&lend_tracker_pool_id, &use_ct_idx, this, &m_pool_stats.m_obj_db_aux_pool, addr,
-                       [](void* addr, Ipc_arena* arena)
+  /* Construct the T itself.  As advertised try to help out by setting selves as the current arena.
+   * As in the disposer below we too try to get a perf boost by not unnecessarily using an arena-activator.
+   * After all it involves a thread-local variable assignment at the start and then another at the end plus 1-2
+   * more to remember the previous value; it's quick but not nothing.  It's trickier than the dtor situation
+   * below though.  Ideally we'd determine something like "T would not use an allocator to allocate something on its
+   * behalf."  There are some ideas, like maybe checking for the presence of tell-tale STL stuff... but it's tricky and
+   * might be imperfect and thus arguably not worth it (@todo perhaps revisit).  However: using
+   * is_trivially_destructible_v<T> here too is safe, even though it likely won't catch all the cases -- but
+   * no false negatives, so it's safe.  Basically if it's trivially destructible, it can never allocate things
+   * on its behalf in any sane way; so that fits the bill. */
+  const auto obj = static_cast<T*>(addr);
+  try
+  {
+    if constexpr(HAS_TRIVIAL_DTOR)
+    {
+      flow::util::construct_at(obj, std::forward<Ctor_args>(ctor_args)...);
+    }
+    else
+    {
+      Activator ctx{this};
+      flow::util::construct_at(obj, std::forward<Ctor_args>(ctor_args)...);
+    }
+  }
+  catch (...)
+  {
+    /* T ctor threw: before letting it propagate might as well undo what preceded it above (same steps as in
+     * disposer_func() below, minus ~T(), as ctor never completed) -- so as not to leak the buffer in SHM. */
+    deallocate(addr);
+    throw;
+  }
+
+  /* Lastly: Set up the (cross-process!!) ref-counted garbage-collection machinery.  A global
+   * ->constructing_obj() + a special shared_ptr disposer (see below) will do it.
+   * disposer_func() = the steps eventually executed at GC-time.  Additionally on (yet another) rare
+   * exception below -- that is while merely setting up GC in here -- we may want to give up and therefore
+   * "GC" it immediately, before/without the user ever accessing it.  Hence this local function (no captures): */
+
+  const auto disposer_func = [](void* addr, Ipc_arena* arena)
   {
     if constexpr(!HAS_TRIVIAL_DTOR)
     {
@@ -1348,35 +1521,80 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
     // else { Trivially destructible => no need to... you get the point. }
 
     arena->deallocate(addr);
-  });
+  }; // auto disposer_func =
 
-  /* Here too we try to get a perf boost by not unnecessarily using an arena-activator.  After all it involves
-   * a thread-local variable assignment at the start and then another at the end plus 1-2 more to remember
-   * the previous value; it's quick but not nothing.  It's trickier than the dtor situation above though.
-   * Ideally we'd determine something like "T would not use an allocator to allocate something on its behalf."
-   * There are some ideas, like maybe checking for the presence of tell-tale STL stuff... but it's tricky and
-   * might be imperfect and thus arguably not worth it (@todo perhaps revisit).  However: using
-   * is_trivially_destructible_v<T> here too is safe, even though it likely won't catch all the cases -- but
-   * no false negatives, so it's safe.  Basically if it's trivially destructible, it can never allocate things
-   * on its behalf in any sane way; so that fits the bill. */
-  if (!addr) { return nullptr; }
+  /* The steps where we set up the cross-process-ref-counted GC machinery are all inside the innermost try{}
+   * just here.  In there is the happy path, but parts can throw, and if one does, we handle the possibilities
+   * in an intentional best-effort way (justified lower down).  To wit, assuming something inside the try{} threw:
+   *   -# Catch Bipc_bad_alloc; if that: rethrow as Std_bad_alloc.  If not that:
+   *      -# Catch other `bipc::interprocess_exception`s; if that: op_with_possible_bipc_exception() will
+   *         rethrow as Runtime_error with various goodies.  If not that:
+   *         -# The ??? exception is just thrown, not caught yet.  Intention: let user see the ???.
+   *   -# All paths there lead to some exception X being thrown.
+   *      So we: catch X (as type ...), cleanup (<= attn!), rethrow X. */
 
-  auto* const obj = static_cast<T*>(addr);
-  if constexpr(HAS_TRIVIAL_DTOR)
+  Handle<T> ret;
+  try
   {
-    flow::util::construct_at(obj, std::forward<Ctor_args>(ctor_args)...);
+    op_with_possible_bipc_exception(get_logger(), nullptr, // nullptr => if lambda throws, throw as Runtime_error.
+                                    /* @todo SHM-jemalloc/SHM-arena-lend lacks its own error table; we reuse
+                                     * SHM-classic's code for this corner case.  Arguably it's not worth its own
+                                     * table yet, and the error itself (1) describes the situation accurately and (2)
+                                     * is already cloned among SHM-classic and ipc::transport's error tables.  So
+                                     * eventually, especially if/when there are more of SHM-jemalloc's own errors
+                                     * emitted elsewhere, this should be cloned in its (currently non-existent)
+                                     * error-table and used here (arena_lend:: or arena_lend::jemalloc:: instead of
+                                     * classic::). / Note that in reality, to the extent that a bipc:: exception
+                                     * *is* thrown in here, it'll almost certainly hold a system error-code, so
+                                     * this MISC_ catch-all guy won't even be used. */ //XXXon 2nd thought, classic:: has *only* this code. So we should do the same after all, getting rid of this @todo.
+                                    ipc::shm::classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR,
+                                    "jemalloc::Ipc_arena::construct():->constructing_obj():likely-aux-pool-creation",
+                                    [&]()
+    {
+      try
+      {
+        pool_id_t lend_tracker_pool_id;
+        use_ct_idx_t use_ct_idx;
+        Thread_lcl_obj_db_admin<Ipc_arena>::this_thread_obj_db()
+          ->constructing_obj(&lend_tracker_pool_id, &use_ct_idx, this, &m_pool_stats.m_obj_db_aux_pool, addr,
+                             disposer_func);
+
+        /* Recommend reading Disposer a/k/a Owner_obj_disposer_and_mdt class doc header; it is quite instructive
+         * about the handful of things going on in this disposer, and how it relates to subsequent local
+         * Shm_session::lend_object() and opposing Shm_session::borrow_object(). */
+        ret = {obj, Disposer{shared_from_this(), lend_tracker_pool_id, use_ct_idx}};
+      }
+      catch (const Bipc_bad_alloc&) // First!  Grab it if it's a Bipc_bad_alloc; throw as Std_bad_alloc.
+      {
+        /* Bipc_bad_alloc would come from our own mem-algo Use_count_registry::allocate() inside Lend_tracker_pool
+         * as managed by this_thread_obj_db()->constructing_obj() et al.  The log message hedges slightly,
+         * but as of this writing it should be what it says it probably is.
+         *
+         * Subtlety: this must be caught first, as a Bipc_bad_alloc is also a bipc::interprocess_exception
+         * which would be caught by our next (implied) `catch` inside op_with_possible_bipc_exception().  We want it
+         * to not be caught by op_...(), once we throw our preferred replacement Std_bad_alloc. */
+        FLOW_LOG_WARNING("In construct<T>() successfully allocated/constructed the T (type "
+                         "[" << typeid(T).name() << "]), but the cross-process-GC hookup step then "
+                         "threw bipc::bad_alloc (there may be a WARNING with details ahead of this message); "
+                         "throwing as std::bad_alloc.  (Probably this thread's per-arena (collection/arena ID "
+                         "[" << get_id() << "]) aux-SHM-pool ran out of space which would indicate a massive "
+                         "number of live construct()ed objects; WARNING above may confirm.)");
+
+        throw Std_bad_alloc{};
+      }
+    }); /* op_with_possible_bipc_exception():
+         * Second!  Grab it if it's another bipc::interprocess_exception (i.e., not bad_alloc) from
+         * ->constructing_obj(); op_...() instead WARNs and throws Runtime_error with various goodies. */
+    // Third! Just let it through if it's something else.
   }
-  else
+  catch (...) // If something originally threw, then either it or a replacement exception reaches here.
   {
-    Activator ctx{this};
-    flow::util::construct_at(obj, std::forward<Ctor_args>(ctor_args)...);
+    disposer_func(addr, this);
+    throw;
   }
 
-  /* Recommend reading Disposer a/k/a Owner_obj_disposer_and_mdt class doc header; it is quite instructive
-   * about the handful of things going on in this disposer, and how it relates to subsequent local
-   * Shm_session::lend_object() and opposing Shm_session::borrow_object(). */
-  return Handle<T>{obj,
-                   Disposer{shared_from_this(), lend_tracker_pool_id, use_ct_idx}};
+  assert(ret && "`ret` mandatorily set within inner try{}; outer try{} itself rethrows.");
+  return ret;
 } // Ipc_arena::construct()
 
 } // namespace ipc::shm::arena_lend::jemalloc

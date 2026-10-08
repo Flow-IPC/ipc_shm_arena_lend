@@ -41,6 +41,7 @@
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string.hpp>
 #include <string>
+#include <new>
 
 namespace ipc::shm::arena_lend::jemalloc
 {
@@ -576,6 +577,36 @@ void Ipc_arena::start_impl(unsigned int n_arenas)
 } // Ipc_arena::start_impl()
 
 void* Ipc_arena::allocate(size_t size)
+{
+  using std::bad_alloc;
+
+  const auto ret = allocate_impl(size);
+#if IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE // @todo or just use bool(<the macro>)? Well, whatever; this does work.
+  constexpr bool TCACHE_ON = false;
+#else
+  constexpr bool TCACHE_ON = true;
+#endif
+
+  if (!ret)
+  {
+    /* We could behave consistently with classic::Pool_arena::allocate() in avoiding a WARNING here, but
+     * jemalloc -- or our extent hook that does SHM-pool-opening/mapping, say -- failing to at some allocate
+     * step (~impossible to know which one) is more exceptional than Pool_arena running out of user-configured,
+     * potentially quite tight, space.  Users would likely want to know about it in the logs (assuming the
+     * environment isn't so messed up that that too would fail). */
+    FLOW_LOG_WARNING("Tried to allocate size [" << size << "], arena [" << m_arena0 << "], tcache on? = "
+                     "[" << TCACHE_ON << "]; but it failed (jemalloc-allocate function returned null); "
+                     "preceding logs may or may not provide more detail.  Note both jemalloc-proper code and "
+                     "(potentially) Flow-IPC code, via extent hooks, are executed as part of jemalloc-allocate "
+                     "function.  Throwing std::bad_alloc.");
+    throw bad_alloc{};
+  }
+  // else
+
+  return ret;
+}
+
+void* Ipc_arena::allocate_impl(size_t size)
 {
   assert(!m_arenas.empty() && "start() must have been called by now.");
   const auto& arena_id = m_arena0;

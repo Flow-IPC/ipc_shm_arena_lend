@@ -40,7 +40,7 @@ namespace ipc::shm::arena_lend::jemalloc
 
 void* Memory_manager::allocate(size_t size) const
 {
-  return IPC_SHM_ARENA_LEND_JEMALLOC_API(malloc)(size);
+  return IPC_SHM_ARENA_LEND_JEMALLOC_API(malloc)(size); // It returns null <=> we do (as advertised).
 }
 
 void* Memory_manager::allocate(size_t size, arena_id_t arena_id) const
@@ -56,6 +56,7 @@ void* Memory_manager::allocate(size_t size, arena_id_t arena_id, tcache_id_t thr
 void* Memory_manager::allocate_helper(size_t size, arena_id_t arena_id, int thread_cache_flags) const
 {
   assert(size > 0);
+  // It returns null <=> we do (as advertised).
   return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallocx)(size, (MALLOCX_ARENA(arena_id) | thread_cache_flags));
 }
 

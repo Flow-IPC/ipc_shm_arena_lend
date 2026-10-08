@@ -199,6 +199,9 @@ public:
    * Allocates uninitialized memory designated for the default memory areas, which are also known as arenas,
    * without the use of a thread cache.
    *
+   * @note If used in an STL-compliant allocator, proper behavior on null return from this is to throw an exception
+   *       (such as `std::bad_alloc`).
+   *
    * @param size
    *        The allocation size, which must be greater than zero.
    * @return Upon success, a non-null pointer to the base address of the allocation; otherwise, nullptr.
@@ -208,6 +211,9 @@ public:
   /**
    * Allocates uninitialized memory designated in a segregated memory area, which is also known as an arena,
    * without the use of a thread cache.
+   *
+   * @note If used in an STL-compliant allocator, proper behavior on null return from this is to throw an exception
+   *       (such as `std::bad_alloc`).
    *
    * @param size
    *        The allocation size, which must be greater than zero.
@@ -219,6 +225,9 @@ public:
 
   /**
    * Allocates uninitialized memory designated in a segregated memory area, which is also known as an arena.
+   *
+   * @note If used in an STL-compliant allocator, proper behavior on null return from this is to throw an exception
+   *       (such as `std::bad_alloc`).
    *
    * @param size
    *        The allocation size, which must be greater than zero.
