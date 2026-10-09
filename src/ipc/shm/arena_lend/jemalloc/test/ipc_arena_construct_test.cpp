@@ -84,7 +84,10 @@ Logger* const g_logger = &g_logger_obj; // Flip for debugging.
 /* A request size jemalloc rejects outright: beyond its largest size class (as of jemalloc-5.3.0 on 64-bit:
  * 2^62 + 3 * 2^60 = 7 * 2^60), yet within what a C++ object type may have (at most PTRDIFF_MAX ~= 2^63); so it is
  * usable for allocate() and construct<T>() alike.  (Merely huge requests -- e.g., 1Ti -- would succeed, as pools are
- * sparse; so this is essentially the one allocation failure triggerable in a test.)  Here: 7.5 * 2^60. */
+ * sparse; so this is essentially the one allocation failure triggerable in a test.)  Here: 7.5 * 2^60.
+ *
+ * Some compilers may not like this, though, and for those this test has to be skipped; see inside the test
+ * for details. */
 constexpr size_t ABSURD_SZ = size_t(15) << 59;
 
 // An object type whose ctor throws on request.  Sized to be a large allocation (not served by jemalloc thread-cache).
@@ -130,11 +133,14 @@ Obj_counts obj_counts(Ipc_arena* arena)
 
 } // namespace (anon)
 
-/* An absurdly large request: allocate() and construct<T>() throw std::bad_alloc; jemalloc rejects it outright, so
- * no SHM-pool is even attempted; and the arena works on. */
+/* An absurdly large request: allocate() and (with gcc; see ABSURD_SZ) construct<T>() throw std::bad_alloc;
+ * jemalloc rejects it outright, so no SHM-pool is even attempted; and the arena works on. */
 TEST(Ipc_arena_construct_test, Bad_alloc)
 {
+  // gcc, at least, is OK with this ABSURD_SZ; clang says array size "too big." So gotta skip it.
+#ifndef __clang__ // See ABSURD_SZ.
   using Absurd = std::array<uint8_t, ABSURD_SZ>;
+#endif
 
   const auto arena = make_arena();
   Single_thread_task_loop loop{g_logger, "ictBadAlc"};
@@ -146,7 +152,9 @@ TEST(Ipc_arena_construct_test, Bad_alloc)
     const auto counts_0 = obj_counts(arena.get());
 
     EXPECT_THROW(arena->allocate(ABSURD_SZ), std::bad_alloc);
+#ifndef __clang__ // See ABSURD_SZ.
     EXPECT_THROW(arena->construct<Absurd>(), std::bad_alloc);
+#endif
 
     EXPECT_EQ(arena->pool_stats().m_owner_pool.m_pool_create_count.load(), n_pools_0);
     EXPECT_EQ(obj_counts(arena.get()).m_live, counts_0.m_live);
