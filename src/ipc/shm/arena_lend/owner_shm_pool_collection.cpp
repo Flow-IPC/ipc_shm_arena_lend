@@ -99,7 +99,7 @@ Owner_shm_pool_collection::~Owner_shm_pool_collection()
   }
 }
 
-void Owner_shm_pool_collection::deallocate(void* object)
+void Owner_shm_pool_collection::deallocate(void* object) noexcept
 {
   m_memory_manager->deallocate(object);
 }

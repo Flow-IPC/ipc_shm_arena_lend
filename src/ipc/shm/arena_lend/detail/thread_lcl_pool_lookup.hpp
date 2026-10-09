@@ -70,7 +70,7 @@ struct Pool_by_base
  * Stat-updaters: call stats_mutable() to update same.
  *
  * @tparam Shm_arena_t
- *         A thing that discriminates between SHM providers; by convention the arena type (such as jemalloc::Ipc_arena).
+ *         A thing that discriminates between SHM-providers; by convention the arena type (such as jemalloc::Ipc_arena).
  *         Its API is not accessed.
  * @tparam OWNER_ELSE_BORROWER
  *         `true` if tracking owner-side activity; #Stats is stat::Owner_pool_lookup_global_stats.

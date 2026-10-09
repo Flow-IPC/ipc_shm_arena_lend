@@ -25,6 +25,7 @@
 #include "ipc/shm/arena_lend/test/test_owner_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/memory_manager.hpp"
 #include <sys/mman.h>
+#include <new>
 
 using std::shared_ptr;
 using std::size_t;
@@ -61,7 +62,12 @@ Test_owner_shm_pool_collection::~Test_owner_shm_pool_collection()
 
 void* Test_owner_shm_pool_collection::allocate(size_t size)
 {
-  return get_memory_manager()->allocate(size);
+  const auto ret = get_memory_manager()->allocate(size);
+  if (!ret)
+  {
+    throw std::bad_alloc{}; // As required by Owner_shm_pool_collection::allocate() contract.
+  }
+  return ret;
 }
 
 } // namespace ipc::shm::arena_lend::test

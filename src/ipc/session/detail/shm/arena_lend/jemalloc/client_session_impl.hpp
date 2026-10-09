@@ -395,7 +395,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
         {
           FLOW_LOG_WARNING("Client session [" << *this << "]: Session-connect request: Vanilla async-connect "
                            "succeeded, but opposing server failed to create the resources (pre-connected native handle "
-                           "pair for local stream socket connection) necessary for arena-lending SHM provider's "
+                           "pair for local stream socket connection) necessary for arena-lending SHM-provider's "
                            "internal IPC needs.  Will go back to NULL state and report to user via "
                            "on-async-connect handler.");
           Base::Base::complete_async_connect_after_canceling_peer_state
@@ -414,7 +414,7 @@ bool CLASS_JEM_CLI_SESSION_IMPL::async_connect
 
         FLOW_LOG_INFO("Client session [" << *this << "]: Session-connect request: Vanilla async-connect succeeded, "
                       "and opposing server sent a resource (pre-connected native handle for "
-                      "local stream socket connection) necessary for arena-lending SHM provider's internal "
+                      "local stream socket connection) necessary for arena-lending SHM-provider's internal "
                       "IPC needs.  Will send ack and complete local SHM setup synchronously.");
 
         // Don't forget to ack it.

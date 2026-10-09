@@ -40,6 +40,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <iostream>
+#include <new>
 #include <unordered_set>
 #include <random>
 
@@ -156,11 +157,15 @@ public:
    *
    * @param size The amount of memory to allocate.
    *
-   * @return The resulting allocation upon success, or nullptr, upon failure.
+   * @return The resulting allocation upon success (failure throws).
    */
   virtual void* allocate(size_t size) override
   {
     m_last_address_allocated = get_memory_manager()->allocate(size);
+    if (!m_last_address_allocated)
+    {
+      throw std::bad_alloc{}; // As required by Owner_shm_pool_collection::allocate() contract.
+    }
     return m_last_address_allocated;
   }
 
@@ -169,7 +174,7 @@ public:
    *
    * @param address The address to deallocate.
    */
-  virtual void deallocate(void* address) override
+  virtual void deallocate(void* address) noexcept override
   {
     Owner_shm_pool_collection::deallocate(address);
     m_last_address_deallocated = address;
@@ -285,8 +290,7 @@ public:
   template <typename T, typename... Args>
   std::shared_ptr<T> construct(Args&&... args)
   {
-    auto* const addr = allocate(sizeof(T));
-    if (!addr) { return nullptr; }
+    auto* const addr = allocate(sizeof(T)); // Throws on failure.
     auto* const obj = static_cast<T*>(addr);
     flow::util::construct_at(obj, std::forward<Args>(args)...);
     return std::shared_ptr<T>(obj, Object_deleter(this));

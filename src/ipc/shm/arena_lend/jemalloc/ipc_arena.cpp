@@ -581,7 +581,7 @@ void* Ipc_arena::allocate(size_t size)
   using std::bad_alloc;
 
   const auto ret = allocate_impl(size);
-#if IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE // @todo or just use bool(<the macro>)? Well, whatever; this does work.
+#if IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE
   constexpr bool TCACHE_ON = false;
 #else
   constexpr bool TCACHE_ON = true;
@@ -668,7 +668,7 @@ void* Ipc_arena::allocate_impl(size_t size)
 #endif // #elif !IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE
 } // Ipc_arena::allocate()
 
-void Ipc_arena::deallocate(void* address)
+void Ipc_arena::deallocate(void* address) noexcept
 {
   assert(!m_arenas.empty() && "start() must have been called by now.");
   const auto& arena_id = m_arena0;

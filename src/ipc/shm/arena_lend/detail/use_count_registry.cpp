@@ -225,7 +225,7 @@ void* Use_count_registry::allocate(size_t sz)
   return addr;
 } // Use_count_registry::allocate()
 
-void Use_count_registry::deallocate(void* void_addr)
+void Use_count_registry::deallocate(void* void_addr) noexcept
 {
   const auto addr = reinterpret_cast<uint8_t*>(void_addr);
   if (!addr)

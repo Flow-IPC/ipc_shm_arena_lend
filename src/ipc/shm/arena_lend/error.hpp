@@ -27,8 +27,15 @@
 
 #include "ipc/common.hpp"
 
-/// Analogous to ipc::session::error but for errors pertaining to SHM-jemalloc-enabled sessions specifically.
-namespace ipc::session::shm::arena_lend::jemalloc::error
+/**
+ * Namespace containing the ipc::shm::arena_lend module's (including SHM-jemalloc's) extension of boost.system
+ * error conventions, so that that API can return codes/messages from within its own new set of error codes/messages.
+ * Analogous to ipc::shm::classic::error; and essentially all the notes in ipc::transport::error doc header and
+ * otherwise within that namespace apply equally here.  Therefore please:
+ *
+ * @see ipc::transport::error documentation; notes therein (such as to-dos) likely apply here equally.
+ */
+namespace ipc::shm::arena_lend::error
 {
 
 // Types.
@@ -37,51 +44,18 @@ namespace ipc::session::shm::arena_lend::jemalloc::error
 constexpr int S_CODE_LOWEST_INT_VALUE = 1;
 
 /**
- * All possible errors returned (via `Error_code` arguments) by SHM-jemalloc-enabled ipc::session functions/methods
- * *outside of* ipc::transport-triggered errors encountered in the course of session-related work; and possibly
- * system-triggered errors.
+ * All possible errors returned (via `Error_code` arguments) by ipc::shm::arena_lend functions/methods *outside of*
+ * possibly system-triggered errors.
  *
  * All notes from transport::error::Code doc header apply here.
  */
 enum class Code
 {
   /**
-   * Session opening: While setting up the session's locally-managed SHM-arena(s) of an arena-lending SHM-provider,
-   * an error occurred thus hosing the session before it could be opened.  Logs may indicate the reason.
-   *
-   * @internal
-   * @todo If ipc::shm::arena_lend arena-creation API(s) are modified to output an `Error_code` instead of
-   * reporting just success-versus-failure, then ipc::session::error::Code::S_SHM_ARENA_CREATION_FAILED should go
-   * away.
+   * Low-level boost.ipc.shm: boost.interprocess emitted miscellaneous library exception sans a system code;
+   * a WARNING message at throw-time should contain all possible details.
    */
-  S_SHM_ARENA_CREATION_FAILED = S_CODE_LOWEST_INT_VALUE,
-
-  /**
-   * Session opening: While registering the session's locally-managed SHM-arena(s) of an arena-lending SHM-provider
-   * with the lend/borrow engine, an error occurred thus hosing the session before it could be opened.  Logs may
-   * indicate the reason.  Most likely it was an internal-IPC failure when sending arena info.
-   *
-   * @internal
-   * @todo If ipc::shm::arena_lend arena-lending API(s) are modified to output an `Error_code` instead of
-   * reporting just success-versus-failure and reporting problem through an async callback, then
-   * ipc::session::error::Code::S_SHM_ARENA_CREATION_FAILED should go away.  See
-   * shm::arena_lend::jemalloc::init_shm() body for more discussion.
-   */
-  S_SHM_ARENA_LEND_FAILED,
-
-  /**
-   * Session opening: While trying to transmit resource for internal-IPC use in an arena-lending SHM-provider,
-   * server encountered incoming-direction channel error whose exact nature could not be determined at that
-   * exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.
-   */
-  S_SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR,
-
-  /**
-   * Session opening: While setting up resources for internal-IPC use in an arena-lending SHM-provider, it was found
-   * that the session master channel's transport had been hosed by an error whose exact nature was not available at
-   * that exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.
-   */
-  S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR,
+  S_SHM_BIPC_MISC_LIBRARY_ERROR = S_CODE_LOWEST_INT_VALUE,
 
   /// SENTINEL: Not an error.  This Code must never be issued by an error/success-emitting API; I/O use only.
   S_END_SENTINEL
@@ -122,7 +96,7 @@ std::istream& operator>>(std::istream& is, Code& val);
 std::ostream& operator<<(std::ostream& os, Code val);
 // @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
-} // namespace ipc::session::shm::arena_lend::jemalloc::error
+} // namespace ipc::shm::arena_lend::error
 
 namespace boost::system
 {
@@ -137,7 +111,7 @@ namespace boost::system
  * formally) documented in boost.system docs.
  */
 template<>
-struct is_error_code_enum<::ipc::session::shm::arena_lend::jemalloc::error::Code>
+struct is_error_code_enum<::ipc::shm::arena_lend::error::Code>
 {
   /// Means `Code` `enum` values can be used for `Error_code`.
   static const bool value = true;

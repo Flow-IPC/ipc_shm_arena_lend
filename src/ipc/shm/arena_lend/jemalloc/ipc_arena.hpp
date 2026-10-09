@@ -36,7 +36,7 @@
 #include "ipc/shm/arena_lend/detail/obj_disposer.hpp"
 #include "ipc/shm/stl/stateless_allocator.hpp"
 #include "ipc/shm/stl/arena_activator.hpp"
-#include "ipc/shm/classic/error.hpp" // @todo: Yes, this (`classic`? here?) is a bit odd.  See constructing_obj().
+#include "ipc/shm/arena_lend/error.hpp"
 #include "ipc/util/util.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/detail/util.hpp"
@@ -50,6 +50,7 @@
 #include <memory>
 #include <vector>
 #include <new>
+#include <typeinfo>
 
 namespace ipc::shm::arena_lend::jemalloc
 {
@@ -127,7 +128,7 @@ namespace ipc::shm::arena_lend::jemalloc
  *
  * Assuming no crashes occur throughout, here or in borrowing process(es) if any: A `*this` shall only be destroyed
  * when safe (via aforementioned `shared_ptr` techniques).  When this occurs, the Ipc_arena destructor, synchronously
- * or otherwise, shall return/free all resources, including SHM-pool handles (in Linux et al, FDs really), mapped
+ * or otherwise, shall return/free all resources, including SHM-pool handles (in Linux et al, FDs really) and/or mapped
  * (in Linux et al, `mmap()`ed) vaddr areas, and SHM-pool names in the file-system.  Similarly a borrowing
  * `Shm_session` (also destroyed when safe via `shared_ptr` goodness) shall handle its end of such things
  * (read-only SHM-pool handles, mapped areas).  Once all (well, a subset) of this occurs, the relevant SHM-used
@@ -300,16 +301,12 @@ public:
    * thread-locally set the "current" arena to `this`, in-scope of any potentially-[de]allocating ops (e.g.:
    * `vector::resize()`).
    *
-   * @note For ctor `T{...}` call (in construct()) and GC-time dtor `T()` call we automatically activate `*this`
-   *       for purposes of `T` allocator ops.
-   *
    * Integration with shm::stl::Stateless_allocator (#Allocator)
    * -----------------------------------------------------------
-   * This method, bracketing the invocation of the `T` ctor, sets the thread-local
-   * `shm::stl::Arena_activator<Pool_arena>` context to `this`.  Therefore the caller need not do so.
-   * If `T` does not store an STL-compliant structure that uses `Stateless_allocator`, then this is harmless
-   * albeit a small perf hit (also skipped for all trivially-destructible `T`).  If `T` does do so, then it is a
-   * convenience.
+   * This method, bracketing the invocation of the `T` ctor, sets the thread-local #Activator context to `this`.
+   * Therefore the caller need not do so.  If `T` does not store an STL-compliant structure that uses
+   * `Stateless_allocator`, then this is harmless albeit a small perf hit (also skipped for all
+   * trivially-destructible `T`).  If `T` does do so, then it is a convenience.
    *
    * Arguably more importantly: The returned `shared_ptr` is such that when garbage-collection of the created
    * data structure does occur -- which may occur in this process, but via lend_object() and borrow_object()
@@ -343,11 +340,12 @@ public:
    * As with allocate() essentially all problems are of a non-mainstream nature/environmental limits.  There are
    * however a couple that *could* be of specific interest.
    *
-   *   - Internally the GC system can only handle up to a certain large # of live `construct()`ed objects *per thread*.
-   *     As of this writing it is about 1 million.  This is not a problem for most applications, but it is possible.
+   *   - Internally the GC system can only handle up to a certain large # of live `construct()`ed objects *per thread*
+   *     (per arena).  As of this writing it is about 1 million.  This is not a problem for most applications, but it
+   *     is possible.
    *     - Result: throws `std::bad_alloc` after logging a WARNING.  Note this is the same result,
    *       exception-type-wise, as allocate() failing.  Both do indicate, usually, some kind of capacity problem.
-   *   - Internally the GC system will need to create a (typically small, in terms of actual RAM use) auxilliary
+   *   - Internally the GC system will need to create a (typically small, in terms of actual RAM use) auxiliary
    *     named SHM-pool.  This can fail, though again it is unlikely in a setup that is basically working.
    *     - Result: throws `flow::error::Runtime_error` (itself an `std::runtime_error`) after logging a warning.
    *       An `Error_code` and an error string are available through the exception object.
@@ -470,7 +468,7 @@ public:
    * @param address
    *        The address to be deallocated, which must be non-null.
    */
-  void deallocate(void* address) override;
+  void deallocate(void* address) noexcept override;
 
   /**
    * Synchronously garbage-collects, in the calling thread, any objects `x = A.construct()`ed by this thread, for *all*
@@ -1075,7 +1073,7 @@ private:
   void start_impl(unsigned int n_arenas);
 
   /**
-   * Helper core of allocate() that, in reaction to jemalloc-allocate failure, simply returns null (no futher action
+   * Helper core of allocate() that, in reaction to jemalloc-allocate failure, simply returns null (no further action
    * such as logging or throwing).  It's just tactically convenient to split it up like that.
    *
    * @param size
@@ -1491,18 +1489,18 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
   catch (...)
   {
     /* T ctor threw: before letting it propagate might as well undo what preceded it above (same steps as in
-     * disposer_func() below, minus ~T(), as ctor never completed) -- so as not to leak the buffer in SHM. */
+     * gc_func() below, minus ~T(), as ctor never completed) -- so as not to leak the buffer in SHM. */
     deallocate(addr);
     throw;
   }
 
   /* Lastly: Set up the (cross-process!!) ref-counted garbage-collection machinery.  A global
    * ->constructing_obj() + a special shared_ptr disposer (see below) will do it.
-   * disposer_func() = the steps eventually executed at GC-time.  Additionally on (yet another) rare
+   * gc_func() = the steps eventually executed at GC-time.  Additionally on (yet another) rare
    * exception below -- that is while merely setting up GC in here -- we may want to give up and therefore
    * "GC" it immediately, before/without the user ever accessing it.  Hence this local function (no captures): */
 
-  const auto disposer_func = [](void* addr, Ipc_arena* arena)
+  const auto gc_func = [](void* addr, Ipc_arena* arena)
   {
     if constexpr(!HAS_TRIVIAL_DTOR)
     {
@@ -1521,48 +1519,32 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
     // else { Trivially destructible => no need to... you get the point. }
 
     arena->deallocate(addr);
-  }; // auto disposer_func =
+  }; // auto gc_func =
 
   /* The steps where we set up the cross-process-ref-counted GC machinery are all inside the innermost try{}
    * just here.  In there is the happy path, but parts can throw, and if one does, we handle the possibilities
-   * in an intentional best-effort way (justified lower down).  To wit, assuming something inside the try{} threw:
+   * in an intentional best-effort way (keep reading).  To wit, assuming something inside the try{} threw:
    *   -# Catch Bipc_bad_alloc; if that: rethrow as Std_bad_alloc.  If not that:
    *      -# Catch other `bipc::interprocess_exception`s; if that: op_with_possible_bipc_exception() will
    *         rethrow as Runtime_error with various goodies.  If not that:
-   *         -# The ??? exception is just thrown, not caught yet.  Intention: let user see the ???.
+   *         -# <whatever other exception E> is just thrown, not caught yet.  Intention: let user see E.
    *   -# All paths there lead to some exception X being thrown.
    *      So we: catch X (as type ...), cleanup (<= attn!), rethrow X. */
 
-  Handle<T> ret;
+  pool_id_t lend_tracker_pool_id;
+  use_ct_idx_t use_ct_idx;
   try
   {
     op_with_possible_bipc_exception(get_logger(), nullptr, // nullptr => if lambda throws, throw as Runtime_error.
-                                    /* @todo SHM-jemalloc/SHM-arena-lend lacks its own error table; we reuse
-                                     * SHM-classic's code for this corner case.  Arguably it's not worth its own
-                                     * table yet, and the error itself (1) describes the situation accurately and (2)
-                                     * is already cloned among SHM-classic and ipc::transport's error tables.  So
-                                     * eventually, especially if/when there are more of SHM-jemalloc's own errors
-                                     * emitted elsewhere, this should be cloned in its (currently non-existent)
-                                     * error-table and used here (arena_lend:: or arena_lend::jemalloc:: instead of
-                                     * classic::). / Note that in reality, to the extent that a bipc:: exception
-                                     * *is* thrown in here, it'll almost certainly hold a system error-code, so
-                                     * this MISC_ catch-all guy won't even be used. */ //XXXon 2nd thought, classic:: has *only* this code. So we should do the same after all, getting rid of this @todo.
-                                    ipc::shm::classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR,
+                                    arena_lend::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR,
                                     "jemalloc::Ipc_arena::construct():->constructing_obj():likely-aux-pool-creation",
                                     [&]()
     {
       try
       {
-        pool_id_t lend_tracker_pool_id;
-        use_ct_idx_t use_ct_idx;
         Thread_lcl_obj_db_admin<Ipc_arena>::this_thread_obj_db()
           ->constructing_obj(&lend_tracker_pool_id, &use_ct_idx, this, &m_pool_stats.m_obj_db_aux_pool, addr,
-                             disposer_func);
-
-        /* Recommend reading Disposer a/k/a Owner_obj_disposer_and_mdt class doc header; it is quite instructive
-         * about the handful of things going on in this disposer, and how it relates to subsequent local
-         * Shm_session::lend_object() and opposing Shm_session::borrow_object(). */
-        ret = {obj, Disposer{shared_from_this(), lend_tracker_pool_id, use_ct_idx}};
+                             gc_func);
       }
       catch (const Bipc_bad_alloc&) // First!  Grab it if it's a Bipc_bad_alloc; throw as Std_bad_alloc.
       {
@@ -1589,12 +1571,21 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
   }
   catch (...) // If something originally threw, then either it or a replacement exception reaches here.
   {
-    disposer_func(addr, this);
+    gc_func(addr, this);
     throw;
   }
 
-  assert(ret && "`ret` mandatorily set within inner try{}; outer try{} itself rethrows.");
-  return ret;
+  /* Recommend reading Disposer a/k/a Owner_obj_disposer_and_mdt class doc header; it is quite instructive
+   * about the handful of things going on in this disposer, and how it relates to subsequent local
+   * Shm_session::lend_object() and opposing Shm_session::borrow_object().
+   *
+   * Relatedly: Can this throw?  Answer: Yes but only in shared_ptr's heap work (std::bad_alloc).
+   * Normally Flow-IPC code treats heap-alloc-fail as a throw-our-hands-up situation, but let's in this one case think
+   * about it anyway.  In short: by placing this here instead of inside the inner-try{} above, the right
+   * stuff should happen: shared_ptr should execute our Disposer synchronously -- use-count (currently 1)
+   * reaches 0 in this_thread_obj_db(), so gc_func() executes.  Everything is cleaned up.  std::bad_alloc
+   * then gets propagated out of construct() (which is eminently reasonable on heap-alloc fail). */
+  return Handle<T>{obj, Disposer{shared_from_this(), lend_tracker_pool_id, use_ct_idx}};
 } // Ipc_arena::construct()
 
 } // namespace ipc::shm::arena_lend::jemalloc

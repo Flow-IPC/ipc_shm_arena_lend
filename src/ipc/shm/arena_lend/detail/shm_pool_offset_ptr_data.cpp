@@ -27,7 +27,7 @@
 #include "ipc/session/detail/session_shared_name.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/detail/util.hpp"
-#include "ipc/shm/classic/error.hpp"
+#include "ipc/shm/arena_lend/error.hpp"
 #include <flow/log/simple_ostream_logger.hpp>
 #include <boost/interprocess/permissions.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
@@ -131,7 +131,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
 
     // The bipc SHM manip procedures can throw.  Spoiler alert: if that happens sans remedy => kaput/abort program.
     Error_code err_code;
-    op_with_possible_bipc_exception(&std_logger, &err_code, classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR,
+    op_with_possible_bipc_exception(&std_logger, &err_code, error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR,
                                     "generate_pool_id().init",
                                     [&]()
     {

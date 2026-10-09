@@ -38,7 +38,7 @@ void* Memory_manager::allocate(size_t size) const
   return std::malloc(size);
 }
 
-void Memory_manager::deallocate(void* address) const
+void Memory_manager::deallocate(void* address) const noexcept
 {
   assert(address);
   std::free(address);

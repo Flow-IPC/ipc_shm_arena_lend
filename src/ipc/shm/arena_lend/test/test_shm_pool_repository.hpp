@@ -38,7 +38,7 @@ namespace ipc::shm::arena_lend::test
  * (e.g., for Shm_pool_offset_ptr_data or Shm_pool_offset_ptr) but don't need the real production
  * repositories (Owner_shm_pool_repository, Borrower_shm_pool_collection_repository).
  *
- * Singleton with simple mutex-guarded fwd/rev maps. Not optimized — for tests only.
+ * Singleton with simple mutex-guarded fwd/rev maps. Not optimized -- for tests only.
  * Satisfies the `Repository_type` contract of detail::Shm_pool_offset_ptr_data:
  *   - `static void* to_address(pool_id_t, pool_offset_t)`
  *   - `static void from_address(const void*, pool_id_t&, pool_offset_t&)`

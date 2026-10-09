@@ -27,6 +27,7 @@
 #include "ipc/shm/classic/pool_arena.hpp"
 #include "ipc/common.hpp"
 #include "ipc/test/test_logger.hpp"
+#include "ipc/test/test_shm_util.hpp"
 #include <gtest/gtest.h>
 #include <atomic>
 #include <optional>
@@ -713,6 +714,58 @@ TEST(Lend_tracker_pool_test, Logging_trace_skip_cache)
   log_ctx.set_logger(nullptr);
 } // TEST(Lend_tracker_pool_test, Logging_trace_skip_cache)
 
+/* The lend-tracker SHM-pool is sparse: at creation it has committed (taken RAM for) only a little of its size; and
+ * filling one quantum's worth of use-count slots commits about one quantum's worth of data pages (plus a bit of
+ * bitmap), not more.  Measured directly, via the pool file's tmpfs charge (see ipc::test::shm_pool_committed_sz()).
+ * This holds regardless of how Lend_tracker_pool sets up its SHM-pool internally. */
+TEST(Lend_tracker_pool_test, Sparse)
+{
+  using Ucr = Use_count_registry;
+  using ipc::test::shm_pool_committed_sz;
+
+  constexpr size_t Q = Ucr::S_USE_COUNTS_CAPACITY_QUANTUM_SZ;
+  constexpr size_t PAGE_SZ = Ucr::S_PAGE_SZ;
+  constexpr size_t DATA_SZ = Ucr::S_USE_COUNTS_CAPACITY * Ucr::S_ALLOC_SZ; // The use-counts area at full capacity.
+  constexpr size_t QUANTUM_DATA_SZ = Q * Ucr::S_ALLOC_SZ;
+  // Slack for bitmap pages entering RAM along the way, and the like.
+  constexpr size_t SLACK_SZ = 8 * PAGE_SZ;
+
+  Error_code ec;
+  ipc::shm::classic::Pool_arena::remove_persistent(nullptr, S_TEST_POOL_NAME, &ec);
+
+  {
+    const Log_context_mt log_ctx; // Quiet.
+    const atomic<bool> skip_trace{false};
+    Lend_tracker_pool admin{&log_ctx, &skip_trace, S_TEST_POOL_NAME, util::CREATE_ONLY, nullptr};
+
+    const auto committed_0 = shm_pool_committed_sz(S_TEST_POOL_NAME);
+    EXPECT_LT(committed_0, DATA_SZ / 8) << "Pool should be sparse at creation.";
+
+    // Fill the rest of quantum Q0 (its first few slots hold the pool's metadata header).
+    const auto first_idx = admin.use_count_new();
+    for (size_t idx = first_idx + 1; idx != Q; ++idx)
+    {
+      admin.use_count_new();
+    }
+    const auto committed_1 = shm_pool_committed_sz(S_TEST_POOL_NAME);
+    EXPECT_GE(committed_1, committed_0 + QUANTUM_DATA_SZ - SLACK_SZ);
+    EXPECT_LE(committed_1, committed_0 + QUANTUM_DATA_SZ + SLACK_SZ)
+      << "One quantum's worth of slots should commit about one quantum's worth of RAM.";
+
+    // And the next quantum, likewise.
+    for (size_t idx = 0; idx != Q; ++idx)
+    {
+      admin.use_count_new();
+    }
+    const auto committed_2 = shm_pool_committed_sz(S_TEST_POOL_NAME);
+    EXPECT_GE(committed_2, committed_1 + QUANTUM_DATA_SZ - SLACK_SZ);
+    EXPECT_LE(committed_2, committed_1 + QUANTUM_DATA_SZ + SLACK_SZ);
+    EXPECT_LT(committed_2, DATA_SZ / 4) << "Still far from all of it.";
+  }
+
+  ipc::shm::classic::Pool_arena::remove_persistent(nullptr, S_TEST_POOL_NAME, &ec);
+} // TEST(Lend_tracker_pool_test, Sparse)
+
 /* Tests Use_count_registry (inside Lend_tracker_pool) bitmap wrap-around reclamation and expansion via
  * page-residency measurement.  Structured in phases; each phase verifies page-count behavior (flat vs. climbing).
  *
@@ -726,9 +779,10 @@ TEST(Lend_tracker_pool_test, Logging_trace_skip_cache)
  * in new quantum; cursor saved accordingly.
  *
  * The keys here:
- *   - Pages not in RAM until touched.  If Q0, say, is untouched, and then we allocate the bejesus out of it,
- *     page 1 will go into RAM; then page 2; etc.: the entire Q0 (or Q1, ...) is *not* somehow initialized and
- *     paged-in all at the same time but only as the bitmap-cursor finds slots in it.
+ *   - Pages take RAM only once touched (the pool is sparse; see the Sparse test).  If Q0, say, is untouched, and then
+ *     we allocate the bejesus out of it, page 1 will go into RAM; then page 2; etc.: the entire Q0 (or Q1, ...) is
+ *     *not* somehow initialized and paged-in all at the same time but only as the bitmap-cursor finds slots in it.
+ *     (mincore(), used here, reports a page resident once touched; that is the measure of interest here.)
  *   - Therefore the point of the quanta is *not* to use-up quantized ~large (e.g. 128Ki per quantum as of this
  *     writing: 32Ki slots x 4-byte capacity per slot) amounts of RAM in a stairstep pattern.  Rather it is to
  *     have existing quantum or quanta be used up before taking more RAM for slots: it lowers amount of RAM used

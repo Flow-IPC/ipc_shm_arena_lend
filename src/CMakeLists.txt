@@ -462,6 +462,7 @@ set(SRCS
     ipc/shm/arena_lend/detail/stats.cpp
     ipc/shm/arena_lend/detail/use_count_registry.cpp
     ipc/shm/arena_lend/divisible_shm_pool.cpp
+    ipc/shm/arena_lend/error.cpp
     ipc/shm/arena_lend/jemalloc/detail/stat_substrate.cpp
     ipc/shm/arena_lend/jemalloc/ipc_arena.cpp
     ipc/shm/arena_lend/jemalloc/jemalloc_pages.cpp
@@ -507,6 +508,7 @@ set(HDRS
     ipc/shm/arena_lend/detail/thread_lcl_pool_lookup.hpp
     ipc/shm/arena_lend/detail/use_count_registry.hpp
     ipc/shm/arena_lend/divisible_shm_pool.hpp
+    ipc/shm/arena_lend/error.hpp
     ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp
     ipc/shm/arena_lend/jemalloc/detail/jemalloc_fwd.hpp
     ipc/shm/arena_lend/jemalloc/detail/stat_substrate.hpp

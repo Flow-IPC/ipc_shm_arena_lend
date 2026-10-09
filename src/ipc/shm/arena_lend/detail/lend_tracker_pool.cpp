@@ -27,7 +27,7 @@
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
 #include "ipc/util/util.hpp"
 #include "ipc/util/detail/util.hpp"
-#include "ipc/shm/classic/error.hpp"
+#include "ipc/shm/arena_lend/error.hpp"
 #include "ipc/shm/classic/pool_arena.hpp"
 #include <flow/util/util.hpp>
 #include <limits>
@@ -70,7 +70,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
 
     // m_pool is null.  Try to create+open it; it may throw exception which is allowed by contract.
     util::op_with_possible_bipc_exception
-      (logger_ptr, nullptr, classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR, "Lend_tracker_pool(): Pool()", [&]()
+      (logger_ptr, nullptr, error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR, "Lend_tracker_pool(): Pool()", [&]()
     {
       m_pool.emplace(util::CREATE_ONLY, m_pool_name, POOL_SZ, perms);
       /* The pool is sparse by design (Pool docs): we never commit() it, as that is the whole point (only the
@@ -116,7 +116,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
   {
     // m_pool is null.  Try to open it; it may throw exception which is allowed by contract.
     util::op_with_possible_bipc_exception
-      (get_logger(), nullptr, classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR, "Lend_tracker_pool(): Pool()", [&]()
+      (get_logger(), nullptr, error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR, "Lend_tracker_pool(): Pool()", [&]()
     {
       m_pool.emplace(util::OPEN_ONLY, m_pool_name);
       m_pool->close_shm_object_handle(); // See creator ctor.

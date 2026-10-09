@@ -328,7 +328,7 @@ static void check_cmp(Data a, Data b, bool expect_eq, bool expect_lt, bool expec
   EXPECT_EQ(b.greater_than(a), expect_lt)   << "b.greater_than(a) (should == a.less_than(b))";
 }
 
-/* Exhaustive comparison tests for equals(), less_than(), greater_than() — for the specified Data variation.
+/* Exhaustive comparison tests for equals(), less_than(), greater_than() -- for the specified Data variation.
  * Both Raw_supported_data and Offset_only_data are exercised (different code paths in each). */
 template <typename Data>
 static void comparison_tests();
@@ -369,7 +369,7 @@ void comparison_tests() // Static.
     FLOW_TEST_TRACE(); check_cmp(null, offset, false, true, false); // null < non-null.
   }
 
-  // -- Same pool, same offset (bitwise equal — the fast path in equals()). --
+  // -- Same pool, same offset (bitwise equal -- the fast path in equals()). --
   {
     auto* addr = static_cast<uint8_t*>(S_TEST_POOL_ADDRESS) + S_TEST_OFFSET_1;
     Data a(addr);
@@ -398,7 +398,7 @@ void comparison_tests() // Static.
     FLOW_TEST_TRACE(); check_cmp(in_p2, in_p1, false, false, true);
   }
 
-  // -- Different pools, same offset — tests that equals() correctly returns false (NO_RAW path or CAN_RAW path). --
+  // -- Different pools, same offset -- tests that equals() correctly returns false (NO_RAW path or CAN_RAW path). --
   {
     Data in_p1(static_cast<uint8_t*>(S_TEST_POOL_ADDRESS) + S_TEST_OFFSET_2);
     Data in_p2(static_cast<uint8_t*>(S_TEST_POOL_ADDRESS_2) + S_TEST_OFFSET_2);
@@ -406,7 +406,7 @@ void comparison_tests() // Static.
   }
 
   /* Documented pathological case in equals(): two offset pointers in different pools, one or both with out-of-bounds
-   * offset, such that get() yields the same vaddr — yet equals() returns false (because pool IDs differ and we
+   * offset, such that get() yields the same vaddr -- yet equals() returns false (because pool IDs differ and we
    * skip the expensive to_address() lookup).  Trichotomy breaks here: none of ==, <, > is true.  This is the
    * accepted trade-off for avoiding map lookups in the common case.  Can't use check_cmp() for this one. */
   {
@@ -460,7 +460,7 @@ void comparison_tests() // Static.
       FLOW_TEST_TRACE(); check_cmp(null, raw, false, true, false); // null < raw.
     }
 
-    /* Mixed raw vs offset — this is the code path where the original less_than()/greater_than() bug lived
+    /* Mixed raw vs offset -- this is the code path where the original less_than()/greater_than() bug lived
      * (swapped operands when `!is_raw`).  Exercise both orderings. */
 
     // -- Raw < offset: raw at 0x5000, offset at pool 1 + 0x100 = 0x10100. --

@@ -362,7 +362,7 @@ public:
    * @param addr
    *        See above.
    */
-  void deallocate(void* addr);
+  void deallocate(void* addr) noexcept;
 
   /**
    * Returns the value passed to ctor, when the pool was created.

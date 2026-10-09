@@ -31,7 +31,7 @@ namespace ipc::shm::arena_lend
 {
 
 /**
- * (Arena-lending SHM providers only) When borrowing STL-compliant in-SHM data
+ * (Arena-lending SHM-providers only) When borrowing STL-compliant in-SHM data
  * structures, use this type as the `Arena` template parameter to
  * shm::stl::Stateless_allocator (or equivalent).  It would be unusual for most users to specify this
  * directly (e.g., session::shm::arena_lend::jemalloc::Shm_session::Borrower_arena_allocator or more generically

@@ -51,7 +51,7 @@ public:
    *
    * @param address The address to be deallocated, which must be non-null.
    */
-  virtual void deallocate(void* address) const;
+  virtual void deallocate(void* address) const noexcept;
 }; // class Memory_manager
 
 } // namespace ipc::shm::arena_lend

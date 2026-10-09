@@ -72,7 +72,7 @@ public:
    *
    * @param size The amount of memory to allocate.
    *
-   * @return The resulting allocation upon success, or nullptr, upon failure.
+   * @return The resulting allocation upon success (failure throws).
    */
   virtual void* allocate(std::size_t size) override;
   /**

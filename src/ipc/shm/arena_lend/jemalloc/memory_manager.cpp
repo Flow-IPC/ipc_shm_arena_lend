@@ -60,22 +60,22 @@ void* Memory_manager::allocate_helper(size_t size, arena_id_t arena_id, int thre
   return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallocx)(size, (MALLOCX_ARENA(arena_id) | thread_cache_flags));
 }
 
-void Memory_manager::deallocate(void* address) const
+void Memory_manager::deallocate(void* address) const noexcept
 {
   IPC_SHM_ARENA_LEND_JEMALLOC_API(free)(address);
 }
 
-void Memory_manager::deallocate(void* address, arena_id_t arena_id) const
+void Memory_manager::deallocate(void* address, arena_id_t arena_id) const noexcept
 {
   deallocate_helper(address, arena_id, MALLOCX_TCACHE_NONE);
 }
 
-void Memory_manager::deallocate(void* address, arena_id_t arena_id, tcache_id_t thread_cache_id) const
+void Memory_manager::deallocate(void* address, arena_id_t arena_id, tcache_id_t thread_cache_id) const noexcept
 {
   deallocate_helper(address, arena_id, MALLOCX_TCACHE(thread_cache_id));
 }
 
-void Memory_manager::deallocate_helper(void* address, arena_id_t arena_id, int thread_cache_flags) const
+void Memory_manager::deallocate_helper(void* address, arena_id_t arena_id, int thread_cache_flags) const noexcept
 {
   assert(address);
 

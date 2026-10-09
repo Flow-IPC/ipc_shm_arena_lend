@@ -245,7 +245,7 @@ public:
    * @param address
    *        The address to be deallocated, which must be non-null.
    */
-  void deallocate(void* address) const override;
+  void deallocate(void* address) const noexcept override;
 
   /**
    * Deallocates memory from a specific arena without using a thread cache.  If `address = allocate(..., arena_id, T)`
@@ -258,7 +258,7 @@ public:
    * @param arena_id
    *        The id of the memory area that initially allocated the memory.
    */
-  void deallocate(void* address, arena_id_t arena_id) const;
+  void deallocate(void* address, arena_id_t arena_id) const noexcept;
 
   /**
    * Deallocates memory from a specific arena.
@@ -275,7 +275,7 @@ public:
    *        A thread cache ID created in the calling thread, for `arena_id`.  (It need not be the cache -- nor
    *        its thread the thread -- involved in `address`'s original allocation.)
    */
-  void deallocate(void* address, arena_id_t arena_id, tcache_id_t thread_cache_id) const;
+  void deallocate(void* address, arena_id_t arena_id, tcache_id_t thread_cache_id) const noexcept;
 
   /**
    * Creates a new segregated memory area.  Throws `flow::error::Runtime_error` on jemalloc error.
@@ -396,7 +396,7 @@ private:
    * @param thread_cache_flags
    *        The jemalloc flags specifying a thread cache.
    */
-  void deallocate_helper(void* address, arena_id_t arena_id, int thread_cache_flags) const;
+  void deallocate_helper(void* address, arena_id_t arena_id, int thread_cache_flags) const noexcept;
 }; // class Memory_manager
 
 // Template implementations.

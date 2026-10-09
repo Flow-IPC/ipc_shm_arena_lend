@@ -20,8 +20,8 @@ Still interested?  Then read on.
 `ipc_core`, `flow`).  It provides `ipc::transport::struc::shm::arena_lend`, `ipc::shm::arena_lend`, and
 `ipc::session::shm::arena_lend`.
 
-`ipc_shm_arena_lend` (a/k/a **SHM-jemalloc**) adds an alternative **SHM-jemalloc SHM provider** to the one from
-its immediate dependency, `ipc_shm`, which provides the **SHM-classic SHM provider**.
+`ipc_shm_arena_lend` (a/k/a **SHM-jemalloc**) adds an alternative **SHM-jemalloc SHM-provider** to the one from
+its immediate dependency, `ipc_shm`, which provides the **SHM-classic SHM-provider**.
 For most users, by changing the characters `classic` to `arena_lend::jemalloc` in a couple locations in
 your code, one will simply gain the properties of SHM-jemalloc.
 

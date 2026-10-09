@@ -23,17 +23,17 @@
  * THE SOFTWARE. */
 
 /// @file
-#include "ipc/session/shm/arena_lend/jemalloc/error.hpp"
+#include "ipc/shm/arena_lend/error.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include <flow/util/util.hpp>
 
-namespace ipc::session::shm::arena_lend::jemalloc::error
+namespace ipc::shm::arena_lend::error
 {
 
 // Types.
 
 /**
- * The boost.system category for errors returned by the ipc::session::shm::arena_lend::jemalloc module.  Analogous to
+ * The boost.system category for errors returned by the ipc::shm::arena_lend module.  Analogous to
  * transport::error::Category.  All notes therein apply.
  */
 class Category :
@@ -95,7 +95,7 @@ Category::Category() = default;
 
 const char* Category::name() const noexcept // Virtual.
 {
-  return "ipc/session/shm/arena_lend/jemalloc";
+  return "ipc/shm/arena_lend";
 }
 
 std::string Category::message(int val) const // Virtual.
@@ -107,24 +107,9 @@ std::string Category::message(int val) const // Virtual.
   // See notes in transport::error in same spot.
   switch (static_cast<Code>(val))
   {
-  case Code::S_SHM_ARENA_CREATION_FAILED:
-    return "Session opening: While setting up the session's locally-managed SHM-arena(s) of an arena-lending "
-           "SHM-provider, an error occurred thus hosing the session before it could be opened.  Logs may "
-           "indicate the reason.";
-  case Code::S_SHM_ARENA_LEND_FAILED:
-    return "Session opening: While registering the session's locally-managed SHM-arena(s) of an arena-lending "
-           "SHM-provider with the lend/borrow engine, an error occurred thus hosing the session before it could "
-           "be opened.  Logs may indicate the reason.  Most likely it was an internal-IPC failure when sending "
-           "arena info.";
-  case Code::S_SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
-    return "Session opening: While trying to transmit resource for internal-IPC use in an arena-lending SHM-provider, "
-           "server encountered incoming-direction channel error whose exact nature could not be determined at that "
-           "exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.";
-  case Code::S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
-    return "Session opening: While setting up resources for internal-IPC use in an arena-lending SHM-provider, it "
-           "was found that the session master channel's transport had been hosed by an error whose exact nature was "
-           "not available at that exact moment.  Logs will indicate that exact nature; meanwhile session opening "
-           "failed.";
+  case Code::S_SHM_BIPC_MISC_LIBRARY_ERROR:
+    return "Low-level boost.ipc.shm: boost.interprocess emitted miscellaneous library exception sans a system code; "
+           "a WARNING message at throw-time should contain all possible details.";
 
   case Code::S_END_SENTINEL:
     assert(false && "SENTINEL: Not an error.  "
@@ -140,14 +125,8 @@ util::String_view Category::code_symbol(Code code) // Static.
 
   switch (code)
   {
-  case Code::S_SHM_ARENA_CREATION_FAILED:
-    return "SHM_ARENA_CREATION_FAILED";
-  case Code::S_SHM_ARENA_LEND_FAILED:
-    return "SHM_ARENA_LEND_FAILED";
-  case Code::S_SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
-    return "SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR";
-  case Code::S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
-    return "MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR";
+  case Code::S_SHM_BIPC_MISC_LIBRARY_ERROR:
+    return "SHM_BIPC_MISC_LIBRARY_ERROR";
 
   case Code::S_END_SENTINEL:
     return "END_SENTINEL";
@@ -171,4 +150,4 @@ std::istream& operator>>(std::istream& is, Code& val)
   return is;
 }
 
-} // namespace ipc::session::shm::arena_lend::jemalloc::error
+} // namespace ipc::shm::arena_lend::error

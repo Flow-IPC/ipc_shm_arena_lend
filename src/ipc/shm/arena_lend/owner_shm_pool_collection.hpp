@@ -104,7 +104,7 @@ public:
    *
    * @param address The address to be deallocated.
    */
-  virtual void deallocate(void* address);
+  virtual void deallocate(void* address) noexcept;
 
   /**
    * Returns SHM object file-system permissions we were given via constructor.
