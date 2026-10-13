@@ -49,7 +49,7 @@ namespace ipc::shm::arena_lend
  */
 template <typename Pointed_type,
           typename Repository_type,
-          typename Difference_type,
+          typename Difference_type, // See to-do in arena_lend_fwd.hpp about eliminating this.
           bool CAN_STORE_RAW_PTR>
 class Shm_pool_offset_ptr
 {
@@ -468,9 +468,10 @@ private:
   static_assert(std::is_signed_v<Difference_type>, "Pointer difference type must be signed.");
   static_assert(sizeof(typename decltype(m_data)::diff_t) >= sizeof(Difference_type),
                 "Due to internal requirements the pointer difference type cannot exceed a certain "
-                  "(reasonably generous) bit width; for comparison note that boost::offset_ptr<> defaults to `int`.  "
-                  "This requiremenet could be relaxed, in which case a problem would occur at run-time, but only "
-                  "if a sufficient giant pointer difference is actually involved at some point.");
+                  "(reasonably generous) bit width.  This requirement could be relaxed, in which case a problem "
+                  "would occur at run-time, but only if a sufficient giant pointer difference is actually "
+                  "involved at some point.");
+  // (^-- A to-do in arena_lend_fwd.hpp involves eliminating configurability of difference_type and thus such asserts.)
 }; // class Shm_pool_offset_ptr
 
 } // namespace ipc::shm::arena_lend

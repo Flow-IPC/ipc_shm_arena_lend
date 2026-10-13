@@ -207,8 +207,8 @@ TEST(Ipc_arena_construct_test, Ctor_throws)
  * live construct()ed object.  Construct objects until that runs out: then construct<T>() throws std::bad_alloc,
  * having cleaned up its object; the arena remains usable; and freeing one object frees a slot for the next.
  *
- * This creates ~1Mi objects (with ~1Mi Handles in heap): ~10 seconds at -O0 on a fast machine; slower under
- * sanitizers (estimated ~1 minute under thread-sanitizer) which we deem acceptable. */
+ * This creates ~1Mi objects (with ~1Mi Handles in heap): as of this writing, in the CI pipeline, ~7-9 seconds in debug
+ * builds and ~8-10 seconds under thread-sanitizer (~2 seconds under address-sanitizer); which we deem acceptable. */
 TEST(Ipc_arena_construct_test, Lend_tracker_slots_exhausted)
 {
   using std::vector;

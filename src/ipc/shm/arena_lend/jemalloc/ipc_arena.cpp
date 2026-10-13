@@ -544,10 +544,7 @@ void Ipc_arena::start_impl(unsigned int n_arenas)
 
     const arena_id_t arena_id = get_jemalloc_memory_manager()->create_arena(&m_extent_hooks_wrapper);
 
-    /* @todo Catch exception if that fails... return false....  There's a to-do as of this writing in create()
-     * doc header about this.
-     *
-     * Informationally:
+    /* Informationally:
      *
      * That call itself just created our first SHM-pool for this arena (via the extent-alloc hook,
      * synchronously inside): jemalloc's *base* (metadata) block, wherein the arena's internal metadata lives --
@@ -555,7 +552,14 @@ void Ipc_arena::start_impl(unsigned int n_arenas)
      * User data never live in these (nothing we know of relies on this fact per se, but it's good to know).
      * The block extents (<=> SHM-pools for us) are also destroyed (during arena shutdown; see destroy())
      * differently from data-storing extents (that will appear due to subsequent allocate()s triggering that same
-     * extent-alloc hook); that fact is actually salient for us -- see optional_remove_shm_pool(). */
+     * extent-alloc hook); that fact is actually salient for us -- see optional_remove_shm_pool().
+     *
+     * Orthogonally: See notes and to-dos in our caller create()'s doc header.  1: Emit error Flow-style (Error_code*
+     * arg, default null, throw if null and problem).  2: Find some way to detect case where ->create_arena() above
+     * throws exception with .code() = resource-unavailable (Linux: EAGAIN) and emit a nicer Error_code of our
+     * own (which would be added to arena_lend::error table).  Easy way, which might catch some other problem too --
+     * but error could include that possibility -- is just to detect that particular error and emit something else in
+     * that case.  Pinpointy way would have our extent hook for pool creation record this outcome. */
 
 #ifndef NDEBUG
     const auto result =

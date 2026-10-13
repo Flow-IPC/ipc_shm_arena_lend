@@ -42,7 +42,8 @@ extern const std::string S_SHM_OBJECT_DIR;
 Shared_name shm_object_generate_name(const Shared_name& pool_name_base);
 /**
  * Creates a SHM pool name base (prefix) for use in tests.  The resulting `Shared_name` encodes
- * a test-specific prefix, the GTest suite name (or the supplied `use_case_id`), and the PID.
+ * a test-specific prefix, the GTest suite name (or the supplied `use_case_id`), and the PID.  The suite name or
+ * `use_case_id` is `Shared_name::sanitize()`d; so, e.g., a typed test suite's name with '/'s is fine.
  *
  * @param use_case_id Typically the test or application name, which will be used as a trailing part of the
  *                    shared object name prefix. If this value is empty, the application must be running

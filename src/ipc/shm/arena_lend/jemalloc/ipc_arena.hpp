@@ -244,6 +244,25 @@ public:
    *          `construct()`-returned pointers' groups, (2) all `Shm_session`s through which you'd
    *          Shm_session::lend_arena() the returned `Ipc_arena`, and (3) of course the returned pointer group.
    *
+   * ### Errors ###
+   * If jemalloc fails to create a jemalloc-arena a `flow::error::Runtime_exception` exception shall be thrown.
+   * One particular condition which can be a result of user error is if `pool_name_base` is malformed in some way
+   * (contains illegal characters most likely), and therefore internally SHM-pool creation by name (based off
+   * `pool_name_base`) failed.  For certain internal reasons this will manifest as having `exception.code()`,
+   * probably, a-la `resource_unavailable_try_again` (Linux: from `EAGAIN`).  With a non-null `logger` you
+   * should see logged WARNING(s) to that effect.
+   *
+   * @note Consider using Shared_name::sanitize() w/r/t `pool_name_base`.
+   *
+   * Other errors are of a truly exceptional nature to the best of our knoweldge.
+   *
+   * @todo Ipc_arena::create() should follow normalized Flow error emission semantics (take `Error_code*`, set
+   * to success or specific failure, if null then throw on failure, encapsulating the truthy `Error_code`).
+   *
+   * @todo Ipc_arena::create() would be nice to emit a specific fitting error, as opposed to the somewhat
+   * ambiguous `resource_unavailable_try_again`-or-similar, when `pool_name_base` is malformed.  The message
+   * could even suggest Shared_name::sanitize() and/or Shared_name::sanitized().
+   *
    * @param logger
    *        Used for logging purposes.
    * @param memory_manager
@@ -254,9 +273,8 @@ public:
    * @param permissions
    *        The shared memory object file permissions when one is created (on-demand during construct() et al).
    *
-   * @return A shared pointer to an instance of this class; not null.  (If jemalloc fails to
-   *         create a jemalloc-arena -- a truly exceptional situation -- an exception shall propagate from
-   *         inside; there is no need to catch it, any more than one just-in-case catches `bad_alloc`.)
+   * @return A shared pointer to an instance of this class; not null.  (See also above about error possibilities
+   *         involving throwing.)
    */
   static std::shared_ptr<Ipc_arena> create(flow::log::Logger* logger,
                                            const std::shared_ptr<Memory_manager>& memory_manager,

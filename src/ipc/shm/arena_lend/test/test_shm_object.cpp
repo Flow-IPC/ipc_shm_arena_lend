@@ -28,6 +28,7 @@
 #include <boost/filesystem.hpp>
 #include <flow/test/test_common_util.hpp>
 #include <flow/log/log.hpp>
+#include <cassert>
 
 using std::string;
 using std::string_view;
@@ -53,9 +54,13 @@ Shared_name shm_object_generate_name(const Shared_name& pool_name_base)
 
 Shared_name create_test_pool_name_base(const string& use_case_id)
 {
-  return Shared_name::ct(S_SHM_OBJECT_NAME_PREFIX)
-         / Shared_name::ct(use_case_id.empty() ? flow::test::get_test_suite_name() : use_case_id)
-         / Shared_name::ct_from_int(getpid());
+  auto use_case = Shared_name::ct(use_case_id.empty() ? flow::test::get_test_suite_name() : use_case_id);
+  /* A typed or value-parameterized test suite's name contains '/' (e.g., "Shm_jemalloc/Stl_test/0"), which is not
+   * allowed inside a SHM-object name; sanitize() normalizes it to the separator. */
+  [[maybe_unused]] const bool ok = use_case.sanitize();
+  assert(ok && "Test suite name or use-case ID must consist of alphanumerics and separators.");
+
+  return Shared_name::ct(S_SHM_OBJECT_NAME_PREFIX) / use_case / Shared_name::ct_from_int(getpid());
 }
 
 bool remove_shm_objects_filesystem(const string& prefix)

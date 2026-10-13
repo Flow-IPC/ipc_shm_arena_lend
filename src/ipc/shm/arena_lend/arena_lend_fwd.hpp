@@ -41,6 +41,25 @@
  * items applicable to *any* arena-lending provider, with provider-specific items in such sub-namespaces.
  *
  * @see ipc::shm doc header for an overview of the available SHM-provider families and how they compare.
+ *
+ * @internal
+ *
+ * ### Impl notes ###
+ * On Shm_pool_offset_ptr fwd-declaration, we have a `Difference_type = int` default.  De facto `int` is the only
+ * choice for `Difference_type` (as this important fancy-pointer type is in-practice used by SHM-jemalloc et al).
+ *
+ * It raises some questions: namely: (1) Why is `Difference_type` configurable at all?  (2) Why `int` specifically?
+ * For (1) I (ygoldfel) suspect original author (echan) borrowed this configurability from
+ * boost::interprocess::offset_ptr.  We do not really need it though.  For (2) we are not sure.  (It might be something
+ * from from an older-than-current-min Boost version's -- 1.87 as of this writing -- `bipc::offset_ptr`.)
+ *
+ * That all may be moot at this point:
+ *
+ * @todo Shm_pool_offset_ptr should, in a mildly-breaking change, probably lose the `Difference_type` template-param
+ * configurability.  There are some rigid constraints, internal to Shm_pool_offset_ptr_data (core of
+ * Shm_pool_offset_ptr), on what it can be in practice.  Moreover nothing, that we know of, needs this
+ * configurability.  (`offset_ptr` has a wider range of use-cases, and no such rigid restrictions, so in its case
+ * this configurability makes sense; and/or at least it does not cause questions and worries in the same way.)
  */
 namespace ipc::shm::arena_lend
 {
@@ -54,7 +73,7 @@ class Borrower_allocator_arena;
 
 template<typename Pointed_type, typename Repository_type,
          typename Difference_type = int, bool CAN_STORE_RAW_PTR = true>
-class Shm_pool_offset_ptr;
+class Shm_pool_offset_ptr; // See notes about Difference_type[=int] in namespace doc header.
 
 class Borrower_shm_pool_collection;
 class Divisible_shm_pool;

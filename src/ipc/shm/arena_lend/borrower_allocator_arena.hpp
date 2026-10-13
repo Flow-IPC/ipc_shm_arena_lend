@@ -75,6 +75,7 @@ public:
    * Fancy pointer for stateless allocator use.
    *
    * @internal
+   *
    * The target will usually be `Shm_pool_offset_ptr<T, Borrower_shm_pool_collection_repository<Ipc_arena>, ..., false>`
    * of which these are of interest:
    *   - `Borrower_shm_pool_collection_repository<Ipc_arena>` is the singleton/central repository of SHM-pool
@@ -86,6 +87,11 @@ public:
    *     container but with the SHM-enabled allocator parameter; so buffers allocated on the container's behalf
    *     do live in SHM, but other parts (at least temporarily) might not and hence must be represented by
    *     raw pointers after all.  `false` here forbids the same borrower-side.
+   *
+   * The `int` is not great; it should be grabbed instead from the owner-side equivalent `Pointer` instead of
+   * being repeated here; but please see the to-do about eliminating `Difference_type` configurability in
+   * arena_lend_fwd.hpp.  Once that's done, it would be deleted here too; problem solved.
+   *
    * @endinternal
    *
    * @tparam T

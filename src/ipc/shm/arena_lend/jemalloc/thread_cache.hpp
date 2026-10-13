@@ -34,6 +34,7 @@
 #include <flow/log/log.hpp>
 #include <boost/unordered_map.hpp>
 #include <boost/unordered_set.hpp>
+#include <boost/unordered/unordered_flat_map.hpp>
 #include <string>
 #include <atomic>
 
@@ -614,7 +615,7 @@ private:
    * id() at least once) to the jemalloc tcache dedicated to that arena ID that was created by `*this`
    * as a result of that first `id(arena_id)` call.
    */
-  boost::unordered_map<arena_id_t, tcache_id_t> m_tcaches_by_arena;
+  boost::unordered_flat_map<arena_id_t, tcache_id_t> m_tcaches_by_arena;
 }; // class Thread_cache
 
 // Free functions: in *_fwd.hpp.
