@@ -320,7 +320,7 @@ TEST_F(Thread_lcl_obj_db_test, Triggers_reap_pending)
 
 /* A held handle (use-count nonzero) must survive any number of scans; reap happens only once it is dropped
  * *and* -- the drop being cross-thread here -- a subsequent owner-thread scan runs.  (This is the unit-level
- * analog of the disconnect-flavored fact asserted at session level elsewhere: scans never destroy in-use
+ * analog of the disconnect-relevant fact asserted at session level elsewhere: scans never destroy in-use
  * objects.) */
 TEST_F(Thread_lcl_obj_db_test, Held_handle_defers_reap)
 {

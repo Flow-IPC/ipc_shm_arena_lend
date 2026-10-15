@@ -47,9 +47,10 @@
 #include <flow/util/util.hpp>
 #include <flow/error/error.hpp>
 #include <boost/utility.hpp>
+#include <boost/unordered/unordered_map.hpp>
+#include <boost/unordered/unordered_set.hpp>
 #include <atomic>
 #include <vector>
-#include <unordered_set>
 #include <optional>
 #include <cstring>
 
@@ -133,6 +134,13 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *
  * Establish a #Shm_channel yourself (various techniques are documented elswhere) and provide it to
  * Shm_session::create(); from that point on the resulting `*this` takes over that object.
+ *
+ * ### Thread safety ###
+ * lend_object() and borrow_object() are safe to call concurrently with each other and with any other method,
+ * on the same `*this` or otherwise.  (In practice these are the frequently-called ones, often from various threads.)
+ * The rest have the usual default level of thread safety -- e.g., lend_arena() is not safe to call concurrently
+ * with another lend_arena() on the same `*this` -- unless a method's doc header says otherwise (e.g., the stats
+ * accessors are safe to call anytime).
  *
  * @internal
  *
@@ -272,8 +280,8 @@ public:
    *      `shm_channel_error_handler` is a part of that picture but, as you'll note, not *necessarily* a
    *      mandatory one to use.
    *
-   * `shm_channel` is a low-level (unstructured) channel -- transport::Channel -- of the specific type
-   * #Shm_channel, such that a similar peer object is passed to the opposing Shm_session to which we're connecting,
+   * `shm_channel` is a low-level (unstructured) channel -- transport::Channel -- of the specific type #Shm_channel,
+   * such that a similar peer object is passed to the opposing Shm_session to which we're connecting,
    * typically (though not mandatorily; e.g. for testing, debugging) across a process boundary.
    * It is a `sync_io`-pattern variant (formally with `transport::Channel::S_IS_SYNC_IO_OBJ == true`).
    * (Arguably in plainer English: it's essentially a synchronously-used core, not dissimilar to
@@ -303,16 +311,23 @@ public:
    * and therefore is then reported to you immediately and *at most once*.  To wit: `*this` shall
    * execute *from thread W*: `shm_channel_error_handler(E)` (`E` being the reason for the channel-hosing).
    * This mechanism is identical to async error reporting via the various async-I/O-pattern IPC primitives
-   * in ipc::transport (e.g.: transport::Blob_receiver::async_receive_blob()).  It just used for this one
+   * in ipc::transport (e.g.: transport::Blob_receiver::async_receive_blob()).  It is just used for this one
    * limited thing.
    *   - If you *do* need to use `*this`'s detecting the channel-hosing as *the* method of detecting
    *     other-side-caused ("opposing trigger") session-hosing, then in `shm_channel_error_handler()` --
    *     which runs from thread W -- we recommend you signal one of your user threads to end all use
    *     of `Shm_session`-borrowed objects, nullifying them; and destroy Shm_session.  E.g., if you use
    *     boost.asio or `flow::async`, then it'd be typical to `post()` those steps onto your main thread.
+   *     - Regardless: do not block inside `shm_channel_error_handler()`.  Thread W also replies to the opposing
+   *       Shm_session's internal requests; the opposing side waits for those replies, sometimes while inside an
+   *       allocation in its arena; so blocking thread W can stall even the other process.
    *   - If you *do not* need to do that -- ipc::session is wrangling create() and `*this` for you, or
    *     you detect session-hosing via the hosing of some other channel or socket -- then in
    *     `shm_channel_error_handler` you could just log; or do nothing.
+   *
+   * @warning Do not destroy `*this` (e.g., by dropping the last `shared_ptr` to it) from within
+   *          `shm_channel_error_handler()`: undefined behavior (likely `std::terminate()` due to thread W trying to
+   *          self-join).
    *
    * Nevertheless, after this event (after channel's hosing is detected) but before Shm_session destruction
    * (which you would allow, by dropping all borrowed handles and the `create()`-returned `Shm_session`-handle),
@@ -361,6 +376,9 @@ public:
    *   - The internal channel itself detects hosing while awaiting (like always) in-messages for internal use.
    *     Thread: that channel's own background thread.
    *     - Result: post `shm_channel_error_handler(E)` onto thread W to execute ASAP.
+   *     - This includes the opposing side becoming stuck (not dead): Each side will issue, inside create(),
+   *       Blob_sender::auto_ping() and Blob_receiver::idle_timer_run() on `shm_channel`.  If it's unresponsive
+   *       at any point, for a few seconds, you'll see E = transport::error::Code::S_RECEIVER_IDLE_TIMEOUT.
    *   - In thread W, we receive a message (`LendArena`, `LendPool`) and reply with ack response.
    *     However the send of the ack fails synchronously.  Thread: W.
    *     - Result: execute `shm_channel_error_handler(E)` (already in thread W).
@@ -396,8 +414,10 @@ public:
    * `arena->construct<T>()`ed.
    *
    * @param arena
-   *        The arena to be lent.
-   * @return Whether registration was successful.  Failure indicates that either this lend_arena() itself failed
+   *        The arena to be lent.  It must not have been lent already via `*this`; if it has, this is a no-op
+   *        that returns `false` (and logs a WARNING).
+   * @return Whether registration was successful.  Failure indicates (other than in the aforementioned
+   *         already-lent case) that either this lend_arena() itself failed
    *         on account of the hosing of `shm_channel`, or `shm_channel`'s hosing had been
    *         detected earlier.  In any case, if so, `shm_channel_error_handler(E)` will fire or has fired
    *         in a background thread, and `*this` is hosed.  See create() doc header.
@@ -442,6 +462,9 @@ public:
    *
    * @warning Be ready for this method returning empty blob.  See below regarding return value.
    *
+   * ### Thread safety ###
+   * Safe to call anytime.  See class doc header.
+   *
    * @tparam T
    *         The object type being lent.  As of this writing it actually does not need to match the `T` used
    *         for Ipc_arena::construct() to obtain `object`; e.g., `T = void` might be useful in some cases.
@@ -449,6 +472,8 @@ public:
    * @param object
    *        The handle to object to be lent; it *must* have come from Ipc_arena::construct().
    *        If not the method throws a `flow::error::Runtime_error` (itself an `std::runtime_error`).
+   *        Moreover that Ipc_arena must have been successfully `lend_arena()`ed via `*this`; otherwise behavior
+   *        is undefined.
    * @return Non-empty blob on success; empty on failure.  Failure indicates `shm_channel`'s hosing had been
    *         detected earlier.  If so `shm_channel_error_handler(E)` has fired
    *         in a background thread, and `*this` is hosed.  See create() doc header.
@@ -479,6 +504,9 @@ public:
    *         The latter can only occur if `serialized_object` is of the wrong length and therefore clearly
    *         not coming from `lend_object()`.  However, any other problem such as wrong data of the proper size =>
    *         undefined behavior.  See create() doc header.
+   *
+   * ### Thread safety ###
+   * Safe to call anytime.  See class doc header.
    */
   template<typename T>
   Handle<T> borrow_object(const Blob& serialized_object) const;
@@ -814,6 +842,7 @@ protected:
    *
    * Regarding the aforementioned ack:
    *   - It shall arrive immediately (think of it as a function call across potential process boundary).
+   *     (If the opposing process is stuck, then #m_shm_channel idle timer -- see ctor -- bounds the wait.)
    *   - It is not safe for our caller, presumably Ipc_arena::allocate() (by way of jemalloc and then more
    *     owner-y arena-y Flow-IPC stuff), to proceed until it occurs.  In fact the same procedure must repeat
    *     for each Shm_session (like `*this`) through which that Ipc_arena has been `lend_arena()`d.  Otherwise
@@ -954,7 +983,7 @@ private:
    * It is only accessed in receive_arena() and receive_shm_pool(), both in thread W; and then in
    * dtor -- after thread W is joined -- so no synchronization is required.
    */
-  std::unordered_map<collection_id_t, std::unordered_set<pool_id_t>> m_borrower_pool_id_map;
+  boost::unordered_map<collection_id_t, boost::unordered_set<pool_id_t>> m_borrower_pool_id_map;
 
   /**
    * Maps an arena to its SHM-pool listener; this is used for receiving changes in the SHM pools.
@@ -964,8 +993,8 @@ private:
    * lend_arena() is not thread-safe w/r/t concurrent calls (nor documented as such), and dtor runs
    * after all user activity has ceased.
    */
-  std::unordered_map<std::shared_ptr<Arena>,
-                     std::unique_ptr<Shm_pool_listener_impl>> m_shm_pool_listener_map;
+  boost::unordered_map<std::shared_ptr<Arena>,
+                       std::unique_ptr<Shm_pool_listener_impl>> m_shm_pool_listener_map;
 
   /**
    * Stats about borrower SHM-pool (and containing SHM-arena) borrowing (opening) and

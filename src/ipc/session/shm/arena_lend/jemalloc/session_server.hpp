@@ -33,6 +33,8 @@
 #include "ipc/transport/transport_fwd.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include <boost/unordered/unordered_flat_map.hpp>
+#include <boost/system/system_error.hpp>
+#include <exception>
 #include <string>
 
 namespace ipc::session::shm::arena_lend::jemalloc
@@ -473,7 +475,7 @@ Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
    * space (in the SHM context, <-> SHM-pool).  We use our standard semantics for per-session items.  Arena will
    * append whatever pool ID stuff after this prefix.
    *
-   * This is the same as Session_mv::init_shm() but simpler due to being a server-side thing (as opposed to possibly
+   * This is the same as Session_impl::init_shm() but simpler due to being a server-side thing (as opposed to possibly
    * client-side) and thus not needing to add any client-PID for cleanup purposes (server-PID is already
    * the srv_namespace baked into every Shared_name).  Also it's per-app, not per-session, hence cli_namespace is
    * not needed. */
@@ -482,24 +484,43 @@ Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
                                                              Shared_name::ct(app.m_name));
   shm_pool_name_prefix /= SHM_SUBTYPE_PREFIX;
 
-  app_shm
-    = Arena::create(get_logger(),
-                    // See equally-relevant note/@todo in Session_mv::init_shm().
-                    make_shared<Memory_manager>(),
-                    std::move(shm_pool_name_prefix),
-                    util::shared_resource_permissions(m_srv_app_ref.m_permissions_level_for_client_apps));
-  if (!app_shm)
+  /* Arena::create() throws on failure (it does not return null).  We must catch it: same reasoning as in
+   * Session_impl::init_shm() (in short: we are in a flow::async thread, where an uncaught exception would exit() the
+   * process).  Emit the exception's own Error_code, if it has one; else a general one of our own. */
+  Error_code create_err_code;
+  try
+  {
+    app_shm
+      = Arena::create(get_logger(),
+                      // See equally-relevant note/@todo in Session_impl::init_shm().
+                      make_shared<Memory_manager>(),
+                      std::move(shm_pool_name_prefix),
+                      util::shared_resource_permissions(m_srv_app_ref.m_permissions_level_for_client_apps));
+  }
+  catch (const boost::system::system_error& exc) // Including flow::error::Runtime_error.
+  {
+    create_err_code = exc.code() ? exc.code() : Error_code{error::Code::S_SHM_ARENA_CREATION_FAILED};
+    FLOW_LOG_WARNING("Session_server [" << *this << "]: Failed to create app-scope Arena; exception "
+                     "[" << exc.what() << "]; emitting [" << create_err_code << "] "
+                     "[" << create_err_code.message() << "].  Session will not open.");
+  }
+  catch (const std::exception& exc)
+  {
+    create_err_code = error::Code::S_SHM_ARENA_CREATION_FAILED;
+    FLOW_LOG_WARNING("Session_server [" << *this << "]: Failed to create app-scope Arena; exception "
+                     "[" << exc.what() << "]; emitting [" << create_err_code << "] "
+                     "[" << create_err_code.message() << "].  Session will not open.");
+  }
+
+  if (create_err_code)
   {
     /* app_shm, which is in the map directly, is null.  Just leave null in the map; meh.
      * .erase()ing it from there is just pedantic at best.  (The [] lookup above will do the right thing next time.) */
-
-    FLOW_LOG_WARNING("Session_server [" << *this << "]: Failed to create app-scope Arena; "
-                     "details may be found above.  Session will not open.");
-
-    // See @todo on this Code; in short if create() emitted an Error_code, we'd just emit that instead here.
-    return error::Code::S_SHM_ARENA_CREATION_FAILED;
+    assert(!app_shm);
+    return create_err_code;
   }
   // else: Cool!
+  assert(app_shm && "Arena::create() throws on failure, else returns non-null.");
 
   // Its doc header explains things.  Mutex is locked as required.
   app_shm_stats_tickle_and_schedule(app.m_name);

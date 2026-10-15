@@ -25,6 +25,7 @@
 /// @file
 #include "ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp"
 #include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/session_cfg.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/stat_info_dump.hpp"
 #include "ipc/shm/arena_lend/detail/owner_spc_impl.hpp"
@@ -33,6 +34,7 @@
 #include "ipc/transport/struc/channel_base.hpp"
 #include "ipc/common.hpp"
 #include <flow/util/stat/stat_set.hpp>
+#include <flow/util/util.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <vector>
 
@@ -103,6 +105,29 @@ Shm_session::Shm_session(flow::log::Logger* logger, Shm_channel&& shm_channel,
   });
   assert(ok && "struc::Channel::expect_msgs() is not supposed to report hose channel before start().");
 
+  /* Enable liveness checking and keep-alive; the other side does the same.  (Do it before .start() if only for
+   * cleanliness.)  The key motivation: our send_sync_request() (notably from lend_shm_pool(), invoked from
+   * inside an Arena::allocate()) waits for the opposing side's ack without a timeout.  If
+   * the opposing process becomes stuck (not dead: that is detected via the socket anyway),
+   * this ensures the wait ends: the idle timer hoses m_shm_channel, which interrupts the wait with that error;
+   * then the usual channel-hosing path (set_disconnected() et al) follows.  Our protocol does not otherwise send
+   * messages at regular intervals; hence auto_ping() (per these APIs' concept docs) in addition to idle_timer_run().
+   *
+   * The idle_timer_run()-later-trips-timeout eventuality is, to us, merely a way m_shm_channel-hosing can
+   * manifest (transport::error::Code::S_RECEIVER_IDLE_TIMEOUT).  Much more typical would be an end-of-connection
+   * code of some sort.
+   *
+   * The other approach would have been to specifically call m_shm_channel->sync_request() (in send_sync_request()) with
+   * a timeout, but dealing with that involves considerably more moving parts.  This on the other hand is specifically
+   * made for this.  ipc::session does it for its session master channel (SMC) too for example.
+   *
+   * Mental sanity-check: shm_channel was required to be fresh, so no start_*_ops(); therefore no previous
+   * shm_channel.auto_ping/idle_time_run() calls would've succeeded even if tries.  So these should return true.
+   * @todo Think about more active checking of shm_channel's state before we start messing with in this ctor at all.
+   * Until then perhaps assert() in here. */
+  m_shm_channel->owned_channel_mutable()->auto_ping(Session_cfg::S_PING_PERIOD);
+  m_shm_channel->owned_channel_mutable()->idle_timer_run(Session_cfg::S_IDLE_TIMEOUT);
+
   /* At the moment m_shm_channel (a struc::Channel) is basically inert.  For it to be able to accept incoming messages
    * we must .start() it.  Easy enough but the harder thing is that it takes the on-channel-hosed handler as an arg.
    * Now is the time to read the create() doc header about how we promised to report *all* errors.  This here is
@@ -124,7 +149,7 @@ Shm_session::~Shm_session()
 {
   using detail::Borrower_shm_pool_collection_repository;
 
-  // Log ~final info/stats.
+  // Log ~final info/stats (safe anytime).
   {
     /* Don't need all (could be e.g. hundreds) of past-per-arena stats for the global Borrower_..._repository;
      * so verbose=false.  multiline=true is fine however.
@@ -134,6 +159,25 @@ Shm_session::~Shm_session()
     FLOW_LOG_INFO("Shm_session [" << this << "] shutdown: "
                   "~Final state (includes ~final this-session + ~current global):"
                   "\n" << (info_dump(&dump), dump) << '.'); // Note: no newline at end of info_dump.
+  }
+
+  /* Remove listeners registered to the respective arenas so that no notifications are further processed from the
+   * arenas, which may survive much longer than the session.  Do it first-thing: until then, any thread allocating
+   * in a lent arena (e.g., app-scope arena in ipc::session; lent via every session) can create a SHM-pool and
+   * thus call into *this via the listener (=> lend_shm_pool() => m_shm_channel use).  That must not happen, once
+   * we stop thread W and m_shm_channel below.  Ipc_arena invokes listeners while holding the same
+   * mutex that remove_shm_pool_listener() locks; so once the latter returns, no such call is in progress or can
+   * begin.  (If one is in progress, we wait for it here; it completes normally, as m_shm_channel is intact.)
+   *
+   * One can think of it as the user calling a (currently non-existent; but it could be added for calling whenever)
+   * unlend_arena(), in this case invoked just-before destroying *this.  "unlend_arena()" invoked only after killing
+   * facilities used by <pre-unlend_arena() ops> would be wrong: those ops could still happen before unlend_arena()
+   * and fail due to <facilities> being down. */
+  for (const auto& cur_map_pair : m_shm_pool_listener_map)
+  {
+    auto& cur_arena = cur_map_pair.first;
+    auto& cur_listener_ptr = cur_map_pair.second;
+    cur_arena->remove_shm_pool_listener(cur_listener_ptr.get());
   }
 
   /* For this thread W (m_serial_task_loop) we started at session start:
@@ -187,16 +231,9 @@ Shm_session::~Shm_session()
    * It is clearly wrong to _admin::forgetting_shm_arena(); opposing-entity (process) arena is not reachable by us;
    * while our-side arenas are ones we were lending; they may survive a long time after this dtor and have live
    * objects; it makes no sense to forget anything, just because we're no longer going to be lending from such an
-   * arena through this session. */
-
-  /* Remove listeners registered to the respective arenas so that no notifications are further processed from the
-   * arenas, which may survive much longer than the session. */
-  for (const auto& cur_map_pair : m_shm_pool_listener_map)
-  {
-    auto& cur_arena = cur_map_pair.first;
-    auto& cur_listener_ptr = cur_map_pair.second;
-    cur_arena->remove_shm_pool_listener(cur_listener_ptr.get());
-  }
+   * arena through this session.
+   *
+   * (Our listeners were already removed from lent arenas; see top of dtor.) */
 
   /* Deregister SHM-pools from repository of borrower-side such pools.  These are arranged by arena (collection)
    * (each belonging to the owner a/k/a process on the opposing side of this session a/k/a IPC conversation);
@@ -273,6 +310,7 @@ void Shm_session::set_disconnected(const Error_code& err_code)
 bool Shm_session::lend_arena(const std::shared_ptr<Arena>& arena)
 {
   using ipc::shm::arena_lend::detail::Owner_spc_impl;
+  using flow::util::key_exists;
 
   // We are in an end user thread.
 
@@ -285,9 +323,17 @@ bool Shm_session::lend_arena(const std::shared_ptr<Arena>& arena)
 
   collection_id_t collection_id = arena->get_id();
 
+  if (key_exists(m_shm_pool_listener_map, arena))
+  {
+    FLOW_LOG_WARNING("Arena [" << collection_id << "] was already lent through this session; ignoring repeated "
+                     "arena lending attempt (user error?).");
+    return false;
+  }
+  // else
+
   const auto result_pair
     = m_shm_pool_listener_map.emplace(arena, std::make_unique<Shm_pool_listener_impl>(*this, collection_id));
-  assert(result_pair.second && "Duplicate arena should never be lend_arena()ed.");
+  assert(result_pair.second && "We just checked for duplicate.");
 
   // Compose and send message.
   auto message = m_shm_channel->create_msg();
@@ -312,6 +358,13 @@ bool Shm_session::lend_arena(const std::shared_ptr<Arena>& arena)
 #endif
   arena->add_shm_pool_listener(result_pair.first->second.get());
   assert(ok && "We just created a fresh listener; add must succeed.");
+  /* @todo The call just-above synchronously lends the arena's initial pools (notify_initial_shm_pools() =>
+   * lend_shm_pools()); if that fails we still return true (and log success) below.  We could propagate the failure
+   * instead.  The practical impact seems small though: such a failure means the channel is hosed, so
+   * set_disconnected() has been triggered; shortly (it is posted onto thread W) m_connected becomes false and
+   * lend_object() et al start failing; and the error handler fires in any case.  So the cost is a briefly
+   * misleading `true` and log line; it would even be true, if the channel problem started a tiny bit later.
+   * Propagating the failure here, on the other hand, is fairly annoying. */
 
   FLOW_LOG_INFO("Successfully registered arena [" << collection_id << "] (opposing owner ID (PID) "
                 "[" << m_remote_process_id << "]) for lending.");
@@ -426,8 +479,13 @@ bool Shm_session::send_sync_request(Shm_struc_channel::Msg_out& message, util::S
 {
   // We are in an end user thread.
 
-  /* No timeout: any kind of wait here is essentially infinite and the result of a catastrophic bug somewhere;
-   * better not to mask it, and no use in trying to recover from it. */
+  /* No timeout per se.  The wait does matter: we are typically inside the jemalloc extent-alloc hook
+   * (lend_shm_pool() via Arena::allocate()), with that arena's growth blocked for all threads meanwhile.  However:
+   * if the opposing process dies, the socket reports it immediately; and if it gets stuck, then m_shm_channel's
+   * idle timer shall hose it, interrupting this wait with that error.  So the wait is bounded either way.
+   * (A sync_request() timeout instead would be a weaker tool: S_TIMEOUT does not hose the channel, so we would have
+   * to deal with the channel continuing to live, and possibly reporting an error later, after we'd given up on
+   * it.)  See ctor, where we set up the pinging and timing out. */
   Error_code err_code;
   const auto response = m_shm_channel->sync_request(&message, nullptr, &err_code);
 
@@ -501,7 +559,7 @@ void Shm_session::receive_arena(collection_id_t collection_id, Shared_name&& poo
 #ifndef NDEBUG
   const auto insert_result =
 #endif
-  m_borrower_pool_id_map.emplace(collection_id, std::unordered_set<pool_id_t>{});
+  m_borrower_pool_id_map.emplace(collection_id, boost::unordered_set<pool_id_t>{});
   assert(insert_result.second && "Duplicate collection; opposing process double-lent arena -- bug.");
 
   { /* Stats.

@@ -39,13 +39,16 @@
 #include "ipc/test/test_logger.hpp"
 #include "ipc/transport/asio_local_stream_socket.hpp"
 #include "ipc/transport/sync_io/native_socket_stream.hpp"
+#include "ipc/transport/error.hpp"
 #include <flow/test/test_common_util.hpp>
 #include <boost/thread/future.hpp>
 #include <boost/uuid/uuid_generators.hpp>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <future>
 #include <optional>
 #include <thread>
 #include <gtest/gtest.h>
@@ -186,6 +189,14 @@ using Shm_channel = Shm_session::Shm_channel; // (Unstructured; a Shm_session su
  *   use-count pool from the file-system. The borrower's eventual release discovers the pool is gone,
  *   concludes the object is moot, and quietly does nothing -- rather than, say, throwing from a shared_ptr
  *   destructor. [Disconnected_external_process, which asserts that exact code path fired]
+ * - C8: A session may be destroyed while other threads keep allocating in an arena lent through it (typical:
+ *   ipc::session lends the app-scope arena through every session). New pools created concurrently with that
+ *   destruction must not reach into the dying session. This is a race, so the coverage is a stress smoke
+ *   test (no crash, no hang) rather than a deterministic one. [Standalone_dtor_vs_concurrent_pool_creation]
+ * - C9: If the opposing process gets stuck (alive, but neither replying nor pinging), an internal request
+ *   awaiting its ack -- including one made from inside an allocation in our arena -- does not wait forever:
+ *   the internal channel's idle timer hoses the session (handler fires with the idle-timeout code), and the
+ *   waiting call returns. [Standalone_stuck_peer, via lend_arena(), which waits the same way]
  *
  * Group D -- crashes (the fully uncivilized endings):
  * - D1: The owner crashes (SIGKILL, so zero teardown runs). The borrower detects the channel's death; the
@@ -3150,5 +3161,112 @@ TEST_F(Shm_session_test, Standalone_session_end_errors)
     EXPECT_EQ(Reclaim_probe::s_dtor_ct.load(), 1u);
   }
 } // TEST_F(Shm_session_test, Standalone_session_end_errors)
+
+/**
+ * Stress smoke test: one arena is lent through a succession of standalone sessions, each destroyed while
+ * another thread keeps allocating in that arena -- each allocation holding on, so the arena keeps growing,
+ * creating new pools, each of which is announced to the session(s) through which the arena is lent at that
+ * moment. A session's destruction must not race with such an announcement. The race window is narrow and
+ * pool creations are relatively few (jemalloc grows pools geometrically), so this is probabilistic: success
+ * means no crash/hang (and no TSAN complaint in that build); it does not prove the race is closed.
+ *
+ * Covers, per the master list at the top of this file: C8.
+ */
+TEST_F(Shm_session_test, Standalone_dtor_vs_concurrent_pool_creation)
+{
+  constexpr size_t ALLOC_SZ = 4 * 1024 * 1024;
+  constexpr size_t N_ALLOCS_MAX = 64; // So <= 256Mi bytes of (sparse, never-touched) SHM.
+
+  // Use this rig's arena as the shared lent-through-every-session arena; ignore its own sessions.
+  Standalone_session_pair arena_rig(get_logger());
+  const auto arena = arena_rig.m_arena;
+  ASSERT_NE(arena, nullptr);
+
+  std::atomic<bool> allocating_done{false};
+  std::thread allocator_thread([&]()
+  {
+    vector<void*> bufs;
+    for (size_t idx = 0; idx != N_ALLOCS_MAX; ++idx)
+    {
+      bufs.push_back(arena->allocate(ALLOC_SZ));
+      std::this_thread::sleep_for(std::chrono::milliseconds(2)); // Spread the pool creations over the session churn.
+    }
+    allocating_done = true;
+    for (const auto buf : bufs)
+    {
+      arena->deallocate(buf);
+    }
+  });
+
+  size_t n_sessions = 0;
+  do
+  {
+    Standalone_session_pair rig(get_logger());
+    if (!rig.m_session_a->lend_arena(arena))
+    {
+      ADD_FAILURE() << "lend_arena() failed."; // Not ASSERT_*(): must still join allocator_thread below.
+      break;
+    }
+    rig.m_session_a.reset(); // The dtor under test, racing the allocator thread's pool creations.
+    ++n_sessions;
+  }
+  while (!allocating_done);
+
+  allocator_thread.join();
+  FLOW_LOG_INFO("Churned [" << n_sessions << "] sessions during concurrent arena growth.");
+  EXPECT_GT(n_sessions, 1u);
+} // TEST_F(Shm_session_test, Standalone_dtor_vs_concurrent_pool_creation)
+
+/**
+ * A standalone Shm_session whose opposing side is stuck: the other end of its channel is a plain socket that is
+ * held open but never serviced (no reads, no acks, no pings).  lend_arena() waits for an ack exactly as
+ * lend_shm_pool() would from inside an Arena::allocate(); the internal channel's idle timer must end that wait --
+ * lend_arena() returns false -- and the error handler must fire with the idle-timeout code.  Takes ~as long
+ * as the idle timeout (Session_cfg::S_IDLE_TIMEOUT; seconds to tens of seconds).
+ *
+ * Covers, per the master list at the top of this file: C9.
+ */
+TEST_F(Shm_session_test, Standalone_stuck_peer)
+{
+  namespace local_ns = transport::asio_local_stream_socket::local_ns;
+  using Peer_socket = transport::asio_local_stream_socket::Peer_socket<transport::Native_socket_stream_cfg::Protocol>;
+  using ipc::shm::arena_lend::test::create_test_pool_name_base;
+  using flow::util::Task_engine;
+  using std::chrono::steady_clock;
+  using std::chrono::seconds;
+
+  Task_engine asio_engine; // Formally required to construct asio sockets; unused otherwise.
+  Peer_socket asio_sock(asio_engine);
+  Peer_socket asio_sock_stuck(asio_engine); // The opposing "process": open but never serviced.
+  ipc::Error_code sys_err_code;
+  local_ns::connect_pair(asio_sock, asio_sock_stuck, sys_err_code);
+  ASSERT_FALSE(sys_err_code) << "connect_pair() failed: [" << sys_err_code.message() << "].";
+
+  const auto arena = Ipc_arena::create(get_logger(), make_shared<Memory_manager>(),
+                                       create_test_pool_name_base("shmSessionStuckPeer"),
+                                       util::shared_resource_permissions(util::Permissions_level::S_GROUP_ACCESS));
+  ASSERT_NE(arena, nullptr);
+
+  std::promise<ipc::Error_code> fired; // Contract: the handler fires at most once.
+  auto fired_future = fired.get_future();
+
+  Shm_channel shm_channel{get_logger(), "shmStuckPeer",
+                          transport::sync_io::Native_socket_stream
+                            {get_logger(), "shmStuckPeer", util::Native_handle{asio_sock.release()}}};
+  shm_channel.blob_snd()->remote_peer_process_credentials(ipc::test::get_process_creds()); // As in the rig above.
+  auto session = Shm_session::create(get_logger(), std::move(shm_channel), boost::uuids::random_generator()(),
+                                     [&](const ipc::Error_code& err_code) { fired.set_value(err_code); });
+
+  const auto start = steady_clock::now();
+  EXPECT_FALSE(session->lend_arena(arena));
+  const auto elapsed = steady_clock::now() - start;
+  EXPECT_GE(elapsed, seconds(1)) << "Should have waited for the idle timeout (not failed immediately).";
+  EXPECT_LT(elapsed, seconds(60)) << "Should not have waited (much) longer than the idle timeout.";
+
+  ASSERT_EQ(fired_future.wait_for(seconds(10)), std::future_status::ready) << "Error handler did not fire.";
+  EXPECT_EQ(fired_future.get(), transport::error::Code::S_RECEIVER_IDLE_TIMEOUT);
+
+  session.reset(); // Before `fired` (captured by ref) and asio_sock_stuck go away.
+} // TEST_F(Shm_session_test, Standalone_stuck_peer)
 
 } // namespace ipc::session::shm::arena_lend::jemalloc::test

@@ -245,7 +245,7 @@ public:
    *          Shm_session::lend_arena() the returned `Ipc_arena`, and (3) of course the returned pointer group.
    *
    * ### Errors ###
-   * If jemalloc fails to create a jemalloc-arena a `flow::error::Runtime_exception` exception shall be thrown.
+   * If jemalloc fails to create a jemalloc-arena a `flow::error::Runtime_error` exception shall be thrown.
    * One particular condition which can be a result of user error is if `pool_name_base` is malformed in some way
    * (contains illegal characters most likely), and therefore internally SHM-pool creation by name (based off
    * `pool_name_base`) failed.  For certain internal reasons this will manifest as having `exception.code()`,
@@ -438,7 +438,9 @@ public:
    * That's the happy path; so how can it fail?  Black-boxily speaking:
    *   - jemalloc code itself might fail in some way.
    *     - The known (non-mainstream) causes are environmental limits -- chiefly the per-process open-file-descriptor
-   *       limit, as SHM-jemalloc keeps one descriptor open per SHM-pool -- and an absurdly large N.
+   *       limit, as SHM-jemalloc keeps one descriptor open per SHM-pool -- and a too-large N.  The latter
+   *       specifically: N approaching or exceeding ~2GiB (at which point the needed SHM-pool would exceed the
+   *       max size addressable by our fancy-pointer type) always fails.
    *   - Flow-IPC code itself might fail in some way (and would, potentially, log WARNING(s) as to what that was).
    *
    * That said:
@@ -1475,6 +1477,9 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
   using Std_bad_alloc = std::bad_alloc;
   // using flow::util::construct_at; // C++20 => can conflict with incidentally included std:: counterpart.
   constexpr bool HAS_TRIVIAL_DTOR = std::is_trivially_destructible_v<T>;
+
+  static_assert(alignof(T) <= flow::util::max_align_sz(),
+                "allocate() guarantees only std::max_align_t alignment; over-aligned T is not supported.");
 
   Thread_lcl_obj_db_admin<Ipc_arena>::this_thread_piggy_scan(); // Opportunistic!
 

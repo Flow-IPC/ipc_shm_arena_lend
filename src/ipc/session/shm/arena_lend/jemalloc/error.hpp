@@ -50,9 +50,12 @@ enum class Code
    * an error occurred thus hosing the session before it could be opened.  Logs may indicate the reason.
    *
    * @internal
-   * @todo If ipc::shm::arena_lend arena-creation API(s) are modified to output an `Error_code` instead of
-   * reporting just success-versus-failure, then ipc::session::error::Code::S_SHM_ARENA_CREATION_FAILED should go
-   * away.
+   *
+   * Emitted only if the arena-creation API throws an exception lacking an `Error_code`; if the exception carries
+   * one, then that is emitted instead.
+   *
+   * @todo If ipc::shm::arena_lend arena-creation API(s) are modified to always output an `Error_code` (e.g.,
+   * Flow-style via `Error_code*` out-arg), then `Code::S_SHM_ARENA_CREATION_FAILED` should go away.
    */
   S_SHM_ARENA_CREATION_FAILED = S_CODE_LOWEST_INT_VALUE,
 
@@ -62,10 +65,11 @@ enum class Code
    * indicate the reason.  Most likely it was an internal-IPC failure when sending arena info.
    *
    * @internal
+   *
    * @todo If ipc::shm::arena_lend arena-lending API(s) are modified to output an `Error_code` instead of
    * reporting just success-versus-failure and reporting problem through an async callback, then
-   * ipc::session::error::Code::S_SHM_ARENA_CREATION_FAILED should go away.  See
-   * shm::arena_lend::jemalloc::init_shm() body for more discussion.
+   * ipc::session::shm::arena_lend::jemalloc::error::Code::S_SHM_ARENA_LEND_FAILED should go away.  See
+   * Session_impl::init_shm() body for more discussion.
    */
   S_SHM_ARENA_LEND_FAILED,
 

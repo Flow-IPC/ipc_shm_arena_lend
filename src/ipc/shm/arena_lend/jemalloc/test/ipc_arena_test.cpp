@@ -25,6 +25,7 @@
 #include <gtest/gtest.h>
 #include "ipc/shm/arena_lend/borrower_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/detail/owner_spc_impl.hpp"
+#include "ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp"
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/test/test_jemalloc_pages.hpp"
 #include "ipc/shm/arena_lend/shm_pool.hpp"
@@ -37,7 +38,9 @@
 #include "ipc/test/test_logger.hpp"
 #include <iostream>
 #include <sys/mman.h>
+#include <array>
 #include <deque>
+#include <new>
 #include <random>
 
 using ipc::test::Test_logger;
@@ -1466,6 +1469,30 @@ TEST_F(Ipc_arena_test, Owner_shm_pool_removal)
 
   test_func(true);
   test_func(false);
+}
+
+/* An allocation needing a SHM-pool larger than our fancy-pointer can address must fail cleanly (bad_alloc), not
+ * yield a pool with un-encodable offsets; and the arena must remain usable afterwards.  (No real RAM is involved:
+ * the pool is declined before creation.) */
+TEST_F(Ipc_arena_test, Oversized_allocation)
+{
+  using arena_lend::detail::Shm_pool_offset_ptr_data_base;
+
+  auto collection = create_collection();
+  collection->start();
+
+  void* const p1 = collection->allocate(S_ALLOCATION_SIZE);
+  EXPECT_NE(p1, nullptr);
+
+  const size_t max_pool_sz = Shm_pool_offset_ptr_data_base::max_pool_size();
+  EXPECT_THROW(collection->allocate(max_pool_sz + 1), std::bad_alloc);
+  EXPECT_THROW(collection->allocate(max_pool_sz * 2), std::bad_alloc);
+  EXPECT_THROW((collection->construct<array<char, size_t(1) << 31>>()), std::bad_alloc);
+
+  void* const p2 = collection->allocate(S_ALLOCATION_SIZE);
+  EXPECT_NE(p2, nullptr);
+  collection->deallocate(p2);
+  collection->deallocate(p1);
 }
 
 } // namespace ipc::shm::arena_lend::jemalloc::test

@@ -25,7 +25,7 @@
 /// @file
 #pragma once
 
-#include <ipc/shm/arena_lend/shm_pool_offset_ptr.hpp>
+#include "ipc/shm/arena_lend/shm_pool_offset_ptr.hpp"
 
 namespace ipc::shm::arena_lend
 {
@@ -54,7 +54,7 @@ namespace ipc::shm::arena_lend
  * the proper, compatible borrower-side pointer type is still required.
  *
  * Thus Borrower_allocator_arena is what one shall pass as the `Arena` parameter to `Stateless_allocator`; and
- * it exclusively provides #Pointer.  As not [de]allocation within borrowed containers will ever be
+ * it exclusively provides #Pointer.  As no [de]allocation within borrowed containers will ever be
  * attempted, or even compiled, there is no issue: STL code will only use Stateless_allocator::Pointer which
  * is simply our #Pointer here.
  *

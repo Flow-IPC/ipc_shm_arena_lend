@@ -45,7 +45,8 @@ namespace ipc::shm::arena_lend
  * @tparam CAN_STORE_RAW_PTR Whether a raw pointer can be stored if a pointer cannot be converted to a fancy
  *                               pointer; otherwise, an invalid fancy pointer would be stored that converts to nullptr.
  *
- * @todo Move method definitions out of class declarations.
+ * @todo Move method definitions out of class declarations; and other such stylistic conformance refactoring.
+ * Once all done be sure to enable this class et al for Doxygen doc-generation (currently excluded).
  */
 template <typename Pointed_type,
           typename Repository_type,
@@ -87,11 +88,13 @@ public:
   Shm_pool_offset_ptr() = default;
 
   /**
-   * Construction from raw pointer.
+   * Construction from raw pointer.  It must be a `Pointed_type*`, or implicitly convertible to one, like with a native
+   * pointer (e.g., `nullptr`; derived-to-base); so, e.g., not a pointer to an unrelated type, nor to a more
+   * cv-qualified one.
    *
    * @param p The pointer to an object or nullptr.
    */
-  Shm_pool_offset_ptr(const void* p) :
+  Shm_pool_offset_ptr(Pointer p) :
     m_data(p)
   {
   }
@@ -296,7 +299,11 @@ public:
    */
   friend Difference_type operator-(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return static_cast<Difference_type>(ptr1.get() - ptr2.get());
+    /* Careful: divide by a *signed* sizeof; else the (possibly negative) distance converts to unsigned size_t,
+     * possibly yielding garbage for negative distances. */
+    using diff_t = typename Data::diff_t;
+    return static_cast<Difference_type>(ptr1.m_data.distance_from(ptr2.m_data)
+                                        / static_cast<diff_t>(sizeof(Pointed_type)));
   }
 
   /**
@@ -423,7 +430,7 @@ public:
    */
   friend bool operator<=(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return !(ptr1.get() > ptr2.get());
+    return !operator>(ptr1, ptr2);
   }
   /**
    * Compares two pointers to see if the first is greater than the second.
@@ -447,7 +454,7 @@ public:
    */
   friend bool operator>=(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return !(ptr1.get() < ptr2.get());
+    return !operator<(ptr1, ptr2);
   }
 
   /**

@@ -30,6 +30,7 @@
 #include "ipc/shm/arena_lend/jemalloc/detail/stat_substrate.hpp"
 #include "ipc/shm/arena_lend/owner_shm_pool_listener.hpp"
 #include "ipc/shm/arena_lend/detail/owner_shm_pool_repository.hpp"
+#include "ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp"
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 #include "ipc/shm/arena_lend/detail/thread_lcl_obj_db.hpp"
 #include "ipc/util/process_credentials.hpp"
@@ -895,6 +896,20 @@ void* Ipc_arena::create_shm_pool(void* address, size_t size, size_t alignment, b
 
   assert(zero);
   assert(commit);
+
+  if (size > Shm_pool_offset_ptr_data_base::max_pool_size())
+  {
+    /* jemalloc's retain_grow_limit (see Memory_manager::create_arena()) keeps its routine growth steps within this
+     * limit; but a single allocation request too large for that makes jemalloc ask for an extent sized for it
+     * regardless.  We cannot encode pointers into such a pool (offsets past the limit), so decline; jemalloc then
+     * fails the allocation (=> allocate() throws bad_alloc). */
+    FLOW_LOG_WARNING("Asked to create SHM pool of size [" << size << "], arena [" << arena_id << "], exceeding the "
+                     "max pool size [" << Shm_pool_offset_ptr_data_base::max_pool_size() << "] addressable by "
+                     "our fancy-pointer type.  Probably a single allocation of (nearly) that size or more was "
+                     "attempted.  Declining; the allocation shall fail.");
+    return nullptr;
+  }
+  // else
 
   /* Ultra-unique ID generated here. It's used as a key in various maps including borrower-side global maps.
    *

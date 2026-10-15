@@ -37,6 +37,8 @@
 #include "ipc/transport/struc/shm/arena_lend/jemalloc/jemalloc.hpp"
 #include "ipc/transport/struc/struc_fwd.hpp"
 #include "ipc/util/util_fwd.hpp"
+#include <boost/system/system_error.hpp>
+#include <exception>
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {
@@ -345,35 +347,57 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
     shm_pool_name_prefix /= pool_name_fragment_or_empty;
   }
 
-  m_session_shm
-    = Arena::create(get_logger(),
-                    /* @todo At the moment this is fine: it is even data-free in practice.
-                     * TBD whether "formally" this is correct, or we should be storing a singleton or let user
-                     * pass-in a thing, or what; particularly if this goes beyond jemalloc specifically.
-                     * At the moment it really is fine; even though it derives from a generic-looking Memory_manager,
-                     * echan confirms that's at the moment a basically-abandoned idea.  Nor is there a practical plan
-                     * to really un-abandon it. */
-                    make_shared<Memory_manager>(),
-                    std::move(shm_pool_name_prefix),
-                    /* This is clearly correct if *this super-classes Server_session_impl; but what about
-                     * Client_session_impl, given that the setting comes from Server_app m_srv_app_ref?
-                     * Answer: Yes, still; see discussion in Server_app::m_permissions_level_for_client_apps doc
-                     * header. */
-                    util::shared_resource_permissions
-                      (Base::Base::m_srv_app_ref.m_permissions_level_for_client_apps));
-  if (!m_session_shm)
+  /* Arena::create() throws on failure (it does not return null).  We must catch it: we are in a flow::async thread,
+   * where an uncaught exception would exit() the entire process; whereas this merely means this session cannot
+   * open.  (Realistic causes are environmental limits: e.g., the per-process FD limit, as each SHM-pool takes an FD.)
+   * Emit the exception's own Error_code, if it has one; else a general one of our own. */
+  Error_code create_err_code;
+  try
   {
-    FLOW_LOG_WARNING("Session [" << *this << "]: Failed to create session-scope Arena; "
-                     "details may be found above.  Session will not open.");
+    m_session_shm
+      = Arena::create(get_logger(),
+                      /* @todo At the moment this is fine: it is even data-free in practice.
+                       * TBD whether "formally" this is correct, or we should be storing a singleton or let user
+                       * pass-in a thing, or what; particularly if this goes beyond jemalloc specifically.
+                       * At the moment it really is fine; even though it derives from a generic-looking
+                       * Memory_manager, echan confirms that's at the moment a basically-abandoned idea.  Nor is there
+                       * a practical plan to really un-abandon it. */
+                      make_shared<Memory_manager>(),
+                      std::move(shm_pool_name_prefix),
+                      /* This is clearly correct if *this super-classes Server_session_impl; but what about
+                       * Client_session_impl, given that the setting comes from Server_app m_srv_app_ref?
+                       * Answer: Yes, still; see discussion in Server_app::m_permissions_level_for_client_apps doc
+                       * header. */
+                      util::shared_resource_permissions
+                        (Base::Base::m_srv_app_ref.m_permissions_level_for_client_apps));
+  }
+  catch (const boost::system::system_error& exc) // Including flow::error::Runtime_error.
+  {
+    create_err_code = exc.code() ? exc.code() : Error_code{error::Code::S_SHM_ARENA_CREATION_FAILED};
+    FLOW_LOG_WARNING("Session [" << *this << "]: Failed to create session-scope Arena; exception "
+                     "[" << exc.what() << "]; emitting [" << create_err_code << "] "
+                     "[" << create_err_code.message() << "].  Session will not open.");
+  }
+  catch (const std::exception& exc)
+  {
+    create_err_code = error::Code::S_SHM_ARENA_CREATION_FAILED;
+    FLOW_LOG_WARNING("Session [" << *this << "]: Failed to create session-scope Arena; exception "
+                     "[" << exc.what() << "]; emitting [" << create_err_code << "] "
+                     "[" << create_err_code.message() << "].  Session will not open.");
+  }
+
+  if (create_err_code)
+  {
+    assert(!m_session_shm);
 
     /* We promised to dispose of this at the proper time.  Since we won't create the Channel that would do it,
      * let's do it directly. */
     local_hndl.close();
 
-    // See @todo on this Code; in short if create() emitted an Error_code, we'd just emit that instead here.
-    return error::Code::S_SHM_ARENA_CREATION_FAILED;
+    return create_err_code;
   }
   // else
+  assert(m_session_shm && "Arena::create() throws on failure, else returns non-null.");
 
   /* Next m_shm_session (the lender from any locally-managed arena(s), including m_session_shm; the borrower
    * from opposing-process-managed arena(s)).

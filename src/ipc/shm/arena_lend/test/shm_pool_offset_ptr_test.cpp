@@ -38,6 +38,7 @@
 #include <boost/container/list.hpp>
 #include <flow/util/basic_blob.hpp>
 #include <flow/log/log.hpp>
+#include <flow/test/test_common_util.hpp>
 #include <list>
 
 #include <signal.h>
@@ -237,7 +238,7 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_interface)
 
   void* buffer = arena->allocate(S_BUFFER_SIZE);
 
-  Ptr offset_ptr = Ptr(buffer);
+  Ptr offset_ptr = Ptr(static_cast<My_class*>(buffer));
   EXPECT_NE(offset_ptr.get(), nullptr);
   EXPECT_TRUE(offset_ptr.is_offset());
   EXPECT_FALSE(offset_ptr.is_raw());
@@ -325,7 +326,7 @@ TEST_F(Shm_pool_offset_ptr_test, Raw_pointer_interface)
 {
   uint8_t buffer[S_BUFFER_SIZE] = {};
 
-  Ptr offset_ptr = Ptr(buffer);
+  Ptr offset_ptr = Ptr(reinterpret_cast<My_class*>(buffer));
   EXPECT_NE(offset_ptr.get(), nullptr);
   EXPECT_TRUE(offset_ptr.is_raw());
   EXPECT_FALSE(offset_ptr.is_offset());
@@ -418,7 +419,7 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_only_interface)
 
   void* buffer = arena->allocate(S_BUFFER_SIZE);
 
-  Offset_ptr offset_ptr = Offset_ptr(buffer);
+  Offset_ptr offset_ptr = Offset_ptr(static_cast<My_class*>(buffer));
   EXPECT_NE(offset_ptr.get(), nullptr);
   EXPECT_TRUE(offset_ptr.is_offset());
 
@@ -503,6 +504,42 @@ TEST_F(Shm_pool_offset_ptr_test, Offset_pointer_only_interface)
   EXPECT_TRUE(next_ptr >= next_ptr);
 }
 
+/* Pointer-minus-pointer, in both directions (negative too), for a pointee whose sizeof is not a power of 2 (the
+ * division by sizeof is then sensitive to signedness mistakes); for offset (both owner-side Ptr variant and
+ * offset-only variant) and raw pointers. */
+TEST_F(Shm_pool_offset_ptr_test, Difference_signed_odd_size)
+{
+  struct Odd
+  {
+    size_t m_a;
+    size_t m_b;
+    size_t m_c;
+  };
+  static_assert(sizeof(Odd) == 24, "Want a non-power-of-2 sizeof.");
+  constexpr int N = 3;
+
+  const auto check = [&](auto begin)
+  {
+    const auto end = begin + N;
+    EXPECT_EQ(end - begin, N);
+    EXPECT_EQ(begin - end, -N);
+    EXPECT_EQ(begin - begin, 0);
+  };
+
+  auto& arena = get_arena();
+  void* const buffer = arena->allocate(sizeof(Odd) * (N + 1));
+  const auto odd_buffer = static_cast<Odd*>(buffer);
+
+  FLOW_TEST_TRACE(); check(Ipc_arena::Pointer<Odd>(odd_buffer));
+  FLOW_TEST_TRACE(); check(Ipc_arena_wrapper::Pointer<Odd>(odd_buffer));
+  Odd raw_buffer[N + 1] = {};
+  const Ipc_arena::Pointer<Odd> raw_ptr(raw_buffer);
+  EXPECT_TRUE(raw_ptr.is_raw());
+  FLOW_TEST_TRACE(); check(raw_ptr);
+
+  arena->deallocate(buffer);
+}
+
 /// Tests copy interface.
 TEST_F(Shm_pool_offset_ptr_test, Copy_interface)
 {
@@ -512,15 +549,15 @@ TEST_F(Shm_pool_offset_ptr_test, Copy_interface)
 
   auto& arena = get_arena();
   void* buffer = arena->allocate(sizeof(My_subclass));
-  Ptr object(buffer);
+  Ptr object(static_cast<My_class*>(buffer));
   EXPECT_NE(object, nullptr);
   EXPECT_TRUE(object.is_offset());
-  Subptr subclass_object(buffer);
+  Subptr subclass_object(static_cast<My_subclass*>(buffer));
   EXPECT_NE(subclass_object, nullptr);
   EXPECT_TRUE(subclass_object.is_offset());
 
   uint8_t raw_buffer[S_BUFFER_SIZE] = {};
-  Ptr raw_object(raw_buffer);
+  Ptr raw_object(reinterpret_cast<My_class*>(raw_buffer));
 
   // Copy to another similar object
   {

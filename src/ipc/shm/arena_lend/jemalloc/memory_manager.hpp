@@ -278,7 +278,9 @@ public:
   void deallocate(void* address, arena_id_t arena_id, tcache_id_t thread_cache_id) const noexcept;
 
   /**
-   * Creates a new segregated memory area.  Throws `flow::error::Runtime_error` on jemalloc error.
+   * Creates a new segregated memory area.  Throws `flow::error::Runtime_error` on jemalloc or other error.
+   * In particular jemalloc's `opt.retain` must be enabled (it is by default in 64-bit Linux); if not this throws
+   * as noted (with `.code()` equal to `boost::system::errc::not_supported`) before creating anything.
    *
    * @param extent_hooks
    *        A borrowed handle to a set of callbacks, which may be null to use the default set.

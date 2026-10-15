@@ -310,8 +310,19 @@ void offset_tests() // Static.
   }
 }
 
+/* The gold standard for distance_from(): the byte distance between the two get()s.  (Computed via integers, so
+ * as to be well-defined even when either is null or they are in different pools.) */
+template <typename Data>
+static Shm_pool_offset_ptr_data_base::diff_t expected_distance(Data a, Data b)
+{
+  using diff_t = Shm_pool_offset_ptr_data_base::diff_t;
+  return diff_t(reinterpret_cast<intptr_t>(a.get()) - reinterpret_cast<intptr_t>(b.get()));
+}
+
 /* Verify all 6 comparison relationships between `a` and `b`.  Exactly one of the expect_* flags must be true.
- * Also checks negation consistency (!=, >=, <=) and symmetry/antisymmetry (b vs a). */
+ * Also checks negation consistency (!=, >=, <=) and symmetry/antisymmetry (b vs a).  Lastly checks distance_from()
+ * (in both directions) against its gold standard; the same pairs exercise its code paths, as they mirror
+ * less_than()'s. */
 template <typename Data>
 static void check_cmp(Data a, Data b, bool expect_eq, bool expect_lt, bool expect_gt)
 {
@@ -326,10 +337,17 @@ static void check_cmp(Data a, Data b, bool expect_eq, bool expect_lt, bool expec
   EXPECT_EQ(b.equals(a), expect_eq)         << "b.equals(a) (symmetry)";
   EXPECT_EQ(b.less_than(a), expect_gt)      << "b.less_than(a) (should == a.greater_than(b))";
   EXPECT_EQ(b.greater_than(a), expect_lt)   << "b.greater_than(a) (should == a.less_than(b))";
+
+  // distance_from(): equals the gold standard; antisymmetric; and its sign agrees with the relationship.
+  const auto dist = a.distance_from(b);
+  EXPECT_EQ(dist, expected_distance(a, b))  << "a.distance_from(b)";
+  EXPECT_EQ(b.distance_from(a), -dist)      << "b.distance_from(a) (should == -a.distance_from(b))";
+  EXPECT_EQ(dist == 0, expect_eq)           << "a.distance_from(b) == 0 iff a == b";
+  EXPECT_EQ(dist < 0, expect_lt)            << "a.distance_from(b) < 0 iff a < b";
 }
 
-/* Exhaustive comparison tests for equals(), less_than(), greater_than() -- for the specified Data variation.
- * Both Raw_supported_data and Offset_only_data are exercised (different code paths in each). */
+/* Exhaustive comparison tests for equals(), less_than(), greater_than(), distance_from() -- for the specified Data
+ * variation.  Both Raw_supported_data and Offset_only_data are exercised (different code paths in each). */
 template <typename Data>
 static void comparison_tests();
 
@@ -427,6 +445,14 @@ void comparison_tests() // Static.
     // And trichotomy is broken: neither < nor > either, since both to_address() calls yield the same result.
     EXPECT_FALSE(in_p1.less_than(in_p2));
     EXPECT_FALSE(in_p1.greater_than(in_p2));
+    // distance_from() has no such exception: different pools => it uses the to_address()s; same vaddr => 0.
+    EXPECT_EQ(in_p1.distance_from(in_p2), 0);
+    EXPECT_EQ(in_p2.distance_from(in_p1), 0);
+    /* Same pool, but one offset far out of bounds: the same-pool fast path (offset subtraction) must still yield
+     * the gold standard. */
+    const Data p1_base(S_TEST_POOL_ADDRESS);
+    EXPECT_EQ(in_p1.distance_from(p1_base), Shm_pool_offset_ptr_data_base::diff_t(distance));
+    EXPECT_EQ(p1_base.distance_from(in_p1), -Shm_pool_offset_ptr_data_base::diff_t(distance));
   }
 
   if constexpr(Data::S_CAN_STORE_RAW_PTR)

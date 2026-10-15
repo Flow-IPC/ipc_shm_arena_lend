@@ -30,7 +30,10 @@
 #include "ipc/common.hpp"
 #include <flow/util/string_ostream.hpp>
 #include <flow/util/util.hpp>
-#include <limits>
+#include <boost/system/errc.hpp>
+#include <boost/system/error_code.hpp>
+#include <cassert>
+#include <cstdlib>
 #include <ostream>
 
 namespace ipc::shm::arena_lend::jemalloc
@@ -90,7 +93,30 @@ arena_id_t Memory_manager::create_arena(extent_hooks_t* extent_hooks) const
   using flow::util::Mutex_non_recursive;
   using flow::error::Runtime_error;
   using boost::system::system_category;
-  using std::numeric_limits;
+  namespace errc = boost::system::errc;
+
+  /* Check opt.retain up-front, before creating the arena.  We need it: without it jemalloc refuses to set
+   * retain_grow_limit (ENOENT) -- see below for why we must set that.  Once the arena exists -- wired to
+   * `extent_hooks` (which in practice point into our caller, jemalloc::Ipc_arena, that is in the middle of
+   * being created) -- there is no clean way to back out of a failure; so detect this likeliest cause of such a
+   * failure first.  (opt.retain is on by default in 64-bit Linux; it can be turned off via jemalloc's run-time
+   * configuration, e.g., the `MALLOC_CONF` environment variable -- or its prefixed equivalent, if the jemalloc
+   * build uses an API prefix.) */
+  {
+    bool retain = false;
+    size_t output_size = sizeof(retain);
+    const int ec = IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)("opt.retain", &retain, &output_size, nullptr, 0);
+    if (ec != 0)
+    {
+      throw Runtime_error{Error_code{ec, system_category()}, "je_mallctl() error reading opt.retain."};
+    }
+    if (!retain)
+    {
+      throw Runtime_error{errc::make_error_code(errc::not_supported),
+                          "jemalloc opt.retain is disabled (perhaps via run-time configuration such as "
+                            "MALLOC_CONF); SHM-jemalloc requires it."};
+    }
+  }
 
   arena_id_t arena_id;
 
@@ -145,9 +171,12 @@ static_assert(false, "The logic below might be Linux-specific and has only been 
    * Why we set it:
    *   - Hard correctness bound.  In Flow-IPC-SHM-jemalloc each jemalloc extent is backed
    *     by a real SHM-pool, and our custom-pointer representation cannot encode addresses
-   *     within a pool larger than <see below> (as of this writing ~2Gi bytes).  retain_grow_limit
-   *     must therefore be at most that size, or larger extents would yield un-encodable pointers
-   *     (observed in the field; now it won't happen).
+   *     within a pool larger than Shm_pool_offset_ptr_data_base::max_pool_size() (as of this writing ~2Gi bytes).
+   *     retain_grow_limit must therefore be at most that size, or larger extents would yield un-encodable
+   *     pointers (observed in the field).  However this only caps the *growth steps*: a single allocation
+   *     request too large for any step makes jemalloc request an extent sized for that request regardless
+   *     of the limit.  Ipc_arena::create_shm_pool() (the extent-alloc hook) declines any such too-large extent,
+   *     which completes the guarantee.
    *   - Defensive bound against pathologically-large pools.  SHM objects are subject to
    *     OS-imposed size/count limits that ordinary heap mappings (jemalloc's "no limit"
    *     default audience) are not.  Without a cap, a single arena can grow a pool to many
@@ -162,7 +191,8 @@ static_assert(false, "The logic below might be Linux-specific and has only been 
    *   - This knob, retain_grow_limit, is not really about whether, or how aggressively, the
    *     seemingly-relatedly-named `retain`-flag-knob-controlled feature mmap()s or munmap()s (for us:
    *     creates/destroys SHM-pools) vaddr areas (extents).  It's just the cap of how large
-   *     an extent (SHM-pool) is allowed to be.  It's in effect regardless of the `retain` flag-option.
+   *     an extent (SHM-pool) is allowed to be.  (That said jemalloc refuses to set it unless the `retain`
+   *     flag-option is on; hence our up-front check above.)
    *   - This knob, retain_grow_limit, is also unrelated to the stat `stats.*.retained`, which counts
    *     vaddr space that jemalloc has *retained*: excluded from the `stats.*.mapped` accounting yet kept
    *     mapped -- specifically *not* munmap()ed/returned to the OS -- saved for cheap later reuse (no
@@ -176,20 +206,18 @@ static_assert(false, "The logic below might be Linux-specific and has only been 
    *     the name. */
 
   {
-    constexpr size_t SLACK_SZ = 4 * 1024;
-    unsigned int exponent_of_2 = Shm_pool_offset_ptr_data_base::S_N_POOL_OFFSET_BITS;
-    if constexpr(numeric_limits<Shm_pool_offset_ptr_data_base::pool_offset_t>::is_signed)
-    {
-      --exponent_of_2;
-    }
-    size_t input_param = (size_t(1) << exponent_of_2) - SLACK_SZ; // A/k/a: 2^exponent_of_2 - SLACK_SZ.
+    size_t input_param = Shm_pool_offset_ptr_data_base::max_pool_size();
 
     const int ec
       = IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)(ostream_op_string("arena.", arena_id, ".retain_grow_limit").c_str(),
                                                  nullptr, nullptr, &input_param, sizeof(input_param));
     if (ec != 0)
     {
-      throw Runtime_error{Error_code{ec, system_category()}, "je_mallctl() error on setting retain_grow_limit"};
+      /* The arena exists and is wired to `extent_hooks` (see up-front opt.retain check above for why that makes a
+       * clean back-out impractical).  With opt.retain checked, a failure here means a bad arena ID or limit value:
+       * a bug. */
+      assert(false && "Setting retain_grow_limit failed despite opt.retain check: bug?");
+      std::abort();
     }
   }
 

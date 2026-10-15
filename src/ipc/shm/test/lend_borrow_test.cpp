@@ -41,7 +41,7 @@
  * but on somewhat differently-accessed objects, due to the essential difference between arena-sharing SHM-providers
  * (SHM-classic being the first/reference one) and arena-lending SHM-providers (SHM-jemalloc ditto)).
  *
- * That is, since either flavor (2 flavors x 2 SHM-providers) of borrow_object() (and some incidental related items)
+ * That is, since either variant (2 variants x 2 SHM-providers) of borrow_object() (and some incidental related items)
  * concern accepting serialized (quite small) input, which the user is expected to IPC-over using a method of their
  * choice (can be Flow-IPC -- or not), when sharing native in-SHM objects, we have hardened these to be paranoid
  * about, e.g.: weird alignments, invalid inputs (wrong size, clearly-wrong contents).  So, we needed to test these.
