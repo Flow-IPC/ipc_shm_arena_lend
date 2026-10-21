@@ -28,6 +28,7 @@
 #include "ipc/shm/arena_lend/jemalloc/thread_cache.hpp"
 #include "ipc/shm/arena_lend/jemalloc/stat_info_dump.hpp"
 #include "ipc/shm/arena_lend/jemalloc/detail/stat_substrate.hpp"
+#include "ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp"
 #include "ipc/shm/arena_lend/owner_shm_pool_listener.hpp"
 #include "ipc/shm/arena_lend/detail/owner_shm_pool_repository.hpp"
 #include "ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp"
@@ -38,39 +39,20 @@
 #include <flow/util/util.hpp>
 #include <flow/util/stat/stat_set.hpp>
 #include <flow/log/log.hpp>
+#include <flow/error/error.hpp>
 #include <boost/range/algorithm/sort.hpp>
 #include <boost/range/adaptor/transformed.hpp>
 #include <boost/algorithm/string.hpp>
+#include <boost/system/errc.hpp>
 #include <string>
+#include <vector>
+#include <utility>
 #include <new>
+#include <cassert>
+#include <cstdlib>
 
 namespace ipc::shm::arena_lend::jemalloc
 {
-
-// Local helpers.
-
-namespace
-{
-
-/**
- * (Internal-use) Returns `true` <=> it is safe to consume jemalloc memory-manager stats (`Memory_manager_stats`)
- * given `call_timing` *and* the build environment.
- *
- * @param call_timing
- *        See util::Call_timing doc header(s).
- * @return See above.
- */
-static bool mem_mgr_consume_ok([[maybe_unused]] util::Call_timing call_timing)
-{
-#if IPC_SHM_ARENA_LEND_JEMALLOC_CONCURRENT_ARENAS_UNSAFE
-  return call_timing != util::Call_timing::S_POSSIBLY_UNSAFE;
-#else
-  return true; // Clean jemalloc linked: the bug does not exist; safe regardless of `call_timing`.
-#endif
-  // (Notice we are in .cpp as currently required for IPC_SHM_ARENA_LEND_JEMALLOC_CONCURRENT_ARENAS_UNSAFE checking.)
-}
-
-} // namespace (anon)
 
 // Static initializers.
 
@@ -104,7 +86,6 @@ void Ipc_arena::destroy()
 {
   using ipc::shm::arena_lend::detail::Thread_lcl_obj_db_admin;
   using ipc::shm::arena_lend::detail::Thread_lcl_obj_db_client;
-  using util::Call_timing;
   using flow::log::Log_context_mt;
   using flow::util::ostream_op_string;
 
@@ -217,9 +198,7 @@ void Ipc_arena::destroy()
     dump.m_fmt.m_verbose = false;
     FLOW_LOG_INFO("Ipc_arena [" << this << "] shutdown: "
                   "~Final state (includes ~final this-arena + ~current global):\n"
-                  << (info_dump(&dump,
-                                Call_timing::S_POSSIBLY_UNSAFE), // See jemalloc::Memory_manager docs explanation.
-                      dump) << '.'); // Note: no newline at end of info_dump.
+                  << (info_dump(&dump), dump) << '.'); // Note: no newline at end of info_dump.
   }
 
   /* This is also required but is orthogonal to the much-discussed _admin-oriented stuff and lacks its complexities.
@@ -510,10 +489,10 @@ Ipc_arena::Ipc_arena(flow::log::Logger* logger,
                      const util::Permissions& permissions) :
   Owner_shm_pool_collection(logger,
                              ++m_collection_id_counter,
-                             memory_manager,
                              std::move(pool_name_base),
                              permissions),
   m_owner_id(uint64_t(util::Process_credentials::own_process_id())),
+  m_memory_manager(memory_manager),
   m_arena0(0), // Not valid.
   m_extent_hooks_wrapper({ .alloc = &create_shm_pool_handler,
                            .dalloc = &optional_remove_shm_pool_handler,
@@ -543,7 +522,7 @@ void Ipc_arena::start_impl(unsigned int n_arenas)
   {
     FLOW_LOG_INFO("Creating arena (idx [" << i << "]/0-based of [" << n_arenas << "]/1-based).");
 
-    const arena_id_t arena_id = get_jemalloc_memory_manager()->create_arena(&m_extent_hooks_wrapper);
+    const arena_id_t arena_id = create_jemalloc_arena();
 
     /* Informationally:
      *
@@ -556,11 +535,11 @@ void Ipc_arena::start_impl(unsigned int n_arenas)
      * extent-alloc hook); that fact is actually salient for us -- see optional_remove_shm_pool().
      *
      * Orthogonally: See notes and to-dos in our caller create()'s doc header.  1: Emit error Flow-style (Error_code*
-     * arg, default null, throw if null and problem).  2: Find some way to detect case where ->create_arena() above
-     * throws exception with .code() = resource-unavailable (Linux: EAGAIN) and emit a nicer Error_code of our
-     * own (which would be added to arena_lend::error table).  Easy way, which might catch some other problem too --
-     * but error could include that possibility -- is just to detect that particular error and emit something else in
-     * that case.  Pinpointy way would have our extent hook for pool creation record this outcome. */
+     * arg, default null, throw if null and problem).  2: Find some way to detect case where create_jemalloc_arena()
+     * above throws exception with .code() = resource-unavailable (Linux: EAGAIN) and emit a nicer Error_code of
+     * our own (which would be added to arena_lend::error table).  Easy way, which might catch some other problem
+     * too -- but error could include that possibility -- is just to detect that particular error and emit something
+     * else in that case.  Pinpointy way would have our extent hook for pool creation record this outcome. */
 
 #ifndef NDEBUG
     const auto result =
@@ -580,6 +559,78 @@ void Ipc_arena::start_impl(unsigned int n_arenas)
    * per-bucket since-reset deltas (`-=`) computed in memory_manager_stats(). */
   memory_manager_stats_reset();
 } // Ipc_arena::start_impl()
+
+arena_id_t Ipc_arena::create_jemalloc_arena()
+{
+  using ipc::shm::arena_lend::detail::Shm_pool_offset_ptr_data_base;
+  using detail::stat::mallctl_read;
+  using flow::util::ostream_op_string;
+  using flow::error::Runtime_error;
+  using boost::system::system_category;
+  namespace errc = boost::system::errc;
+
+  /* Check opt.retain up-front, before creating the arena.  We need it: without it jemalloc refuses to set
+   * retain_grow_limit (ENOENT) -- see below for why we must set that.  Once the arena exists -- wired to our
+   * extent hooks -- there is no clean way to back out of a failure; so detect this likeliest cause of such a
+   * failure first.  (opt.retain is on by default in 64-bit Linux; it can be turned off via jemalloc's run-time
+   * configuration, e.g., the MALLOC_CONF environment variable.) */
+  bool retain = false;
+  if (const int ec = mallctl_read("opt.retain", &retain); ec != 0)
+  {
+    throw Runtime_error{Error_code{ec, system_category()}, "je_mallctl() error reading opt.retain."};
+  }
+  if (!retain)
+  {
+    throw Runtime_error{errc::make_error_code(errc::not_supported),
+                        "jemalloc opt.retain is disabled (perhaps via run-time configuration such as "
+                          "MALLOC_CONF); SHM-jemalloc requires it."};
+  }
+
+  const arena_id_t arena_id = get_jemalloc_memory_manager()->create_arena(&m_extent_hooks_wrapper); // Throws.
+
+#ifndef FLOW_OS_LINUX
+  static_assert(false, "The logic below might be Linux-specific and has only been tested in Linux as of this "
+                       "writing.");
+#endif
+  /* Set the arena's retain_grow_limit to Shm_pool_offset_ptr_data_base::max_pool_size().
+   *
+   * jemalloc grows an arena's mapped vaddr footprint via a series of extent-alloc requests (for us: each a new
+   * SHM-pool), each geometrically larger than the last; retain_grow_limit caps the size of each such growth step.
+   * (This geometric growth happens only in jemalloc's retain mode: hence the name; hence jemalloc's refusal to set
+   * it without opt.retain; hence our check above.)  The default is effectively no limit.
+   *
+   * Why we set it:
+   *   - Hard correctness bound.  Our fancy-pointer representation cannot encode addresses within a pool larger
+   *     than max_pool_size() (~2Gi bytes as of this writing).  This caps only the growth steps, though: a single
+   *     allocation request too large for any step makes jemalloc request an extent sized for that request
+   *     regardless.  create_shm_pool() (the extent-alloc hook) declines any such too-large extent, which completes
+   *     the guarantee.
+   *   - Defensive bound.  SHM objects are subject to OS-imposed size/count limits that ordinary heap mappings are
+   *     not.  Without a cap, an arena can grow a pool to many GBs of vaddr even when RAM-resident usage is much
+   *     smaller -- observed in the field, in fact, prompting the original choice of this value.
+   *
+   * Despite the name, this is unrelated to the `stats.*.retained` stat, which counts vaddr jemalloc keeps mapped for
+   * later reuse (for us: pools, or ranges thereof, whose removal optional_remove_shm_pool() declined, their physical
+   * pages having been released). */
+  size_t input_param = Shm_pool_offset_ptr_data_base::max_pool_size();
+  const int ec
+    = IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)(ostream_op_string("arena.", arena_id, ".retain_grow_limit").c_str(),
+                                               nullptr, nullptr, &input_param, sizeof(input_param));
+  if (ec != 0)
+  {
+    /* The arena exists and is wired to our extent hooks (see up-front opt.retain check above for why that makes a
+     * clean back-out impractical).  With opt.retain checked, a failure here means a bad arena ID or limit value:
+     * a bug. */
+    const Error_code sys_err_code{ec, system_category()};
+    FLOW_LOG_FATAL("Setting retain_grow_limit to [" << input_param << "] for new jemalloc-arena [" << arena_id << "] "
+                   "failed despite opt.retain check: system error [" << sys_err_code << "] "
+                   "[" << sys_err_code.message() << "].  Bug?");
+    assert(false && "Setting retain_grow_limit failed despite opt.retain check: bug?");
+    std::abort();
+  }
+
+  return arena_id;
+} // Ipc_arena::create_jemalloc_arena()
 
 void* Ipc_arena::allocate(size_t size)
 {
@@ -620,12 +671,12 @@ void* Ipc_arena::allocate_impl(size_t size)
   // ^-- Tcache support is stable but turning it off can simplify specific profiling/debugging.
   if (skip_fast_path_verbose_logging())
   {
-    return get_jemalloc_memory_manager()->allocate(size, arena_id);
+    return get_jemalloc_memory_manager()->allocate_no_tcache(size, arena_id);
   }
   // else
 
   FLOW_LOG_DATA("Allocating size [" << size << "], arena [" << arena_id << "], no tcache.");
-  void* const buf = get_jemalloc_memory_manager()->allocate(size, arena_id);
+  void* const buf = get_jemalloc_memory_manager()->allocate_no_tcache(size, arena_id);
   FLOW_LOG_DATA("Allocated size [" << size << "], arena [" << arena_id << "], no tcache, "
                 "resulting in [" << buf << "].");
   return buf;
@@ -686,7 +737,7 @@ void Ipc_arena::deallocate(void* address) noexcept
    * once the handle group hits ref-count 0 (no construct()ed objects remain to allocate() things). */
 
 #if IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE
-  get_jemalloc_memory_manager()->deallocate(address, arena_id);
+  get_jemalloc_memory_manager()->deallocate_no_tcache(address);
 #else // #if !IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE
   // Suggest reading Thread_cache class doc header for background on jemalloc-tcache.
 
@@ -699,8 +750,8 @@ void Ipc_arena::deallocate(void* address) noexcept
    *
    * In many cases, in and of itself, it would be fine and good.  Say allocate(arena_id) returned `address` in
    * thread T1, and we are deallocate()ing in thread T2, and one has never allocate(arena_id)ed in T2 so far.
-   * Creating the tcache here would push `address` into a new tcache, and further deallocate(arena_id)s would
-   * keep pushing onto it sans mutex-locking -- better than the normal mutex-locking no-tcache dallocx().
+   * Creating the tcache here would push `address` into a new tcache, and further deallocate(<thing from arena_id>)s
+   * would keep pushing onto it sans mutex-locking -- better than the normal mutex-locking no-tcache dallocx().
    *
    * The danger area is during, generally speaking, "things" going down -- the user would not be triggering
    * deallocate() themselves, but our obj-DB tracking system might.  1, at thread exit
@@ -755,7 +806,7 @@ void Ipc_arena::deallocate(void* address) noexcept
      * may be sitting in the calling thread's tcache.  (See discussion at end of function for how it comes to
      * be -- and how commonly -- that the allocating thread differs from ours.) */
 
-    get_jemalloc_memory_manager()->deallocate(address, arena_id, tcache_id_for_arena);
+    get_jemalloc_memory_manager()->deallocate(address, tcache_id_for_arena);
     return;
   } // if (tcache_id_for_arena != Thread_cache::S_NO_TCACHE_ID)
   // else: No tcache available in this thread (yet), for this arena.
@@ -763,7 +814,7 @@ void Ipc_arena::deallocate(void* address) noexcept
   /* Do a similar thing to the NO_TCACHE snippet above.  (Slight perf loss results versus the tcache path
    * above -- the alloc was tcache-enabled, but this thread has not requested tcache creation for the arena,
    * presumably having never allocated in it at this layer.) */
-  get_jemalloc_memory_manager()->deallocate(address, arena_id);
+  get_jemalloc_memory_manager()->deallocate_no_tcache(address);
 
   /* Discussion for context: Suppose end user's actual code *outside any SHM-aware allocators* refrains from making
    * direct [de]allocate() calls (which isn't disallowed either incidentally).  That represents not-guaranteed
@@ -899,7 +950,7 @@ void* Ipc_arena::create_shm_pool(void* address, size_t size, size_t alignment, b
 
   if (size > Shm_pool_offset_ptr_data_base::max_pool_size())
   {
-    /* jemalloc's retain_grow_limit (see Memory_manager::create_arena()) keeps its routine growth steps within this
+    /* jemalloc's retain_grow_limit (see create_jemalloc_arena()) keeps its routine growth steps within this
      * limit; but a single allocation request too large for that makes jemalloc ask for an extent sized for it
      * regardless.  We cannot encode pointers into such a pool (offsets past the limit), so decline; jemalloc then
      * fails the allocation (=> allocate() throws bad_alloc). */
@@ -1001,12 +1052,12 @@ bool Ipc_arena::optional_remove_shm_pool([[maybe_unused]] void* address,
    * case; possibly a whole one], if you want; or you can refuse, and I'll memorize it -- still mapped -- in my
    * *retained* set and reuse it for allocations later."  (On our declining, jemalloc shall also -- via our
    * decommit/purge hooks -- release the range's backing physical pages by SHM-object hole-punching; so
-   * retention costs vaddr and SHM-pool-count footprint, not RAM.  See also `stats.*.retained` discussion in
-   * Memory_manager::create_arena().)  At some point
+   * retention costs vaddr and SHM-pool-count footprint, not RAM.  See also `stats.*.retained` note in
+   * create_jemalloc_arena().)  At some point
    * users reported pools (note: vaddr areas; does not mean actual RAM use until allocation in there happens)
    * growing to huge sizes, so echan did a couple of basic things w/r/t keeping existing areas for reuse.  This was
    * one of them, I think.  Another was capping the size of any single such vaddr area (SHM-pool):
-   * `retain_grow_limit`, set at arena creation (again see Memory_manager::create_arena()).
+   * `retain_grow_limit`, set at arena creation (again see create_jemalloc_arena()).
    *
    * The above concerns mid-arena-life requests.  This hook also fires during native-arena destruction (see
    * destroy()); there:
@@ -1406,9 +1457,9 @@ arena_id_t Ipc_arena::get_jemalloc_arena_id() const
   return m_arena0;
 }
 
-std::shared_ptr<Memory_manager> Ipc_arena::get_jemalloc_memory_manager() const
+const std::shared_ptr<Memory_manager>& Ipc_arena::get_jemalloc_memory_manager() const
 {
-  return std::static_pointer_cast<Memory_manager>(get_memory_manager());
+  return m_memory_manager;
 }
 
 Ipc_arena::Uniq_arena_id Ipc_arena::uniq_arena_id() const
@@ -1421,15 +1472,13 @@ Ipc_arena::Uniq_arena_id Ipc_arena::uniq_arena_id() const
   return { m_owner_id, get_id() };
 }
 
-void Ipc_arena::info_dump(Info_dump* target_info_dump, util::Call_timing call_timing)
+void Ipc_arena::info_dump(Info_dump* target_info_dump)
 {
   using flow::util::stat::stats_assign;
-  using std::vector;
   using std::string;
 
   assert(target_info_dump);
-  target_info_dump->m_mem_mgr_stats = mem_mgr_consume_ok(call_timing) ? memory_manager_stats()
-                                                                      : vector<Memory_manager_stats>{};
+  target_info_dump->m_mem_mgr_stats = memory_manager_stats();
   // Info_dump_format contract allows us to not even collect this now.
   target_info_dump->m_mem_mgr_stats_dump = target_info_dump->m_fmt.m_verbose
                                              ? get_jemalloc_memory_manager()->stats_dump_to_string()
@@ -1520,50 +1569,48 @@ void Ipc_arena::this_thread_gc() // Static.
 std::vector<Ipc_arena::Memory_manager_stats> Ipc_arena::memory_manager_stats()
 {
   using detail::stat::config_stats_enabled;
-  using detail::stat::epoch_refresh;
   using flow::util::stat::stats_since_reset_state;
   using std::vector;
 
-  vector<Memory_manager_stats> result_id_sorted;
-  result_id_sorted.reserve(m_arenas.size());
-
-  // The arena-identifying ID is ours to know regardless of jemalloc's build flags; set it on every row.
+  /* m_arenas is a std::set => iteration is ascending by native (jemalloc) arena-ID; hence the result is sorted
+   * that way, as promised by our contract.  The arena-identifying IDs are ours to know regardless of jemalloc's
+   * build flags; set them on every row. */
+  vector<Memory_manager_stats> result_id_sorted(m_arenas.size());
   const auto uniq_id = uniq_arena_id();
+  {
+    size_t idx = 0;
+    for (const auto arena_id : m_arenas)
+    {
+      auto& row = result_id_sorted[idx++];
+      row.m_uniq_arena_id = uniq_id;
+      row.m_native_arena_id = uint64_t(arena_id);
+    }
+  }
 
   /* The jemalloc-sourced gauges require a stats-enabled jemalloc build.  If absent: still emit a row per arena
    * (with IDs set), but leave the real stat-members at defaults (zeroes probably) -- as advertised. */
-  const bool stats_on = config_stats_enabled();
-  if (stats_on)
+  if (!config_stats_enabled())
   {
-    epoch_refresh(); // Once => a consistent snapshot across all the arenas read just below.
+    return result_id_sorted;
   }
+  // else: populate the raw stat-members, then fold them into the since-reset view (including HI_WMARKs).
 
-  /* m_arenas is a std::set => iteration is ascending by native (jemalloc) arena-ID; hence the result is sorted
-   * that way, as promised by our contract. */
+  // Lock throughout, including the raw reads; see detail::jemalloc_stats_mutex() and m_mem_mgr_base_stats doc headers.
+  Lock lock{detail::jemalloc_stats_mutex()};
+
+  memory_manager_snapshot_read(&result_id_sorted);
+
+  /* Formally speaking we do here what flow::util::stat::stats_since_reset_state() doc header prescribes:
+   * read the raw values from data-source (jemalloc-stats), then do the following against -- and potentially
+   * updating -- m_mem_mgr_base_stats[arena_id].  As a reminder though: ACCUMULATORs are -=ed against the base values;
+   * GAUGEs are left alone; HI_WMARKs are chosen as the higher of the new GAUGE value and the one in
+   * m_mem_mgr_base_stats; and lastly if the former then the HI_WMARK in base struct is updated to the new max too
+   * (for next time we do this if any). */
+  size_t idx = 0;
   for (const auto arena_id : m_arenas)
   {
-    auto& row = result_id_sorted.emplace_back();
-    row.m_uniq_arena_id = uniq_id;
-    row.m_native_arena_id = uint64_t(arena_id);
-
-    if (!stats_on)
-    {
-      continue; // Leave this row's gauges + HWMs at default (all zero).
-    }
-    // else: populate the raw stat-members, then fold them into the since-reset view (including HI_WMARKs).
-
-    memory_manager_vaddr_stats_read(arena_id, &row.m_vaddr); // Raw values; no lock needed (jemalloc is thread-safe).
-    memory_manager_alloc_stats_read(arena_id, &row.m_alloc); // Ditto.
-
-    /* Formally speaking we do here what flow::util::stat::stats_since_reset_state() doc header prescribes:
-     * read the raw values from data-source (jemalloc-stats), then do the following against -- and potentially
-     * updating -- m_mem_mgr_base_stats[arena_id].  As a reminder though: ACCUMULATORs are -=ed against the base values;
-     * GAUGEs are left alone; HI_WMARKs are chosen as the higher of the new GAUGE value and the one in
-     * m_mem_mgr_base_stats; and lastly if the former then the HI_WMARK in base struct is updated to the new max too
-     * (for next time we do this if any). */
-    Lock lock{m_mem_mgr_base_stats_mutex};
-    stats_since_reset_state(&row, &(m_mem_mgr_base_stats.at(arena_id)));
-  } // for (arena_id : m_arenas)
+    stats_since_reset_state(&result_id_sorted[idx++], &(m_mem_mgr_base_stats[arena_id]));
+  }
 
   return result_id_sorted;
 } // Ipc_arena::memory_manager_stats()
@@ -1571,8 +1618,8 @@ std::vector<Ipc_arena::Memory_manager_stats> Ipc_arena::memory_manager_stats()
 void Ipc_arena::memory_manager_stats_reset()
 {
   using detail::stat::config_stats_enabled;
-  using detail::stat::epoch_refresh;
   using flow::util::stat::stats_mark_reset_state;
+  using std::vector;
 
   /* Formally speaking we do here what flow::util::stat::stats_since_reset_state() doc header prescribes.
    * Read that guy please for details of how it all works.  Basically, though, we are to grab the raw
@@ -1588,19 +1635,58 @@ void Ipc_arena::memory_manager_stats_reset()
   }
   // else:
 
-  epoch_refresh();
+  vector<Memory_manager_stats> rows(m_arenas.size());
 
+  // Lock throughout, including the raw reads; see detail::jemalloc_stats_mutex() and m_mem_mgr_base_stats doc headers.
+  Lock lock{detail::jemalloc_stats_mutex()};
+
+  memory_manager_snapshot_read(&rows);
+
+  /* Install current raw reading as the new baseline, then mark (sets each HI_WMARK = its gauge => running
+   * max restarts at "now"). */
+  size_t idx = 0;
   for (const auto arena_id : m_arenas)
   {
-    /* Install current raw reading as the new baseline, then mark (sets each HI_WMARK = its gauge => running
-     * max restarts at "now").  Lock: we write the shared base value.  See #m_mem_mgr_base_stats_mutex. */
-    Lock lock{m_mem_mgr_base_stats_mutex};
-    auto& base = m_mem_mgr_base_stats.at(arena_id);
-    memory_manager_vaddr_stats_read(arena_id, &base.m_vaddr);
-    memory_manager_alloc_stats_read(arena_id, &base.m_alloc);
+    auto& base = m_mem_mgr_base_stats[arena_id];
+    auto& row = rows[idx++];
+    base.m_vaddr = std::move(row.m_vaddr);
+    base.m_alloc = std::move(row.m_alloc);
     stats_mark_reset_state(&base);
-  } // for (arena_id : m_arenas)
+  }
 } // Ipc_arena::memory_manager_stats_reset()
+
+void Ipc_arena::memory_manager_snapshot_read(std::vector<Memory_manager_stats>* rows) const
+{
+  using detail::stat::epoch_refresh;
+  using detail::stat::epoch;
+
+  assert(rows && (rows->size() == m_arenas.size()));
+
+  // See our doc header for the reasoning behind all this.  (Pre-condition: detail::jemalloc_stats_mutex() locked.)
+  auto snapshot_epoch = epoch_refresh();
+  while (true)
+  {
+    size_t idx = 0;
+    for (const auto arena_id : m_arenas)
+    {
+      auto& row = (*rows)[idx++];
+      memory_manager_vaddr_stats_read(arena_id, &row.m_vaddr);
+      memory_manager_alloc_stats_read(arena_id, &row.m_alloc);
+    }
+
+    const auto epoch_now = epoch();
+    if (epoch_now == snapshot_epoch)
+    {
+      return; // Nobody refreshed while we were reading: all from 1 snapshot.
+    }
+    // else
+
+    FLOW_LOG_INFO("Ipc_arena [" << this << "]: jemalloc stats were refreshed elsewhere (epoch "
+                  "[" << snapshot_epoch << "] => [" << epoch_now << "]) while we were reading them; reading them "
+                  "again.  This is normal but should be infrequent.");
+    snapshot_epoch = epoch_now;
+  } // while (true)
+} // Ipc_arena::memory_manager_snapshot_read()
 
 void Ipc_arena::memory_manager_vaddr_stats_read(arena_id_t arena_id, Memory_manager_stats::Vaddr* vaddr) const
 {
@@ -1662,15 +1748,12 @@ void Ipc_arena::memory_manager_alloc_stats_read(arena_id_t arena_id, Memory_mana
                                             &alloc->m_histo_alloc_count_by_sz);
 } // Ipc_arena::memory_manager_alloc_stats_read()
 
-void Ipc_arena::sample_hi_wmarks(util::Call_timing call_timing)
+void Ipc_arena::sample_hi_wmarks()
 {
   FLOW_LOG_TRACE("Ipc_arena [" << this << "]: Stat-consuming a couple things: high-water-mark refresh requested.");
 
   sharded_stats(nullptr);
-  if (mem_mgr_consume_ok(call_timing))
-  {
-    memory_manager_stats();
-  }
+  memory_manager_stats();
 }
 
 std::ostream& operator<<(std::ostream& os, const Ipc_arena& val)

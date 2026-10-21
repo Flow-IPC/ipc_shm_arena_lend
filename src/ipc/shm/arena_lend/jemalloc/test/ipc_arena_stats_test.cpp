@@ -26,6 +26,8 @@
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/arena_lend/jemalloc/memory_manager.hpp"
 #include "ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp"
+#include "ipc/shm/arena_lend/jemalloc/detail/jemalloc_fwd.hpp"
+#include "ipc/shm/arena_lend/jemalloc/detail/stat_substrate.hpp"
 #include "ipc/shm/arena_lend/detail/stats.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
@@ -37,6 +39,8 @@
 #include <gtest/gtest.h>
 #include <algorithm>
 #include <array>
+#include <atomic>
+#include <thread>
 #include <iostream>
 #include <memory>
 #include <string>
@@ -58,7 +62,8 @@
  *   - Single-threaded-in-sequence: tasks are posted with wait-for-completion; nothing races.  Concurrency of
  *     stat-consumption versus thread teardown (the "Gap") is intentionally out of scope here and covered by
  *     its dedicated test: Thread_lcl_obj_db_test.Stats_consume_vs_thread_exit_gap (thread_lcl_obj_db_test.cpp).
- *     So do not "improve" this test into a race test. */
+ *     So do not "improve" this test into a race test.  (Exception: TEST memory_manager_stats_concurrent_refreshes
+ *     races stats-consumption on purpose; its own arena-touching is confined to it.) */
 
 namespace ipc::shm::arena_lend::jemalloc::test
 {
@@ -967,7 +972,7 @@ TEST(Ipc_arena_stats_test, info_dumps_and_globals)
 
   // Owner-side dump: every member == its source accessor, sampled with no activity in between.
   Arena::Info_dump dump;
-  arena->info_dump(&dump, util::Call_timing::S_ALWAYS_SAFE);
+  arena->info_dump(&dump);
   EXPECT_EQ(dump.m_sharded_stats.m_owner_obj.m_construct_count.load(), 1u);
   EXPECT_EQ(dump.m_sharded_stats.m_owner_obj_arena_lend.m_sync_destroy_count.load(), 1u);
   EXPECT_EQ(dump.m_sharded_stats.m_lend_obj.m_lend_count.load(), 1u);
@@ -984,15 +989,13 @@ TEST(Ipc_arena_stats_test, info_dumps_and_globals)
     EXPECT_GE(aux_global.m_client_tl_aux_pool_live_hndls_hi_wmark.load(),
               aux_global.m_client_tl_aux_pool_live_hndls.load());
   }
-  /* The jemalloc pieces.  They are present in a non-buggy jemalloc build regardless of Call_timing... but we
-   * use ALWAYS_SAFE to avoid the issue entirely; anyway nothing evil (see info_dump() doc header) is going on
-   * at the moment, so we're fine. */
+  // The jemalloc pieces.
   EXPECT_FALSE(dump.m_mem_mgr_stats_dump.empty());
   EXPECT_GE(dump.m_mem_mgr_stats.size(), 1u);
 
   // Borrower-side dump, ditto; plus the per-arena breakdown keyed by our arena's unique ID.
   Shm_session_t::Info_dump session_dump;
-  srv_shm_session->info_dump(&session_dump, util::Call_timing::S_ALWAYS_SAFE);
+  srv_shm_session->info_dump(&session_dump);
   EXPECT_EQ(session_dump.m_borrower_pool_stats.m_pool_open_count.load(),
             srv_shm_session->borrower_pool_stats().m_pool_open_count.load());
   EXPECT_GE(session_dump.m_borrower_pool_stats.m_n_open_pools.load(), 1u);
@@ -1041,7 +1044,7 @@ TEST(Ipc_arena_stats_test, info_dumps_and_globals)
   {
     Arena::Info_dump pithy_dump;
     pithy_dump.m_fmt.m_verbose = false;
-    arena->info_dump(&pithy_dump, util::Call_timing::S_ALWAYS_SAFE);
+    arena->info_dump(&pithy_dump);
     EXPECT_TRUE(pithy_dump.m_mem_mgr_stats_dump.empty());
     EXPECT_GE(pithy_dump.m_mem_mgr_stats.size(), 1u);
     pithy_dump.m_fmt.m_multiline = true;
@@ -1075,7 +1078,7 @@ TEST(Ipc_arena_stats_test, info_dumps_and_globals)
 
     Shm_session_t::Info_dump pithy_session_dump;
     pithy_session_dump.m_fmt.m_verbose = false;
-    srv_shm_session->info_dump(&pithy_session_dump, util::Call_timing::S_ALWAYS_SAFE);
+    srv_shm_session->info_dump(&pithy_session_dump);
     Shm_session_t::Borrower_pool_stats_list all_list;
     Shm_session_t::borrower_pool_stats_process_wide(&all_list);
 
@@ -1148,8 +1151,7 @@ TEST(Ipc_arena_stats_test, info_dumps_and_globals)
 
 /* Batch 6: memory_manager_stats() -- the jemalloc-sourced per-arena stats -- value assertions (these
  * outputs, while long since printing fine, have never been asserted-on before).  The ground rules, from
- * the jemalloc source (verified against 5.3.0, the min version modulo escape hatches; 5.2.1/5.3.1
- * identical in all ways relevant here):
+ * the jemalloc source (verified against 5.3.0, the min version; 5.3.1 identical in all ways relevant here):
  *   - SHM-jemalloc routes every allocation through a per-(thread, arena) tcache.  The alloc-family
  *     counters (m_alloc_count/_sz etc.) account at the slab boundary: a small-class allocation may pull a
  *     *batch* of regions into the cache (inflating alloc-count beyond the user's call count), and a free
@@ -1165,9 +1167,8 @@ TEST(Ipc_arena_stats_test, info_dumps_and_globals)
  * Both histogram buckets are addressed by *request size* = sizeof(T) (allocate() forwards it unmodified).
  * Also covered: Sigma(count-histo) == alloc_count; live = alloc - dealloc; the quiesced byte-tie;
  * vaddr gauge sanity (mapped >= resident >= active); row identity; consume idempotence; the
- * mark/since-reset-state machinery (its first asserted outing); and the S_POSSIBLY_UNSAFE-in-clean-build
- * dump gate.  (An UNSAFE-tier jemalloc build's suppression path is not exercisable from the normal
- * suite; and the no-tcache build's stronger identities live in the #ifdef block below.) */
+ * mark/since-reset-state machinery (its first asserted outing); and info_dump()'s inclusion of these stats.
+ * (The no-tcache build's stronger identities live in the #ifdef block below.) */
 TEST(Ipc_arena_stats_test, memory_manager_stats)
 {
   FLOW_LOG_SET_CONTEXT(g_logger_console, Log_component::S_TEST);
@@ -1310,17 +1311,177 @@ TEST(Ipc_arena_stats_test, memory_manager_stats)
   EXPECT_EQ(stats.m_alloc.m_histo_alloc_count_by_sz.count_for_bucket_containing_outcome(BIG_REQUEST_SZ), 1u);
   loop2.stop();
 
-  /* The dump gate: in a clean-jemalloc build (the only kind this suite runs under), even
-   * S_POSSIBLY_UNSAFE consume-OKs; the UNSAFE-tier suppression path is compile-time dead here and
-   * intentionally unexercised. */
+  // info_dump() includes these stats (and the raw jemalloc dump).
   Arena::Info_dump dump;
-  arena->info_dump(&dump, util::Call_timing::S_POSSIBLY_UNSAFE);
+  arena->info_dump(&dump);
   EXPECT_GE(dump.m_mem_mgr_stats.size(), 1u);
   EXPECT_FALSE(dump.m_mem_mgr_stats_dump.empty());
 
   FLOW_LOG_INFO("memory_manager_stats() after full sequence (for the eyeball): "
                 "[" << flow::util::stat::print(row()) << "].");
 } // TEST(Ipc_arena_stats_test, memory_manager_stats)
+
+/* memory_manager_stats() amid concurrent jemalloc-stats activity -- a deliberate exception to this file's
+ * single-threaded-in-sequence rule (see top).  jemalloc keeps one process-wide stats snapshot, which anyone may
+ * refresh at any time.  Flow-IPC's own stats operations are serialized among themselves; a refresh by outside code
+ * in the middle of a stats read is detected, and the reading is retried (see
+ * Ipc_arena::memory_manager_snapshot_read()).  Here the main thread repeatedly consumes memory_manager_stats(),
+ * while:
+ *   - a churn thread keeps allocating and deallocating in the arena, so the counters keep moving;
+ *   - a refresher thread refreshes the snapshot directly (standing in for outside code), in bursts: back-to-back
+ *     refreshes for a few ms, then a pause longer than one stats read (~1-3ms in a -O0 build), during which a
+ *     retried read gets through;
+ *   - a resetter thread keeps calling memory_manager_stats_reset().
+ *
+ * The key check: in a consistent snapshot the by-size histogram's total equals the alloc-count exactly (jemalloc
+ * derives the latter by summing the same per-size-class counters).  The alloc-count is read near the start of a
+ * pass and the histogram near its end; so a torn pass -- refreshed in between, with the churn moving those
+ * counters -- breaks the equality.  (Confirmed: with the retry disabled, the test fails every time.  That took the
+ * bursts; sparse refreshes rarely land within a pass's short reading phase.)  We also check for counters that
+ * underflowed to a huge number, a torn pass's more dramatic symptom; but that needs a refresh to land within a
+ * few-microsecond window, so on its own it rarely triggers. */
+TEST(Ipc_arena_stats_test, memory_manager_stats_concurrent_refreshes)
+{
+  using flow::util::this_thread::sleep_for;
+  using flow::Fine_clock;
+  using flow::Fine_duration;
+  using boost::chrono::milliseconds;
+  using boost::chrono::microseconds;
+  using boost::chrono::round;
+  using std::atomic;
+  using std::thread;
+  using std::max;
+
+  FLOW_LOG_SET_CONTEXT(g_logger_console, Log_component::S_TEST);
+
+  auto raw_pair = make_session_channel_pair<MqType::NONE, false, ShmType::JEMALLOC>(g_logger, 0);
+  auto& sessions = *raw_pair.m_sessions;
+  Arena* const arena = sessions.m_cli_session.session_shm();
+  ASSERT_TRUE(arena);
+
+  using Big_blob = std::array<unsigned char, 64 * 1024>; // Above max-cached class: counted immediately.
+  constexpr size_t N_READS = 300;
+  /* An underflow lands near 2^64.  Real values can be large, though: e.g., cumulative since-reset bytes with
+   * 64KiB-blob churn reach 2^40 in well under an hour, if resets are held off. */
+  constexpr uint64_t SANE_MAX = uint64_t(1) << 62;
+
+  /* Timing diagnostics (logged; not asserted): with nothing else going on, the cost of 1 refresh and of 1
+   * memory_manager_stats() (~= 1 pass).  A refresh's cost grows with the number of jemalloc arenas initialized in
+   * the process so far. */
+  const auto time_avg = [&](const auto& func) -> Fine_duration
+  {
+    constexpr size_t N_BASELINE = 20;
+    const auto start = Fine_clock::now();
+    for (size_t idx = 0; idx != N_BASELINE; ++idx)
+    {
+      func();
+    }
+    return (Fine_clock::now() - start) / N_BASELINE;
+  };
+  const auto refresh_baseline = time_avg([]() { detail::stat::epoch_refresh(); });
+  const auto consume_baseline = time_avg([&]() { arena->memory_manager_stats(); });
+  unsigned int n_arenas = 0;
+  detail::stat::mallctl_read("arenas.narenas", &n_arenas);
+  FLOW_LOG_INFO("Baseline (quiet): refresh ~[" << round<microseconds>(refresh_baseline) << "]; "
+                "memory_manager_stats() ~[" << round<microseconds>(consume_baseline) << "]; "
+                "arenas.narenas = [" << n_arenas << "].");
+
+  atomic<bool> stop{false};
+
+  Single_thread_task_loop loop_churn{g_logger, "jstats_churn"};
+  loop_churn.start();
+  loop_churn.post([&]()
+  {
+    while (!stop)
+    {
+      auto big = arena->construct<Big_blob>();
+      auto small = arena->construct<uint64_t>(uint64_t(0));
+    } // Both deallocated each iteration => live-count hovers near 0, where an underflow is easiest.
+  });
+
+  const auto epoch_start = detail::stat::epoch();
+  size_t n_refreshes = 0; // These 3: touched only by `refresher` until it is joined.
+  Fine_duration refresh_total{0};
+  Fine_duration refresh_max{0};
+  thread refresher([&]()
+  {
+    constexpr auto BURST = milliseconds{5};
+    constexpr auto PAUSE = milliseconds{5};
+    while (!stop)
+    {
+      const auto burst_start = Fine_clock::now();
+      while ((!stop) && ((Fine_clock::now() - burst_start) < BURST))
+      {
+        const auto start = Fine_clock::now();
+        detail::stat::epoch_refresh();
+        const auto dur = Fine_clock::now() - start;
+        ++n_refreshes;
+        refresh_total += dur;
+        refresh_max = max(refresh_max, dur);
+      }
+      sleep_for(PAUSE);
+    }
+  });
+  thread resetter([&]()
+  {
+    while (!stop)
+    {
+      arena->memory_manager_stats_reset();
+      sleep_for(milliseconds{20});
+    }
+  });
+
+  size_t n_bad = 0;
+  Fine_duration consume_max{0};
+  const auto loop_start = Fine_clock::now();
+  for (size_t idx = 0; idx != N_READS; ++idx)
+  {
+    const auto start = Fine_clock::now();
+    const auto rows = arena->memory_manager_stats();
+    consume_max = max(consume_max, Fine_duration(Fine_clock::now() - start));
+    if (rows.size() != 1)
+    {
+      ADD_FAILURE() << "Expected 1 row; got [" << rows.size() << "].";
+      break; // Not ASSERT_*(): that would return with our threads still running.
+    }
+    const auto& alloc = rows[0].m_alloc;
+
+    uint64_t histo_sum = 0;
+    for (size_t bucket_idx = 0; bucket_idx != alloc.m_histo_alloc_count_by_sz.size(); ++bucket_idx)
+    {
+      histo_sum += uint64_t(alloc.m_histo_alloc_count_by_sz.count_for_bucket(bucket_idx));
+    }
+
+    const bool sane = (histo_sum == alloc.m_alloc_count) // The key check (see above).
+                      && (alloc.m_live_count < SANE_MAX) && (alloc.m_live_count_hi_wmark < SANE_MAX)
+                      && (alloc.m_live_sz < SANE_MAX) && (alloc.m_live_sz_hi_wmark < SANE_MAX)
+                      && (alloc.m_alloc_count < SANE_MAX) && (alloc.m_dealloc_count < SANE_MAX)
+                      && (alloc.m_alloc_sz < SANE_MAX) && (alloc.m_dealloc_sz < SANE_MAX);
+    if ((!sane) && (++n_bad == 1))
+    {
+      FLOW_LOG_WARNING("First inconsistent memory_manager_stats() (read [" << idx << "]; histogram total "
+                       "[" << histo_sum << "] vs. alloc-count [" << alloc.m_alloc_count << "]): "
+                       "[" << flow::util::stat::print(rows[0]) << "].");
+    }
+  }
+
+  const auto loop_dur = Fine_clock::now() - loop_start;
+
+  stop = true;
+  refresher.join();
+  resetter.join();
+  loop_churn.stop();
+
+  EXPECT_EQ(n_bad, 0u);
+  FLOW_LOG_INFO("Done: [" << N_READS << "] reads in [" << round<milliseconds>(loop_dur) << "]; "
+                "memory_manager_stats() avg [" << round<microseconds>(loop_dur / N_READS) << "], "
+                "max [" << round<microseconds>(consume_max) << "]; "
+                "refresher: [" << n_refreshes << "] refreshes, avg "
+                "[" << round<microseconds>(refresh_total / max(n_refreshes, size_t(1))) << "], "
+                "max [" << round<microseconds>(refresh_max) << "]; "
+                "stats epoch advanced by [" << (detail::stat::epoch() - epoch_start) << "] "
+                "(refreshes by all parties).");
+} // TEST(Ipc_arena_stats_test, memory_manager_stats_concurrent_refreshes)
 
 /* The *retained* mechanism end-to-end: jemalloc's optional pool-space-removal request, our always-decline
  * policy, and the resulting still-mapped-but-not-"mapped" retention -- driven deterministically (forced purge,

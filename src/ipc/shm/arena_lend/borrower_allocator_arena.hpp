@@ -31,8 +31,7 @@ namespace ipc::shm::arena_lend
 {
 
 /**
- * (Arena-lending SHM-providers only) When borrowing STL-compliant in-SHM data
- * structures, use this type as the `Arena` template parameter to
+ * When borrowing STL-compliant in-SHM data structures, use this type as the `Arena` template parameter to
  * shm::stl::Stateless_allocator (or equivalent).  It would be unusual for most users to specify this
  * directly (e.g., session::shm::arena_lend::jemalloc::Shm_session::Borrower_arena_allocator or more generically
  * session::shm::arena_lend::jemalloc::Session::Borrower_allocator can be used directly instead).
@@ -62,8 +61,12 @@ namespace ipc::shm::arena_lend
  *
  * @tparam Repository_type
  *         See `Repository_type` parameter to Shm_pool_offset_ptr.
- *         Generally in production use: `Borrower_shm_pool_collection_repository<Ipc_arena>`.
- *         As of this writing this is configurable for testing purposes.
+ *         Generally in production use: `detail::Borrower_shm_pool_collection_repository<Shm_arena>`,
+ *         where `Shm_arena` is, e.g., jemalloc::Ipc_arena.
+ *         The `detail::Borrower_shm_pool_collection_repository` template is not hard-coded
+ *         internally but is itself configurable (a tparam) -- as of this writing -- only for testing purposes.
+ *         If we were to remove that configurability, hard-coding `detail::Borrower_shm_pool_collection_repository`
+ *         internally, then the `Shm_arena` part would become the configurable thing (a template parameter).
  */
 template<typename Repository_type>
 class Borrower_allocator_arena
@@ -97,7 +100,7 @@ public:
    * @tparam T
    *         Pointee type.
    */
-  template <typename T>
+  template<typename T>
   using Pointer = Shm_pool_offset_ptr<T, Repository_type, int, false>;
 }; // class Borrower_allocator_arena
 

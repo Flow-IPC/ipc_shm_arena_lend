@@ -202,10 +202,6 @@ option(FLOW_IPC_ARENA_LEND_JEMALLOC_NO_TCACHE
        "If ON: disables SHM-jemalloc feature wherein thread-caching is auto-used for every allocation if possible."
        OFF)
 
-option(FLOW_IPC_ARENA_LEND_JEMALLOC_ALLOW_CONCURRENT_ARENAS_UNSAFE
-       "If ON: allow build w/ jemalloc<5.3.0 despite its arena-concurrency bug (see jemalloc/memory_manager.hpp doc)."
-       OFF)
-
 # There is one* more thing however.  See the source file ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp
 # which specifies that IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX is a macro that must be defined (to blank or otherwise)
 # for any file `#include`ing that header (but we'll just assume all our `.cpp`s).  This value, it explains,
@@ -294,23 +290,11 @@ function(jemalloc_config_run)
   message(CHECK_PASS "(Done; found via jemalloc-config execution; prefix is [${FLOW_IPC_JEMALLOC_PREFIX}].)")
 endfunction()
 
-# Utility: Determine the jemalloc version; proceed if OK; warn but proceed if appropriate; or fail build.
-# The background behind some of these decisions is discussed in jemalloc/memory_manager.hpp docs (Memory_manager
-# doc header) in more detail.  There's also a brief explanation in the warning below.
-#
-# In short the resulting policy:
-#   - <5.2.1: Fail build.  It is just too old; we have not tested with it; etc.
-#   - >=5.3.0: No problem.
-#   - Otherwise (in [5.2.1, 5.3.0)): Normally fail build; but if
-#     FLOW_IPC_ARENA_LEND_JEMALLOC_ALLOW_CONCURRENT_ARENAS_UNSAFE=ON then proceed albeit with a warning.
-#     - In the latter case: We add -D IPC_SHM_ARENA_LEND_JEMALLOC_CONCURRENT_ARENAS_UNSAFE to build.
-#       Certain code known to be dangerous, in Flow-IPC, shall be compiled-out with some minor
-#       degraded functionality.  The remaining product works well, though certain corner-case situations
-#       could bring trouble (note: *not* necessarily jemalloc-stats-related), and the user must be somewhat
-#       more careful in using the jemalloc-stats feature.  Memory_manager doc header explains these more
-#       specifically.
+# Utility: Determine the jemalloc version; proceed if OK; or fail build.  Policy: <5.3.0: fail build.
+# Notably 5.2.1 (widely deployed) has an arena-destroy locking bug (fixed in 5.3.0; see its ChangeLog) which
+# SHM-jemalloc would trigger (stats consumption or arena creation racing arena destruction).
 function(jemalloc_version_check)
-  message(CHECK_START "(Checking jemalloc version w/r/t known arena-concurrency bug.)")
+  message(CHECK_START "(Checking jemalloc version.)")
   list(APPEND CMAKE_MESSAGE_INDENT "- ")
 
   # The version lives in the (always-present, prefix-independent) public header as 3 macros
@@ -337,8 +321,7 @@ function(jemalloc_version_check)
   endforeach()
   message(STATUS "Detected jemalloc version: [${ver}].")
 
-  set(min_supported "5.2.1") # Oldest we support at all.
-  set(min_concurrent_safe "5.3.0") # First version without the arena-concurrency bug (see above).
+  set(min_supported "5.3.0") # Oldest we support (see above).
 
   # (See jemalloc issue #2671 -- a recurring upstream problem.  Happened to us.  Might as well help out
   # instead of saying the version is too low.)
@@ -355,46 +338,9 @@ function(jemalloc_version_check)
   elseif("${ver}" VERSION_LESS "${min_supported}")
     message(FATAL_ERROR
               "jemalloc version [${ver}] is older than the minimum supported [${min_supported}].  "
-              "Please use jemalloc >= [${min_concurrent_safe}] (recommended) or at least [${min_supported}].")
-  elseif("${ver}" VERSION_LESS "${min_concurrent_safe}")
-    # Buggy tier.  Compile stats consumption in guarded form regardless (it's the only mitigation we have).
-    #
-    # NOTE: It is PRIVATE for the same reason as IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX was originally meant to
-    # be PRIVATE below; so again: if we start using it in exported .hpp... there can be trouble, should
-    # generate .hpp, etc. -- until then this is sufficient.
-    target_compile_definitions(${PROJ} PRIVATE "IPC_SHM_ARENA_LEND_JEMALLOC_CONCURRENT_ARENAS_UNSAFE=1")
-
-    if(FLOW_IPC_ARENA_LEND_JEMALLOC_ALLOW_CONCURRENT_ARENAS_UNSAFE)
-      message(WARNING
-                "jemalloc-[${ver}] has the arena-concurrency bug (fixed in [${min_concurrent_safe}]).  "
-                "Recommend upgrading to that version.  Nevertheless: "
-                "Proceeding because FLOW_IPC_ARENA_LEND_JEMALLOC_ALLOW_CONCURRENT_ARENAS_UNSAFE is ON.  The bug "
-                "has 2 known manifestations.  (1) Creating 2+ jemalloc-arenas concurrently can cause failure to "
-                "create arena.  For Flow-IPC: jemalloc-arena is ~1-1 with jemalloc::Ipc_arena; 1-2 of those are "
-                "created serially for each Flow-IPC session::shm::arena_lend::jemalloc::Session during session-start.  "
-                "It would be unusual, though not formally disallowed, to trigger this procedure in 2+ threads "
-                "concurrently.  To conclude: In most cases OK.  (2) Reading jemalloc-sourced stats (note: "
-                "not all SHM-jemalloc-module stats; only those coming from jemalloc itself) during destruction "
-                "of a jemalloc-arena (<=> jemalloc::Ipc_arena shutdown <=> end of "
-                "session::shm::arena_lend::jemalloc::Session[_server]) leads to undefined behavior/ugly crashing.  "
-                "IMPLICATION 1: Ipc_arena::memory_manager_stats() should be "
-                "user-invoked only while all arenas/sessions are operating, not during shutdown thereof or "
-                "even somewhat after.  (This is pretty typical in practice.)  IMPLICATION 2: ipc::session "
-                "normally periodically queries Ipc_arena::memory_manager_stats(), at least to maintain "
-                "a few _hi_wmark values with more accuracy.  There is also normally an (optional) logging of "
-                "these stats at arena shutdown.  In this mode "
-                "(FLOW_IPC_ARENA_LEND_JEMALLOC_ALLOW_CONCURRENT_ARENAS_UNSAFE=ON) both of these niceties are "
-                "skipped, as they are potentially dangerous (could lead to crashes).  Verdict: In most cases OK "
-                "but an annoying caveat to keep in mind.")
-    else()
-      message(FATAL_ERROR
-                "jemalloc-[${ver}] has the arena-concurrency bug (fixed in [${min_concurrent_safe}]).  "
-                "Recommend upgrading to that version.  Failing build.  However: If you want to press on: "
-                "Set FLOW_IPC_ARENA_LEND_JEMALLOC_ALLOW_CONCURRENT_ARENAS_UNSAFE to ON and re-run.  "
-                "Please carefully read the CMake warning that shall be printed, so you know what the risks are.")
-    endif()
+              "Please use jemalloc >= [${min_supported}].")
   else()
-    message(VERBOSE "jemalloc version [${ver}] >= [${min_concurrent_safe}]: no known arena-concurrency bug.")
+    message(VERBOSE "jemalloc version [${ver}] >= [${min_supported}]: OK.")
   endif()
 
   list(POP_BACK CMAKE_MESSAGE_INDENT)
@@ -469,7 +415,6 @@ set(SRCS
     ipc/shm/arena_lend/jemalloc/memory_manager.cpp
     ipc/shm/arena_lend/jemalloc/stat_info_dump.cpp
     ipc/shm/arena_lend/jemalloc/thread_cache.cpp
-    ipc/shm/arena_lend/memory_manager.cpp
     ipc/shm/arena_lend/owner_shm_pool_collection.cpp
     ipc/shm/arena_lend/shm_pool.cpp
     ipc/shm/arena_lend/shm_pool_collection.cpp
@@ -519,7 +464,6 @@ set(HDRS
     ipc/shm/arena_lend/jemalloc/memory_manager.hpp
     ipc/shm/arena_lend/jemalloc/stat_info_dump.hpp
     ipc/shm/arena_lend/jemalloc/thread_cache.hpp
-    ipc/shm/arena_lend/memory_manager.hpp
     ipc/shm/arena_lend/owner_shm_pool_collection.hpp
     ipc/shm/arena_lend/owner_shm_pool_listener.hpp
     ipc/shm/arena_lend/shm_pool.hpp

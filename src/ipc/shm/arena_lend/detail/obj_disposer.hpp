@@ -41,29 +41,36 @@ namespace ipc::shm::arena_lend::detail
  * @note In the case of SHM-jemalloc, `A` -- #Shm_arena -- is jemalloc::Ipc_arena.
  *
  * As a disposer, it executes synchronously when the owner-side handle (`shared_ptr<T>` group) reaches ref-count 0,
- * in whichever end-user thread where this happens to occur.  A SHM-lendable handle points to an object
+ * in whichever end-user thread this happens to occur.  A SHM-lendable handle points to an object
  * that may be held by multiple entities (usually processes, though it is also possible to lend to one's own
  * process, typically for testing/debugging), and this ref-count pertains only to the original owner-arena-created
  * handle.  Therefore reaching ref-count 0 does not necessarily mean the `T` shall be deallocated then; the same
  * must occur for every borrowed handle's ref-count also.  Therefore the disposer (`operator()()`) shall decrement
- * the conceptual entity/process ref-count; and if *that* also reached zero, then the `T` is indeed destroyeda
+ * the conceptual entity/process ref-count; and if *that* also reached zero, then the `T` is indeed destroyed
  * as soon as possible.
  *
- * @note The destruction, if it occurs, may itself be synchronous -- or not.  As of this writing it will indeed
- *       be synchronous if and only if the thread in which the disposer happens to run is the same thread that
- *       `construct()`ed it.  This is the result of the Thread_lcl_obj_db_admin design.  See its doc header for
+ * @note The destruction, if it occurs, may itself be synchronous -- or not.  As of this writing it can be
+ *       synchronous only if the thread in which the disposer happens to run is the same thread that
+ *       `construct()`ed it; and then only if its use-count decrement is the last one (no borrower still holds the
+ *       object).  This is the result of the Thread_lcl_obj_db_admin design.  See its doc header for
  *       details on how that all works.  This note is informational, in the sense that it gets into white-box
  *       behaviors to help you form a bigger picture.  In the contractual sense we merely promise that on reaching
  *       0 cross-process handles holding the `T`, in this disposer, that disposer shall trigger its destruction
  *       (at some point).
+ * @note Other handles may be -- yes, under proper use -- not to exactly `T` but to a variation of
+ *       it, generally on account of using a differently parameterized `Stateless_allocator` for STL-stuff if any.  So:
+ *       owner-side `T`'s STL-stuff would parameterize on `Stateless_allocator<Shm_arena>`; borrower-side on
+ *       `Stateless_allocator<Borrower_allocator_arena<Borrower_shm_pool_collection_repository<Shm_arena>>>`.
+ *       At times comments elide this caveat for pithiness/simplicity.  So if we mention `T` in the borrower
+ *       context, it might really mean "pretty much `T`" in this sense.
  *
- * A secondary role (hence the `_and_mdt`) of this object is to provide, via `shared_ptr::get_deleter()`, a
+ * A secondary role (hence the `_and_mdt`) of this object is to store and provide, via `shared_ptr::get_deleter()`, a
  * few key immutable scalars required to implement Shm_session::lend_object().  That method's impl grabs such
  * things as #m_lend_tracker_pool_id and #m_use_ct_idx and shoves them into the small handle-serialization returned
  * by `lend_object()`.  The user then IPC-transmits the handle-serialization to a borrowing process; and
- * in that process Shm_session::borrow_object() obtains those values with which it can create a borrower-side
+ * in that process Shm_session::borrow_object() obtains those values, with which it can create a borrower-side
  * counterpart to the owner-side-`construct()`-returned `shared_ptr<T>` handle.  The nearby free function
- * construct_with_borrower_obj_disposer() does this; note that it takes values largerly matching the ones
+ * construct_with_borrower_obj_disposer() does this; note that it takes values largely matching the ones
  * stored in a `*this` (including the aforementioned #m_lend_tracker_pool_id and #m_use_ct_idx).
  *
  * ### Subtleties about #Shm_arena lifetime versus handle lifetime versus object lifetime ###
@@ -78,14 +85,14 @@ namespace ipc::shm::arena_lend::detail
  * may be lent via a session, and thus borrowed by another process; if the disposer's linked local handle reaches
  * ref-count zero, that borrower may still hold a handle too; only once that handle and all like it also go away
  * can `*arena` deallocate the object.  So `*arena` must outlive that lifecycle too: we just aren't what
- * guarantees that.  What guarantees that, as of this writing is this: `*session` stores a `shared_ptr` ref to
+ * guarantees that.  What guarantees that, as of this writing, is this: `*session` stores a `shared_ptr` ref to
  * `*arena` (much like a `*this` does), at the time one calls `session->lend_arena(arena)`.  So while the session
  * to process X is around, every arena lent through it also stays around.  Hence:
  *   - Owner_obj_disposer_and_mdt holds reference to constructing #Shm_arena...
  *     - ...to protect against the latter's disappearance before `*this` linked handle is destroyed (in the event
  *       handle-pointee is not handle-referenced in 1+ borrowing processes).
  *     - Once `*this` linked handle goes away, the #Shm_arena no longer will be needed to destroy the actual object
- *       in that no-borrowers scenario.
+ *       in that no-borrowers scenario.  So `operator()()` releases that reference.
  *   - `Shm_session` holds reference to lent #Shm_arena...
  *      - ...to protect against the latter's disappearance while the `Shm_session` peer process is connected to us
  *        and therefore tracking current (and future) objects constructed by #Shm_arena.
@@ -106,15 +113,15 @@ struct Owner_obj_disposer_and_mdt
   // Constructors/destructor.
 
   /**
-   * Constructs disposer, memorizing the args -- including saving a reference to the #Shm_arena so as to keep it
-   * alive while the linked `shared_ptr` group is alive.
+   * Constructs disposer, memorizing the args -- including saving a ref-counted ref to the #Shm_arena so as to keep it
+   * alive, while the linked `shared_ptr` group is alive.
    *
    * This *must* be called in the same thread as the `Shm_arena::construct()` call that is presumably constructing
    * `*this` as part of that procedure.  (Among the memorized items is that thread's thread-token -- see
    * #m_cting_thread_token -- which is in sync with this requirement.)
    *
    * @param shm_arena
-   *        See #m_shm_arena.  Note the arg is nullified.
+   *        See #m_shm_arena.  Note the in-arg `shared_ptr` is consumed (nullified).
    * @param lend_tracker_pool_id
    *        See #m_lend_tracker_pool_id.
    * @param use_ct_idx
@@ -139,10 +146,11 @@ struct Owner_obj_disposer_and_mdt
   template<typename T>
   void operator()(T* addr);
 
-  // Data.  Note: it is public and immutable.
+  // Data.  Note: it is public and immutable (except #m_shm_arena, released by `operator()()`).
 
   /**
    * Ref-cted handle to the #Shm_arena that `->construct<T>()`ed, creating us as part of that.  See class doc header.
+   * `operator()()` nullifies it, once it has done its job (see class doc header); so do not access it after that.
    *
    * While, as noted there, we store the actual arena-object handle (to keep it alive, while we are alive), it
    * also notably provides access to `m_shm_arena->get_id()` (the arena ID, unique within this owner process).
@@ -150,22 +158,22 @@ struct Owner_obj_disposer_and_mdt
    *
    * So one can/should picture a `collection_id_t m_collection_id` member here.
    */
-  const Shm_arena_ptr m_shm_arena;
+  Shm_arena_ptr m_shm_arena;
 
-  /// Aux, use-count-tracking SHM-pool's ID, as output by Thread_lcl_obj_db_admin::constructing_obj().
+  /// ID of aux (use-count-tracking) SHM-pool, as output by Thread_lcl_obj_db_admin::constructing_obj().
   const pool_id_t m_lend_tracker_pool_id;
 
-  /// The use-count slot within pool identifier by #m_lend_tracker_pool_id, as output by the same obj-DB-admin method.
+  /// The use-count slot within pool identified by #m_lend_tracker_pool_id, as output by the same obj-DB-admin method.
   const use_ct_idx_t m_use_ct_idx;
 
   /**
    * The thread-token (`flow::util::this_thread_unique_token()`) of the thread that `Shm_arena::construct()`ed the
-   * linked object; captured by the ctor, per its same-thread requirement.  operator()() compares the disposing
+   * linked object; captured by the ctor, per its same-thread requirement.  `operator()()` compares the disposing
    * thread's token against this to decide which module to inform (same thread => *admin*; any other => *client*);
    * Shm_session::lend_object() similarly, via direct member access.
    */
   const flow::util::Thread_token m_cting_thread_token;
-}; //class Owner_obj_disposer_and_mdt
+}; // struct Owner_obj_disposer_and_mdt
 
 // Free functions: in *_fwd.hpp.
 
@@ -192,11 +200,12 @@ void Owner_obj_disposer_and_mdt<Shm_arena_t>::operator()(T*)
   if (flow::util::this_thread_unique_token() == m_cting_thread_token)
   {
     /* shared_ptr group reached ref-count 0 in the same thread that created the shared_ptr: we can report it
-     * to the thread-local obj-DB *admin* directly.  (Not our problem but for context: it'll surely --use_ct
+     * to the thread-local obj-DB *admin* directly.  (Not our concern, but for context: it'll surely --use_ct
      * at index m_use_ct_idx for m_shm_arena... but then if that caused it to reach 0, it can finish the job
      * -- that is delete the object -- right then and there.  It's a very nice optimization; though to be fair
-     * arguably most of the benefit is if `--use_ct = 0` which tends to happen on the borrower side, not the
-     * owner/lender side.)
+     * arguably most of the benefit is if `--use_ct = 0` here, but instead that *tends* to happen on the borrower
+     * side, not the owner/lender side.  Meaning that's how algorithms around this tend to be written,
+     * we've noticed.)
      *
      * This is pretty common (but not universal; certainly a different thread might be the one to reach ref-count 0). */
     Thread_lcl_obj_db_admin<Shm_arena>::this_thread_obj_db()->disposing_obj(m_shm_arena->get_id(), m_use_ct_idx);
@@ -206,12 +215,19 @@ void Owner_obj_disposer_and_mdt<Shm_arena_t>::operator()(T*)
     /* shared_ptr group reached ref-count 0 in a diff thread versus one that created the shared_ptr: we can only
      * report it to the thread-local obj-DB *client* directly.  (Not our problem but for context: it'll surely --use_ct
      * at index m_use_ct_idx for m_shm_arena... and that's about it.  The *admin* in the cting thread will have
-     * to detect use_ct=0 (if indeed it is) opportunistically when it can.  Borrower_obj_disposer_and_mdt for example
-     * has to do this branch always; the direct-to-admin optimization is impossible by definition in the borrowing
+     * to detect use_ct=0 (if indeed it is) opportunistically, when it can.  The
+     * construct_with_borrower_obj_disposer()-returned disposer, for example,
+     * has to execute this branch always; the direct-to-admin optimization is impossible by definition in the borrowing
      * process.) */
     Thread_lcl_obj_db_client<Shm_arena>::this_thread_obj_db()->disposing_obj(*m_shm_arena, m_lend_tracker_pool_id,
                                                                              m_use_ct_idx);
   }
+
+  /* For reminders as to why this is captured in the first place (in addition to the fact it's used above) and
+   * deleted once disposer executes (us, here) see class doc header.  (Do not rely on *this being destroyed:
+   * a shared_ptr group's deleter may be kept around until the last weak_ptr to the group is gone too -- whether
+   * it is is a technicality up to the shared_ptr implementation.) */
+  m_shm_arena.reset();
 } // Owner_obj_disposer_and_mdt::operator()()
 
 template<typename T, typename Shm_session>
@@ -237,9 +253,9 @@ Obj_handle<T> construct_with_borrower_obj_disposer(T* addr,
      * (2) Needed in slow-path only: Need to open pool first: computing its name requires lookup of
      * opposing-process pool-collection (arena) by those bits of data. */
 
-    /* See rationale in our doc header for why we capture it.
-     * The following statement is unnecessary (this would happen anyway shortly, as the shared_ptr<> group
-     * goes away on ref-count 0), but just to make it nice and deterministic/debugger-friendly: */
+    /* See rationale in our doc header for why we capture it.  Now let go of it along those same lines.  (Do not rely
+     * on this lambda being destroyed: a shared_ptr group's deleter may be kept around until the last weak_ptr to
+     * the group is gone too -- whether it is is a technicality up to the shared_ptr implementation.) */
     shm_session_to_keep_alive.reset();
   });
 }

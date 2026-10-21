@@ -23,9 +23,7 @@
  * THE SOFTWARE. */
 
 #include "ipc/shm/arena_lend/test/test_owner_shm_pool_collection.hpp"
-#include "ipc/shm/arena_lend/memory_manager.hpp"
 #include <sys/mman.h>
-#include <new>
 
 using std::shared_ptr;
 using std::size_t;
@@ -35,12 +33,10 @@ namespace ipc::shm::arena_lend::test
 
 Test_owner_shm_pool_collection::Test_owner_shm_pool_collection(flow::log::Logger* logger,
                                                                collection_id_t id,
-                                                               const shared_ptr<Memory_manager>& memory_manager,
                                                                Shared_name&& pool_name_base,
                                                                util::Permissions_level permissions_level) :
   Owner_shm_pool_collection(logger,
                             id,
-                            memory_manager,
                             std::move(pool_name_base),
                             util::shared_resource_permissions(permissions_level)),
   m_memory_map_functor([this](int fd, size_t size, [[maybe_unused]] void* new_address) -> void*
@@ -58,16 +54,6 @@ Test_owner_shm_pool_collection::Test_owner_shm_pool_collection(flow::log::Logger
 Test_owner_shm_pool_collection::~Test_owner_shm_pool_collection()
 {
   FLOW_LOG_TRACE("Destructed with id [" << get_id() << "]");
-}
-
-void* Test_owner_shm_pool_collection::allocate(size_t size)
-{
-  const auto ret = get_memory_manager()->allocate(size);
-  if (!ret)
-  {
-    throw std::bad_alloc{}; // As required by Owner_shm_pool_collection::allocate() contract.
-  }
-  return ret;
 }
 
 } // namespace ipc::shm::arena_lend::test

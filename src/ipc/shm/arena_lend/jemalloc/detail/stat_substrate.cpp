@@ -45,7 +45,7 @@ bool config_stats_enabled()
   static const bool s_enabled = ([]() -> bool
   {
     bool enabled = false;
-    return mallctl_read("config.stats", &enabled) && enabled;
+    return (mallctl_read("config.stats", &enabled) == 0) && enabled;
   })();
   return s_enabled;
 }
@@ -61,12 +61,22 @@ size_t page_size()
   return s_page_size;
 }
 
-void epoch_refresh()
+uint64_t epoch_refresh()
 {
-  /* Writing any value to "epoch" advances jemalloc's stats snapshot; the read-back (old epoch) is ignored.
-   * We pass the value as the new-value argument; the old-value out-args are left null. */
-  uint64_t epoch = 1;
-  IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)("epoch", nullptr, nullptr, &epoch, sizeof(epoch));
+  /* Writing any value to "epoch" refreshes jemalloc's stats snapshot.  The read-back happens in the same mallctl()
+   * call -- under jemalloc's ctl lock, after the refresh -- so it yields the epoch of the snapshot we just took. */
+  uint64_t epoch_in = 1;
+  uint64_t epoch_out = 0;
+  size_t epoch_out_sz = sizeof(epoch_out);
+  IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)("epoch", &epoch_out, &epoch_out_sz, &epoch_in, sizeof(epoch_in));
+  return epoch_out;
+}
+
+uint64_t epoch()
+{
+  uint64_t epoch_out = 0;
+  mallctl_read("epoch", &epoch_out);
+  return epoch_out;
 }
 
 bool mallctl_name_to_mib(const char* name, size_t* mib, size_t* mib_len)
@@ -84,6 +94,10 @@ void cumulative_alloc_dealloc_sz(arena_id_t arena_id, uint64_t* alloc_sz_ptr, ui
   using std::array;
   using std::copy_n;
   using uint = unsigned int;
+
+  static_assert(sizeof(value_t) == sizeof(size_t),
+                "We read size_t-typed size-class byte-sizes (arenas.bin.<j>.size, etc.) directly into value_t "
+                  "elements; mallctl() checks only the byte-size of the target.");
 
   assert(alloc_sz_ptr && dealloc_sz_ptr && alloc_count_by_size_ptr);
   auto& alloc_sz = *alloc_sz_ptr;
@@ -105,8 +119,8 @@ void cumulative_alloc_dealloc_sz(arena_id_t arena_id, uint64_t* alloc_sz_ptr, ui
     vector<value_t> m_all_szs; // m_bin_szs plus m_lext_szs: per-class byte-sizes for the cumulative-bytes math.
     vector<value_t> m_histo_lo_bounds; // Request-range histogram bucket lower-bounds: [1, s0+1, s1+1, ...].
     value_t m_histo_last_bucket_sz = 1; // Last histogram bucket's width (spans up to the top class size).
-    array<size_t, 6> m_bin_nmalloc_mib, m_bin_ndalloc_mib;
-    array<size_t, 6> m_lext_nmalloc_mib, m_lext_ndalloc_mib;
+    array<size_t, 6> m_bin_nmalloc_mib{}, m_bin_ndalloc_mib{};
+    array<size_t, 6> m_lext_nmalloc_mib{}, m_lext_ndalloc_mib{};
     size_t m_bin_mib_len = 6, m_lext_mib_len = 6;
   };
   static const Tables s_tables = ([]() -> Tables
@@ -168,8 +182,8 @@ void cumulative_alloc_dealloc_sz(arena_id_t arena_id, uint64_t* alloc_sz_ptr, ui
   const auto walk = [&](const auto& nmalloc_mib, const auto& ndalloc_mib,
                         size_t mib_len, const vector<value_t>& szs, size_t bucket_offset)
   {
-    array<size_t, 6> mib_n;
-    array<size_t, 6> mib_d;
+    array<size_t, 6> mib_n{};
+    array<size_t, 6> mib_d{};
     copy_n(nmalloc_mib.data(), mib_len, mib_n.data());
     copy_n(ndalloc_mib.data(), mib_len, mib_d.data());
     mib_n[2] = mib_d[2] = arena_id;

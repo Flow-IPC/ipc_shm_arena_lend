@@ -25,7 +25,6 @@
 #include <gtest/gtest.h>
 #include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
 #include "ipc/util/util.hpp"
-#include "ipc/shm/arena_lend/memory_manager.hpp"
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 #include "ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp"
 #include "ipc/shm/arena_lend/test/test_event_listener.hpp"
@@ -40,6 +39,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <iostream>
+#include <cstdlib>
 #include <new>
 #include <unordered_set>
 #include <random>
@@ -142,41 +142,39 @@ public:
    * Constructor.
    *
    * @param logger Used for logging purposes.
-   * @param memory_manager The memory allocator.
    * @param id Identifier for the collection.
    */
   Test_owner_shm_pool_collection_2(flow::log::Logger* logger,
-                                   std::shared_ptr<Memory_manager> memory_manager,
                                    collection_id_t id = Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID) :
-    Test_owner_shm_pool_collection(logger, id, memory_manager)
+    Test_owner_shm_pool_collection(logger, id)
   {
   }
 
   /**
-   * Allocates memory from the memory manager.
+   * Allocates (regular heap) memory via `malloc()`, remembering the result.
    *
    * @param size The amount of memory to allocate.
    *
    * @return The resulting allocation upon success (failure throws).
    */
-  virtual void* allocate(size_t size) override
+  void* allocate(size_t size)
   {
-    m_last_address_allocated = get_memory_manager()->allocate(size);
+    m_last_address_allocated = std::malloc(size);
     if (!m_last_address_allocated)
     {
-      throw std::bad_alloc{}; // As required by Owner_shm_pool_collection::allocate() contract.
+      throw std::bad_alloc{}; // Same as a real arena's allocate() (e.g., jemalloc::Ipc_arena::allocate()).
     }
     return m_last_address_allocated;
   }
 
   /**
-   * Deallocates memory from the memory manager.
+   * Undoes allocate() via `free()`, remembering `address`.
    *
    * @param address The address to deallocate.
    */
-  virtual void deallocate(void* address) noexcept override
+  void deallocate(void* address) noexcept
   {
-    Owner_shm_pool_collection::deallocate(address);
+    std::free(address);
     m_last_address_deallocated = address;
   }
 
@@ -277,15 +275,15 @@ public:
   }
 
   /**
-   * Performs an allocation backed by shared memory, uses the allocation to construct an object and returns a shared
+   * Performs an allocation via allocate(), uses the allocation to construct an object and returns a shared
    * pointer to this object. When the shared pointer has no more references, it will be destructed by this pool
-   * collection instance. The start() method must be executed prior to any calls to this.
+   * collection instance (via deallocate()).
    *
    * @tparam T The object type to be created.
    * @tparam Args The parameter types that are passed to the constructor of T.
    * @param args The arguments passed to the constructor of T.
    *
-   * @return A shared pointer to an object created in shared memory.
+   * @return A shared pointer to the object.
    */
   template <typename T, typename... Args>
   std::shared_ptr<T> construct(Args&&... args)
@@ -311,7 +309,7 @@ protected:
 private:
   /**
    * Handles callback from shared pointer destruction. The result should be a destruction of the object and return
-   * of the underlying memory back to the memory manager.
+   * of the underlying memory via deallocate().
    */
   class Object_deleter
   {
@@ -335,7 +333,7 @@ private:
 
     /**
      * Release callback executed by shared pointer destruction. The destructor for the object will be called
-     * and the underlying memory will be returned to the memory manager.
+     * and the underlying memory will be returned via deallocate().
      *
      * @tparam T The pointer type.
      * @param p The pointer held by the shared pointer.
@@ -369,8 +367,7 @@ public:
   /// Constructor
   Owner_shm_pool_collection_test() :
     m_test_logger(flow::log::Sev::S_TRACE),
-    m_memory_manager(make_shared<Memory_manager>()),
-    m_collection(&m_test_logger, m_memory_manager)
+    m_collection(&m_test_logger)
   {
   }
 
@@ -382,15 +379,6 @@ public:
   inline flow::log::Logger* get_logger()
   {
     return &m_test_logger;
-  }
-  /**
-   * Returns the memory manager.
-   *
-   * @return See above.
-   */
-  inline const shared_ptr<Memory_manager>& get_memory_manager() const
-  {
-    return m_memory_manager;
   }
   /**
    * Returns the owner collection.
@@ -415,8 +403,6 @@ public:
 private:
   /// For logging purposes.
   Test_logger m_test_logger;
-  /// The memory manager.
-  const shared_ptr<Memory_manager> m_memory_manager;
   /// The owner collection.
   Test_owner_shm_pool_collection_2 m_collection;
 }; // class Owner_shm_pool_collection_test
@@ -449,7 +435,7 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
 
   EXPECT_EQ(collection.get_id(), Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID);
 
-  // Basic allocation (memory manager is really doing the work)
+  // Basic allocation (`malloc()` is really doing the work)
   {
     void* p = collection.allocate(100);
     EXPECT_NE(p, nullptr);
@@ -514,7 +500,6 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
       // User level permissions
       Test_owner_shm_pool_collection collection_2(get_logger(),
                                                   Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID,
-                                                  get_memory_manager(),
                                                   create_test_pool_name_base(),
                                                   util::Permissions_level::S_USER_ACCESS);
       auto pool_2 = collection_2.create_shm_pool(get_pool_size());
@@ -1022,7 +1007,7 @@ TEST_F(Owner_shm_pool_collection_test, Multithread_remove)
 
   // Decrease severity to get more output as necessary for debugging
   Test_logger logger(flow::log::Sev::S_INFO);
-  Test_owner_shm_pool_collection_2 collection(&logger, make_shared<Memory_manager>());
+  Test_owner_shm_pool_collection_2 collection(&logger);
 
   /**
    * Creates a shared memory pool and puts it into the pool list.

@@ -57,7 +57,8 @@ namespace ipc::shm::arena_lend::jemalloc::detail
  *
  * The single-arena, return-checked stat-queries in Ipc_arena::memory_manager_stats() do *not* need this (they touch
  * only their own live arena and check errors instead of aborting); this mutex concerns exclusively the whole-set dump
- * versus arena-set mutation.
+ * versus arena-set mutation.  (A different concern -- stats reads by Flow-IPC tearing each other -- is handled by
+ * jemalloc_stats_mutex().)
  *
  * ### Lifetime ###
  * The returned mutex is intentionally immortal (never destroyed): it is locked at "touchy" times -- past `main()`
@@ -71,6 +72,43 @@ namespace ipc::shm::arena_lend::jemalloc::detail
  * @return Reference to the immortal process-global mutex.
  */
 flow::util::Mutex_non_recursive& jemalloc_arena_list_mutex();
+
+/**
+ * Returns the process-global mutex held throughout each of Flow-IPC's jemalloc-statistics operations --
+ * Ipc_arena::memory_manager_stats(), Ipc_arena::memory_manager_stats_reset(), and the whole-arena-set stats dumps
+ * (`Memory_manager::...stats_dump...()`) -- so that no two of them overlap.
+ *
+ * ### Why this exists ###
+ * Each of those operations refreshes jemalloc's stats snapshot and then reads many (hundreds or more) values from
+ * it, one by one.  There is one such snapshot for the entire process (see stat::epoch_refresh()), and any refresh
+ * replaces it.  Without this mutex, Flow-IPC's own stats operations -- e.g., the periodic ones `ipc::session` runs
+ * for each `Ipc_arena` it sets up -- would refresh in the middle of each other's reads.  Moreover, as each read
+ * separately takes jemalloc's internal stats lock, they would slow each other down.  Ipc_arena does detect a
+ * mid-read refresh and read again; but with enough such contention, the re-reads can keep failing indefinitely
+ * (observed in testing).
+ *
+ * What a mid-read refresh does, if undetected: the reads are "torn," mixing values from different moments.  Derived
+ * results can then be nonsense: e.g., more deallocations than allocations, so a computed (unsigned) live-count
+ * underflows to a huge number -- which also becomes its high-water mark until the next reset.
+ *
+ * Code outside Flow-IPC using jemalloc stats APIs directly is not excluded by this mutex.  Ipc_arena detects and
+ * retries those (Ipc_arena::memory_manager_snapshot_read()).  A dump cannot (jemalloc's `malloc_stats_print()`
+ * refreshes once, then reads); such a dump merely prints some mutually inconsistent numbers.
+ *
+ * ### Also: Ipc_arena reset-baseline ###
+ * Because it is held throughout each Ipc_arena stats operation, this mutex also protects that Ipc_arena's
+ * reset-baseline (`Ipc_arena::m_mem_mgr_base_stats`) and thus makes Ipc_arena::memory_manager_stats() and
+ * Ipc_arena::memory_manager_stats_reset() safe to call concurrently.  See there.
+ *
+ * ### Lifetime ###
+ * Immortal (never destroyed), like jemalloc_arena_list_mutex(), so that it is safely usable at any time.
+ *
+ * ### Locking discipline ###
+ * Lock order: this; then jemalloc_arena_list_mutex() (if applicable), which remains a leaf.
+ *
+ * @return Reference to the immortal process-global mutex.
+ */
+flow::util::Mutex_non_recursive& jemalloc_stats_mutex();
 
 } // namespace ipc::shm::arena_lend::jemalloc::detail
 
@@ -92,9 +130,9 @@ namespace ipc::shm::arena_lend::jemalloc::detail::stat
  * Returns whether the linked jemalloc was built with statistics support (its `config.stats` is `true`).  The
  * value is read once -- it is a compile-time constant within a given jemalloc build -- and cached.
  *
- * If this returns `false`, every `"stats.*"` `mallctl` query yields `ENOENT`; accordingly the bespoke SHM-jemalloc
- * stat snapshots shall, as a matter of policy, produce no real data (return defaults/sentinels) rather
- * than partial results.
+ * If this returns `false`, nearly every `"stats.*"` `mallctl` query yields `ENOENT` (a few page-count gauges, like
+ * `stats.arenas.(i).pactive`, remain available); accordingly the bespoke SHM-jemalloc stat snapshots shall, as a
+ * matter of policy, produce no real data (return defaults/sentinels) rather than partial results.
  *
  * @return See above.
  */
@@ -110,27 +148,40 @@ bool config_stats_enabled();
 size_t page_size();
 
 /**
- * Advances jemalloc's internal statistics epoch (writes `mallctl("epoch")`), causing subsequently-read `"stats.*"`
- * values to reflect a fresh, mutually-consistent snapshot.  Call once immediately before a batch of `"stats.*"`
- * reads; a single call suffices regardless of how many arenas are read in that batch.
+ * Refreshes jemalloc's statistics snapshot (writes `mallctl("epoch")`), so that subsequently-read `"stats.*"`
+ * values reflect the present; and returns the epoch of the resulting snapshot.
  *
- * ### Background: jemalloc's stats `epoch` ###
- * jemalloc does not recompute the `"stats.*"` values on each read; it keeps a *cached snapshot* of all dynamic
- * statistics and serves reads from it.  That snapshot is (re)computed only when you *write* to the `epoch`
- * `mallctl` -- writing any value refreshes the reported data and bumps a monotonic epoch counter; merely
- * *reading* `epoch` refreshes nothing.  Man-page wording (the `epoch` entry): "If a value is passed in, refresh
- * the data from which the `mallctl*()` functions report values, and increment the epoch."
+ * ### Background: jemalloc's stats snapshot and `epoch` ###
+ * jemalloc does not compute a `"stats.*"` value when it is read; it serves every such read from one stored
+ * snapshot.  A refresh (writing any value to `epoch`) copies every arena's current counters into that snapshot
+ * and increments a counter, the *epoch*.  Merely reading `epoch` (epoch()) refreshes nothing.  `man` page wording
+ * (the `epoch` entry): "If a value is passed in, refresh the data from which the `mallctl*()` functions report
+ * values, and increment the epoch.  Return the current epoch.  This is useful for detecting whether another
+ * thread caused a refresh."
  *
- * Recipe (what we do): write `epoch` once, then read every `"stats.*"` value of interest.  A single refresh yields
- * one mutually-consistent moment across all arenas/fields read afterward.
+ * There is one snapshot, and one epoch, for the entire process.  So a refresh by anyone in the process (another
+ * `Ipc_arena` reading its stats; a stats dump; any code using jemalloc directly) replaces what everyone reads
+ * next.  Each individual `"stats.*"` read is coherent; but a refresh between 2 reads of a batch
+ * makes the batch "torn": values from different moments.  That can corrupt derived quantities (e.g., live-count =
+ * `nmalloc - ndalloc` can underflow).  Conversely, with no refresh at all, reads are stale: frozen at the last
+ * snapshot, or all-zero if none was ever taken.
  *
- * Stakes: with no refresh, `"stats.*"` reads are stale -- frozen at the last snapshot, or all-zero if none was
- * ever taken -- so they won't reflect reality.  Refreshing again *mid-batch* is worse than not at all: you would
- * mix values from different moments (a "torn" set), which can corrupt derived quantities (e.g. live-count =
- * `nmalloc - ndalloc` could come out wrong or even negative).  Hence: exactly one refresh per snapshot batch,
- * up front.
+ * Recipe for a consistent batch: `e = epoch_refresh()`; read the batch; if `epoch() != e`, someone refreshed
+ * mid-batch, so set `e = epoch()` and read the batch again.  There is no need to refresh again on such a retry:
+ * the other party's refresh already produced a snapshot at least as new as ours.  Moreover, if we did refresh
+ * again, 2 concurrent readers could keep tearing each other's batches indefinitely.
+ *
+ * @return The epoch of the snapshot just taken.
  */
-void epoch_refresh();
+uint64_t epoch_refresh();
+
+/**
+ * Returns jemalloc's current statistics epoch (reads `mallctl("epoch")`), without refreshing anything.
+ * See epoch_refresh().
+ *
+ * @return See above.
+ */
+uint64_t epoch();
 
 /**
  * Resolves a `mallctl` name -- which may contain integer components (e.g. the `0`s in
@@ -162,10 +213,11 @@ bool mallctl_name_to_mib(const char* name, size_t* mib, size_t* mib_len);
  *        The (NUL-terminated) `mallctl` name to read.
  * @param val
  *        On success, set to the read value; untouched on failure.
- * @return `true` on success; `false` on any `mallctl` error (e.g. `ENOENT` if `name` is unavailable in this build).
+ * @return The `mallctl()` result: 0 on success; else the (`errno`-style) error (e.g. `ENOENT` if `name` is
+ *         unavailable in this build).
  */
 template<typename T>
-bool mallctl_read(const char* name, T* val);
+int mallctl_read(const char* name, T* val);
 
 /**
  * Like mallctl_read() but addresses the value by a previously-resolved MIB (see mallctl_name_to_mib()) rather
@@ -179,10 +231,10 @@ bool mallctl_read(const char* name, T* val);
  *        The MIB length (as produced by mallctl_name_to_mib()).
  * @param val
  *        On success, set to the read value; untouched on failure.
- * @return `true` on success; `false` on any `mallctl` error.
+ * @return See mallctl_read().
  */
 template<typename T>
-bool mallctl_read_mib(const size_t* mib, size_t mib_len, T* val);
+int mallctl_read_mib(const size_t* mib, size_t mib_len, T* val);
 
 /**
  * Computes, for the given jemalloc-arena, the cumulative bytes-ever-allocated and bytes-ever-deallocated (by

@@ -112,7 +112,7 @@ namespace ipc::shm::arena_lend::jemalloc
  * not own them either yet.  However, now `tc1` is non-empty, so `a(tc1)` can proceed and `tc1.take()` 1 of the
  * 100 ptrs -- now `tc1` un-owns it while owning the other 99 still -- but we (the user) get it and own it:
  * `a(tc1)` returns that ptr.  If we were to do 50 more `a(tc1)`s right now, each one sees a non-empty
- * (and thread-local!) `Set tc1`, performs a lock-free `tc1.take()`; done: no mutex touched.  (Had this been
+ * (and used by T1 alone!) `Set tc1`, performs a lock-free `tc1.take()`; done: no mutex touched.  (Had this been
  * done without tcache involvement, there would've been 51 locks/unlocks total so far -- instead of 1.  Thus
  * the perf win.)  Further, `d(p, tc1)` simply does `tc1.add(p)` -- in our minimalistic model this cannot fail.
  * If we do that now, we then now own 50 ptrs, `tc1` now owns 100-1-50+1=50; and `ARENA` owns the rest.
@@ -128,20 +128,24 @@ namespace ipc::shm::arena_lend::jemalloc
  * (There is also a `flush(tc)` op which is the opposite of the *seed* op: lock `ARENA.mtx`, do N `p = tc.take()`s +
  * N `ARENA.d(p)`s, unlock.)
  *
- * @note Reminder: The only restriction: A `tc` is strictly thread-local.  So `a(tc2)` and `d(p, tc2)` can *only*
- *       be done in thread T2; trying it in T1 => crash.  Again, though, that aside -- a pointer can be
- *       allocated from any `tc` and deallocated into any `tc`.
+ * @note Reminder: The only restriction: A `tc` must not be used by 2+ threads concurrently (a jemalloc requirement;
+ *       violating it => likely crash).  Thread_cache satisfies this by giving each thread its own tcaches, used
+ *       only in that thread.  Again, though, that aside -- a pointer can be allocated from any `tc` and
+ *       deallocated into any `tc`.
  *
  * Crucially, the only ops that actually touch `ARENA` -- therefore lock `ARENA.mtx` -- are *seeding*
  * and `flush()`ing.  Seeding occurs automatically within jemalloc, at least roughly as described above.
  * Flushing is intentional -- we provide flush_tcache() API -- but typically is not necessary to do explicitly.
- * (We are agnostic as to whether jemalloc might sometimes do it automatically.)
+ * jemalloc also flushes part of a tcache's per-size-class store automatically when a deallocation finds it full.
+ * (jemalloc's periodic tcache garbage collection does *not* apply to these explicit tcaches; only to each thread's
+ * automatic tcache.  So an explicit tcache keeps its cached pointers until such an overflow, an explicit flush,
+ * or its destruction.)
  *
  * So: that is how it works.  `a(tc)` and `d(p, tc)` -- really
  * `mallocx(sz, MALLOCX_ARENA(arena_id) | MALLOCX_TCACHE(tc))` and
- * `dallocx(p, MALLOCX_ARENA(arena_id) | MALLOCX_TCACHE(tc))` respectively -- use the `tc`-identified tcache as a
+ * `dallocx(p, MALLOCX_TCACHE(tc))` respectively -- use the `tc`-identified tcache as a
  * thread-local intermediary pointer-store, allocating from/deallocating into which is faster since
- *   - deallocating requires no mutex-locking;
+ *   - deallocating rarely requires mutex-locking (only on the aforementioned overflow-flush);
  *   - allocating rarely requires mutex-locking, batching many pointer-grabs-from-`arena_id` under a single
  *     mutex-lock (as needed).
  *
@@ -162,18 +166,19 @@ namespace ipc::shm::arena_lend::jemalloc
  *
  * ### How to use Thread_cache directly ###
  * Suppose you are in thread T and would like to allocate (jemalloc `mallocx()`) and deallocate (`dallocx()`)
- * while using an explicit jemalloc tcache.  We support only the use case wherein in both cases one passes
- * a `flags` argument that includes `MALLOCX_ARENA(arena_id)` for some user-created `arena_id` (256 or higher, it
- * appears, as of this writing).  Per jemalloc API, to use thread caching:
+ * while using an explicit jemalloc tcache.  We support only the use case wherein one passes to `mallocx()`
+ * a `flags` argument that includes `MALLOCX_ARENA(arena_id)` for some user-created `arena_id`.  Per jemalloc API,
+ * to use thread caching:
  *   - With `mallocx()`: In addition to `MALLOCX_ARENA(arena_id)`, add-in the mask `MALLOCX_TCACHE(tcache_id)`, where
  *     you shall obtain `tcache_id_t tcache_id` from a `*this`.
- *   - With `dallocx()` for the address returned by `mallocx()`: Similarly.  That said:
+ *   - With `dallocx()` for the address returned by `mallocx()`: pass `MALLOCX_TCACHE(tcache_id)`.  (`dallocx()`
+ *     auto-determines the arena from the address.)  That said:
  *     - If you're in the same thread as where you did the `mallocx()`: Simple as it gets; use the
  *       same `tcache_id`.
  *     - If you're in a different thread:
  *       - Do *not* try to reuse the memorized `tcache_id` from the original thread.
  *       - Obtain the `tcache_id_t` for this current/different thread and use that instead.
- *       - Alternatively: forego tcache use: `MALLOCX_ARENA(arena_id) | MALLOCX_TCACHE_NONE`.
+ *       - Alternatively: forego tcache use: `MALLOCX_TCACHE_NONE`.
  *
  * As should be clear from the preceding section, there is nothing wrong with `TCACHE_NONE` (forgoing tcache)
  * when deallocating, even if it came from a tcache when allocating.  It would just mean doing the full
@@ -455,8 +460,8 @@ public:
    * ### Suggestion for `on_done_func()` ###
    * Destroying the jemalloc arena is not a drop-everything-suddenly type of operation.  It will potentially write
    * to currently mapped vaddr-segments a/k/a extents a/k/a pools; it will certainly try to operate on extents
-   * such as to close/unmap them; and in particular this will invoke various extent hooks, if you've registered
-   * on on the arena `arena_id`.  Bottom line: until the arena is actually destroyed, jemalloc may offically
+   * such as to close/unmap them; and in particular this will invoke various extent hooks, if you've registered such
+   * on the arena `arena_id`.  Bottom line: until the arena is actually destroyed, jemalloc may offically
    * require that certain resources that *you* potentially registered with it using the extent-hook system --
    * SHM-pools, extent hooks themselves -- still be live.  Therefore it would then make sense to capture
    * such items in `on_done_func` functor object (perhaps lambda) and only let them expire once the functor
@@ -495,7 +500,7 @@ public:
    * @param log_ctx
    *        Potentially-concurrently-mutable `Log_context_mt` to use for synchronous logging.
    * @param on_done_func
-   *        See above.
+   *        See above.  Note `on_done_func` is potentially consumed.
    */
   template<typename On_done_func>
   static void destroy_arena_safely(arena_id_t arena_id, const flow::log::Log_context_mt* log_ctx,

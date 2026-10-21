@@ -126,7 +126,7 @@ using Lend_tracker_shm = shm::bipc_ext::Sparse_managed_shm<Use_count_registry, :
  *
  * Also: keeps `shm_session_to_keep_alive` alive until disposer executes (~analogously to Owner_obj_disposer_and_mdt
  * doing so w/r/t the constructing `Shm_arena`).  (Rationale is similar; the machinery tracking borrowed objects
- * via session so-and-so is maintained, at least partially, in so-and-so borrower-side `Shm_session`).
+ * via session so-and-so is maintained, at least partially, in so-and-so borrower-side `Shm_session`.)
  *
  * This is a key helper for `Shm_session::borrow_object()`, returning the very disposer-furnished handle
  * that method must return.  The caller must first obtain the borrower-side vaddr of the in-SHM object (`addr`)
@@ -142,7 +142,7 @@ using Lend_tracker_shm = shm::bipc_ext::Sparse_managed_shm<Use_count_registry, :
  *       able to transmit said blob to us and/or before this function call.  The key point:
  *       Calling `blob_here = sess_here->lend_object(p_here)` in P1 is part of 3-part procedure; part 2 is
  *       IPC-transmitting `blob_here` to P2 a `blob_there`; part 3 is
- *       `auto p_there = sess_there->borrow_object(blob_there)`, which calls us upon decoding `blob_there`.
+ *       `auto p_there = sess_there->borrow_object(blob_there)` which calls us upon decoding `blob_there`.
  *
  * @tparam T
  *         In-SHM object type.
@@ -160,11 +160,11 @@ using Lend_tracker_shm = shm::bipc_ext::Sparse_managed_shm<Use_count_registry, :
  *        As of this writing that isn't transmitted on a per-borrowed-handle basis but rather available
  *        in the `Shm_session` at large (we know the PID of the guy with whom we converse).
  * @param collection_id
- *        Given `owner_id`, unique arena-ID of the *owner* `Shm_arena` (e.g. jemalloc::Ipc_arena).
+ *        Given `owner_id`, unique arena-ID of the *owner* `Shm_arena` (e.g., jemalloc::Ipc_arena).
  *        (Together `owner_id` + `collection_id`, sometimes known as #Uniq_collection_id, is a globally unique
  *        identifier of that `Shm_arena`.)
  * @param shm_session_to_keep_alive
- *        As it says!  The arg itself is nullified.
+ *        As it says!  The arg itself is consumed (nullified).
  *        As of this writing we merely keep it alive; we don't modify it (nor even need to query it).
  * @return Borrower-side ref-counted handle to `addr`-pointed in-SHM object whose disposer shall participate in
  *         the *cross-process garbage collection* of that object.

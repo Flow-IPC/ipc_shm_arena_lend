@@ -26,14 +26,11 @@
 #include "ipc/shm/arena_lend/jemalloc/memory_manager.hpp"
 #include "ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp"
 #include "ipc/shm/arena_lend/jemalloc/detail/jemalloc_fwd.hpp"
-#include "ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp"
 #include "ipc/common.hpp"
 #include <flow/util/string_ostream.hpp>
 #include <flow/util/util.hpp>
-#include <boost/system/errc.hpp>
 #include <boost/system/error_code.hpp>
 #include <cassert>
-#include <cstdlib>
 #include <ostream>
 
 namespace ipc::shm::arena_lend::jemalloc
@@ -46,7 +43,7 @@ void* Memory_manager::allocate(size_t size) const
   return IPC_SHM_ARENA_LEND_JEMALLOC_API(malloc)(size); // It returns null <=> we do (as advertised).
 }
 
-void* Memory_manager::allocate(size_t size, arena_id_t arena_id) const
+void* Memory_manager::allocate_no_tcache(size_t size, arena_id_t arena_id) const
 {
   return allocate_helper(size, arena_id, MALLOCX_TCACHE_NONE);
 }
@@ -68,157 +65,57 @@ void Memory_manager::deallocate(void* address) const noexcept
   IPC_SHM_ARENA_LEND_JEMALLOC_API(free)(address);
 }
 
-void Memory_manager::deallocate(void* address, arena_id_t arena_id) const noexcept
+void Memory_manager::deallocate_no_tcache(void* address) const noexcept
 {
-  deallocate_helper(address, arena_id, MALLOCX_TCACHE_NONE);
+  deallocate_helper(address, MALLOCX_TCACHE_NONE);
 }
 
-void Memory_manager::deallocate(void* address, arena_id_t arena_id, tcache_id_t thread_cache_id) const noexcept
+void Memory_manager::deallocate(void* address, tcache_id_t thread_cache_id) const noexcept
 {
-  deallocate_helper(address, arena_id, MALLOCX_TCACHE(thread_cache_id));
+  deallocate_helper(address, MALLOCX_TCACHE(thread_cache_id));
 }
 
-void Memory_manager::deallocate_helper(void* address, arena_id_t arena_id, int thread_cache_flags) const noexcept
+void Memory_manager::deallocate_helper(void* address, int thread_cache_flags) const noexcept
 {
   assert(address);
 
-  IPC_SHM_ARENA_LEND_JEMALLOC_API(dallocx)(address, (MALLOCX_ARENA(arena_id) | thread_cache_flags));
+  IPC_SHM_ARENA_LEND_JEMALLOC_API(dallocx)(address, thread_cache_flags);
 }
 
 arena_id_t Memory_manager::create_arena(extent_hooks_t* extent_hooks) const
 {
-  using arena_lend::detail::Shm_pool_offset_ptr_data_base;
-  using flow::util::ostream_op_string;
   using flow::util::Lock_guard;
   using flow::util::Mutex_non_recursive;
   using flow::error::Runtime_error;
   using boost::system::system_category;
-  namespace errc = boost::system::errc;
-
-  /* Check opt.retain up-front, before creating the arena.  We need it: without it jemalloc refuses to set
-   * retain_grow_limit (ENOENT) -- see below for why we must set that.  Once the arena exists -- wired to
-   * `extent_hooks` (which in practice point into our caller, jemalloc::Ipc_arena, that is in the middle of
-   * being created) -- there is no clean way to back out of a failure; so detect this likeliest cause of such a
-   * failure first.  (opt.retain is on by default in 64-bit Linux; it can be turned off via jemalloc's run-time
-   * configuration, e.g., the `MALLOC_CONF` environment variable -- or its prefixed equivalent, if the jemalloc
-   * build uses an API prefix.) */
-  {
-    bool retain = false;
-    size_t output_size = sizeof(retain);
-    const int ec = IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)("opt.retain", &retain, &output_size, nullptr, 0);
-    if (ec != 0)
-    {
-      throw Runtime_error{Error_code{ec, system_category()}, "je_mallctl() error reading opt.retain."};
-    }
-    if (!retain)
-    {
-      throw Runtime_error{errc::make_error_code(errc::not_supported),
-                          "jemalloc opt.retain is disabled (perhaps via run-time configuration such as "
-                            "MALLOC_CONF); SHM-jemalloc requires it."};
-    }
-  }
 
   arena_id_t arena_id;
-
+  size_t output_size = sizeof(arena_id);
+  extent_hooks_t** input_param;
+  size_t input_size;
+  if (extent_hooks)
   {
-    size_t output_size = sizeof(arena_id);
-    extent_hooks_t** input_param;
-    size_t input_size;
-    if (!extent_hooks)
-    {
-      input_param = nullptr;
-      input_size = 0;
-    }
-    else
-    {
-      input_param = &extent_hooks;
-      input_size = sizeof(extent_hooks);
-    }
-
-    int ec;
-    {
-      /* `arenas.create` mutates the jemalloc arena set, so serialize it against any concurrent
-       * whole-arena-set stats dump (and against arena-destroy).  See detail::jemalloc_arena_list_mutex() doc header
-       * for the whole story.  Do note that if some other code does arenas.create et al directly, then this
-       * won't beat it; but if they use our nice API here then all good. */
-      Lock_guard<Mutex_non_recursive> lock{detail::jemalloc_arena_list_mutex()};
-      ec = IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)("arenas.create",
-                                                    &arena_id, &output_size,
-                                                    input_param, input_size);
-    }
-    if (ec != 0)
-    {
-      throw Runtime_error{Error_code{ec, system_category()}, "je_mallctl() error on creating arena"};
-    }
+    input_param = &extent_hooks;
+    input_size = sizeof(extent_hooks);
+  }
+  else
+  {
+    input_param = nullptr;
+    input_size = 0;
   }
 
-#ifndef FLOW_OS_LINUX
-static_assert(false, "The logic below might be Linux-specific and has only been tested in Linux as of this writing.");
-#endif
-  /* (This comment applies to Linux; for other OS, when supported, the same concepts may apply, but we
-   * should check it and reword as needed, when this happens.)
-   *
-   * Background for the next thing: jemalloc grows its mapped vaddr footprint via
-   * a series of extent_alloc requests -- each new extent (in our setup: each new
-   * SHM-pool) is sized progressively larger than the last to amortize per-mmap() cost and
-   * reduce the frequency of future grow events.  The retain_grow_limit option caps the size
-   * of each such grow step; i.e., it directly limits the size of any individual extent jemalloc will
-   * request from us.  (The "retain" in the name is historical: the geometric-grow machinery
-   * pairs naturally with the *retain* feature -- enabled via `retain` option, on by default for
-   * 64-bit Linux -- but retain_grow_limit caps each such grow request.)  Default on 64-bit Linux
-   * is no limit.
-   *
-   * Why we set it:
-   *   - Hard correctness bound.  In Flow-IPC-SHM-jemalloc each jemalloc extent is backed
-   *     by a real SHM-pool, and our custom-pointer representation cannot encode addresses
-   *     within a pool larger than Shm_pool_offset_ptr_data_base::max_pool_size() (as of this writing ~2Gi bytes).
-   *     retain_grow_limit must therefore be at most that size, or larger extents would yield un-encodable
-   *     pointers (observed in the field).  However this only caps the *growth steps*: a single allocation
-   *     request too large for any step makes jemalloc request an extent sized for that request regardless
-   *     of the limit.  Ipc_arena::create_shm_pool() (the extent-alloc hook) declines any such too-large extent,
-   *     which completes the guarantee.
-   *   - Defensive bound against pathologically-large pools.  SHM objects are subject to
-   *     OS-imposed size/count limits that ordinary heap mappings (jemalloc's "no limit"
-   *     default audience) are not.  Without a cap, a single arena can grow a pool to many
-   *     GBs of vaddr/SHM-pool size even when RAM-resident usage is much smaller -- observed in the
-   *     field, in fact, prompting the original choice of this value.
-   *
-   * The current limit is reasonable for both of these purposes.
-   *
-   * An added note on this: This is opportunistic, as it's not about this knob itself per se, but
-   * the topic has caused enough confusion in the past to where the chance of helping preempt further
-   * such confusion makes the opportunism worthwhile:
-   *   - This knob, retain_grow_limit, is not really about whether, or how aggressively, the
-   *     seemingly-relatedly-named `retain`-flag-knob-controlled feature mmap()s or munmap()s (for us:
-   *     creates/destroys SHM-pools) vaddr areas (extents).  It's just the cap of how large
-   *     an extent (SHM-pool) is allowed to be.  (That said jemalloc refuses to set it unless the `retain`
-   *     flag-option is on; hence our up-front check above.)
-   *   - This knob, retain_grow_limit, is also unrelated to the stat `stats.*.retained`, which counts
-   *     vaddr space that jemalloc has *retained*: excluded from the `stats.*.mapped` accounting yet kept
-   *     mapped -- specifically *not* munmap()ed/returned to the OS -- saved for cheap later reuse (no
-   *     memory-map op needed; just hand the range back out).  There is only that one kind of retention:
-   *     "we could munmap() now, but we keep the mapping and reuse the space when demand rises."  In
-   *     particular there is no unmapped-but-remembered-vaddr state, nor any mechanism wherein jemalloc asks
-   *     to memory-map at a previously-freed address.  (In our arenas the retained state is entered when our
-   *     extent-dalloc hook *declines* extent removal -- see Ipc_arena::optional_remove_shm_pool() -- at
-   *     which point the physical pages are released via SHM-object hole-punching, while the vaddr range and
-   *     its SHM-pool live on.)  And, again, all this is basically orthogonal to retain_grow_limit despite
-   *     the name. */
-
+  int ec;
   {
-    size_t input_param = Shm_pool_offset_ptr_data_base::max_pool_size();
-
-    const int ec
-      = IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)(ostream_op_string("arena.", arena_id, ".retain_grow_limit").c_str(),
-                                                 nullptr, nullptr, &input_param, sizeof(input_param));
-    if (ec != 0)
-    {
-      /* The arena exists and is wired to `extent_hooks` (see up-front opt.retain check above for why that makes a
-       * clean back-out impractical).  With opt.retain checked, a failure here means a bad arena ID or limit value:
-       * a bug. */
-      assert(false && "Setting retain_grow_limit failed despite opt.retain check: bug?");
-      std::abort();
-    }
+    /* `arenas.create` mutates the jemalloc arena set, so serialize it against any concurrent
+     * whole-arena-set stats dump (and against arena-create/destroy).  See detail::jemalloc_arena_list_mutex() doc
+     * header for the whole story.  Do note that if some other code does arenas.create et al directly, then this
+     * won't beat it; but if they use our nice API here then all good. */
+    Lock_guard<Mutex_non_recursive> lock{detail::jemalloc_arena_list_mutex()};
+    ec = IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)("arenas.create", &arena_id, &output_size, input_param, input_size);
+  }
+  if (ec != 0)
+  {
+    throw Runtime_error{Error_code{ec, system_category()}, "je_mallctl() error on creating arena"};
   }
 
   return arena_id;
@@ -249,10 +146,15 @@ void Memory_manager::stats_dump_to_ostream(std::ostream& os, Stat_format format,
   }
 
   {
-    /* malloc_stats_print() mutates the jemalloc arena set, so serialize it against any concurrent
-     * arena-create, arena-destroy (and other stat-dumps).  See detail::jemalloc_arena_list_mutex() doc header
+    /* malloc_stats_print() refreshes jemalloc's stats and then reads many values; so firstly serialize it against
+     * Flow-IPC's other stats refresh-then-read sequences, lest they tear each other.  See
+     * detail::jemalloc_stats_mutex() doc header.
+     *
+     * Secondly: malloc_stats_print() walks the jemalloc arena set unguarded, so serialize it against any concurrent
+     * arena-create and arena-destroy (which mutate that set).  See detail::jemalloc_arena_list_mutex() doc header
      * for the whole story.  Do note that if some other code does arenas.create et al directly, then this
-     * won't beat it; but if they use our nice APIs then all good. */
+     * won't beat it; but if they use our nice APIs then all good.  (Lock order: stats mutex, then this leaf.) */
+    Lock_guard<Mutex_non_recursive> stats_lock{detail::jemalloc_stats_mutex()};
     Lock_guard<Mutex_non_recursive> lock{detail::jemalloc_arena_list_mutex()};
     IPC_SHM_ARENA_LEND_JEMALLOC_API(malloc_stats_print)
       ([](void* cbopaque, const char* chunk)
@@ -263,8 +165,7 @@ void Memory_manager::stats_dump_to_ostream(std::ostream& os, Stat_format format,
 
   if (format == Stat_format::S_JSON)
   {
-    /* In 5.3.0 the JSON is very compact (no white-space... and no newline).  In 5.2.1 this adds an extra newline
-     * which isn't amazing, but lacking one in 5.3.0+ is worse (and technically against our contract). */
+    // The JSON is very compact (no white-space... and no newline); but our contract promises a trailing newline.
     os << '\n';
   }
 }
@@ -289,7 +190,7 @@ void Memory_manager::log_stats_dump(flow::log::Logger* logger_ptr, Stat_format f
                            "[" << extra_opts << "]]): "
                            "STATS_DUMP[[[\n" << stats_dump_to_string(format, extra_opts) << "]]]STATS_DUMP.");
 
-  /* @todo Not a big deal, at least not yet, but it it'd be nice to provide `ostream << Memory_manager::Stat_format`
+  /* @todo Not a big deal, at least not yet, but it'd be nice to provide `ostream << Memory_manager::Stat_format`
    * as well as istream>> (using flow::util::istream_to_enum()).  Could then just output `format` above and
    * elsewhere; and it could be used in flow.cfg (and/or naked program_options and similar) options/settings
    * directly.  Its being an inner-class type would complicate putting those things in _fwd.hpp, so perhaps
@@ -307,6 +208,15 @@ namespace ipc::shm::arena_lend::jemalloc::detail
 // Implementations.
 
 flow::util::Mutex_non_recursive& jemalloc_arena_list_mutex()
+{
+  using flow::util::Mutex_non_recursive;
+
+  // Immortal per our doc header.
+  static const auto s_mutex = new Mutex_non_recursive;
+  return *s_mutex;
+}
+
+flow::util::Mutex_non_recursive& jemalloc_stats_mutex()
 {
   using flow::util::Mutex_non_recursive;
 

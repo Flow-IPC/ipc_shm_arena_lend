@@ -589,7 +589,6 @@ Error_code CLASS_JEM_SESSION_IMPL::init_shm
 TEMPLATE_JEM_SESSION_IMPL
 void CLASS_JEM_SESSION_IMPL::session_shm_stats_tickle_and_schedule()
 {
-  using util::Call_timing;
   using boost::chrono::seconds;
 
   /* Firstly see our doc header; then come back here.
@@ -617,16 +616,7 @@ void CLASS_JEM_SESSION_IMPL::session_shm_stats_tickle_and_schedule()
   }
   // else
 
-  /* Background for the Call_timing thing is (1) in jemalloc::Memory_manager doc header and (2) in Call_timing docs.
-   * We won't repeat the details; but as for the timing here: It is just periodic; we have no idea what is happening
-   * simultaneously.  Hence it's pretty much one of the 2 model examples of POSSIBLY_UNSAFE (the other being:
-   * doing this during shutdown).
-   *
-   * (If you're reading this and feeling worried: Don't be worried.  With jemalloc>=5.3.0 there is no issue at all:
-   * period.  With <5.3.0 this takes care of business appropriately.)
-   *
-   * Thread safety: It is safe from any thread by its contract. */
-  arena->sample_hi_wmarks(Call_timing::S_POSSIBLY_UNSAFE);
+  arena->sample_hi_wmarks(); // Thread safety: It is safe from any thread by its contract.
 
   Base::async_worker()->schedule_from_now(TICKLE_PERIOD, [this](auto&&) mutable
   {

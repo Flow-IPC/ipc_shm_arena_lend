@@ -64,18 +64,10 @@ std::ostream& operator<<(std::ostream& os, const Arena_info_dump& val)
    * @todo Once there are indeed potentially >1 jemalloc-arenas in an Ipc_arena, revisit this; see how it looks/feels.
    * Reconsider the "/arena" snippet too; possibly handle the whole thing, cosmetics-wise, as we handle
    * live_pools below.) */
-  const auto& mem_mgr_stats_vec = val.m_mem_mgr_stats;
-  if (mem_mgr_stats_vec.empty())
+  for (const auto& mem_mgr_stats : val.m_mem_mgr_stats)
   {
-    os << "mem_mgr/arena: [Skipping due to jemalloc arena-concurrency bug; upgrade linked jemalloc.]" << ln;
-  }
-  else
-  {
-    for (const auto& mem_mgr_stats : mem_mgr_stats_vec)
-    {
-      // @todo Add idx printout like below, when in reality `mem_mgr_stats_vec.size() > 1` becomes a thing.
-      os << "mem_mgr/arena: [" << print(mem_mgr_stats) << ']' << ln; // mem_mgr_stats includes jemalloc-arena-ID.
-    }
+    // @todo Add idx printout like below, when in reality `m_mem_mgr_stats.size() > 1` becomes a thing.
+    os << "mem_mgr/arena: [" << print(mem_mgr_stats) << ']' << ln; // mem_mgr_stats includes jemalloc-arena-ID.
   }
 
   os << "sharded: [" << print(val.m_sharded_stats) << ']' << ln

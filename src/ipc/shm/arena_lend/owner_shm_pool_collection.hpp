@@ -37,9 +37,10 @@ namespace ipc::shm::arena_lend
 {
 
 /**
- * Abstract class representing a shared memory pool collection for owners, which are entities (e.g., processes)
- * that have access to a memory manager. In other words, they can allocate and deallocate memory.  Subclasses
- * may override on_shm_pool_created() and on_shm_pool_removed() to be notified of changes in the SHM pool set.
+ * Shared memory pool collection for owners, which are entities (e.g., processes) that create and remove the pools
+ * (as opposed to merely opening them read-only, as borrowers do).  Allocation and deallocation within the pools are
+ * up to the subclass and its memory manager (e.g., jemalloc::Ipc_arena).  Subclasses may override
+ * on_shm_pool_created() and on_shm_pool_removed() to be notified of changes in the SHM pool set.
  *
  * @todo ipc::shm::arena_lend::Owner_shm_pool_collection (among others) should be
  * officially classified an internal API (at least, per coding guide, placed in `detail/` header; optionally in `detail`
@@ -81,30 +82,13 @@ public:
    *
    * @param logger For logging purposes.
    * @param id Identifier for the collection.
-   * @param memory_manager The memory allocator.
    * @param pool_name_base Pool-name prefix; each pool's SHM object name is derived from this plus its unique ID.
    * @param permissions The shared memory object file permissions when one is created.
    */
   Owner_shm_pool_collection(flow::log::Logger* logger,
                             collection_id_t id,
-                            const std::shared_ptr<Memory_manager>& memory_manager,
                             Shared_name&& pool_name_base,
                             const util::Permissions& permissions);
-
-  /**
-   * Allocates memory from the memory manager.
-   *
-   * @param size The amount of memory to allocate.
-   *
-   * @return The resulting allocation upon success (failure throws).
-   */
-  virtual void* allocate(std::size_t size) = 0;
-  /**
-   * Deallocates memory back to the memory manager.
-   *
-   * @param address The address to be deallocated.
-   */
-  virtual void deallocate(void* address) noexcept;
 
   /**
    * Returns SHM object file-system permissions we were given via constructor.
@@ -191,13 +175,6 @@ protected:
     /// Mutex to synchronize access.
     Mutex m_mutex;
   }; // class Lockable_shm_pool
-
-  /**
-   * Returns the memory manager.
-   *
-   * @return See above.
-   */
-  inline std::shared_ptr<Memory_manager> get_memory_manager() const;
 
   /**
    * Creates a shared memory object and maps it in the process' address space.
@@ -301,18 +278,11 @@ private:
    */
   bool register_shm_pool_and_notify(const std::shared_ptr<Shm_pool>& shm_pool);
 
-  /// Memory allocator.
-  std::shared_ptr<Memory_manager> m_memory_manager;
   /// Pool-name prefix; individual pool SHM object names are derived from this.
   const Shared_name m_pool_name_base;
   /// The shared memory object file permissions when one is created.
   const util::Permissions m_permissions;
 }; // class Owner_shm_pool_collection
-
-std::shared_ptr<Memory_manager> Owner_shm_pool_collection::get_memory_manager() const
-{
-  return m_memory_manager;
-}
 
 Shared_name Owner_shm_pool_collection::generate_shm_object_name(pool_id_t shm_pool_id) const
 {

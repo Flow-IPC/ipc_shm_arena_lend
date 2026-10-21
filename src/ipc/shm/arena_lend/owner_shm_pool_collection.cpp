@@ -24,7 +24,6 @@
 
 /// @file
 #include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
-#include "ipc/shm/arena_lend/memory_manager.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/native_handle.hpp"
 #include <sstream>
@@ -45,11 +44,9 @@ namespace ipc::shm::arena_lend
 
 Owner_shm_pool_collection::Owner_shm_pool_collection(Logger* logger,
                                                      collection_id_t id,
-                                                     const shared_ptr<Memory_manager>& memory_manager,
                                                      Shared_name&& pool_name_base,
                                                      const util::Permissions& permissions) :
   Shm_pool_collection(logger, id),
-  m_memory_manager(memory_manager),
   m_pool_name_base(std::move(pool_name_base)),
   m_permissions(permissions)
 {
@@ -97,11 +94,6 @@ Owner_shm_pool_collection::~Owner_shm_pool_collection()
      * the static_assert() above.  @todo Arguably a totally proper impl would do some kind of polymorphic thing
      * so that the same unmap-functor is used in both/all places. */
   }
-}
-
-void Owner_shm_pool_collection::deallocate(void* object) noexcept
-{
-  m_memory_manager->deallocate(object);
 }
 
 void Owner_shm_pool_collection::on_shm_pool_created(const shared_ptr<Shm_pool>&)

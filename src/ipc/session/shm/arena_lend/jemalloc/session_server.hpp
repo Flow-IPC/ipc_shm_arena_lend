@@ -532,7 +532,6 @@ Error_code CLASS_JEM_SESSION_SRV::init_app_shm_as_needed(const Client_app& app)
 TEMPLATE_JEM_SESSION_SRV
 void CLASS_JEM_SESSION_SRV::app_shm_stats_tickle_and_schedule(const std::string& app_name)
 {
-  using util::Call_timing;
   using boost::chrono::seconds;
   using std::shared_ptr;
 
@@ -574,8 +573,7 @@ void CLASS_JEM_SESSION_SRV::app_shm_stats_tickle_and_schedule(const std::string&
   }
   // else:
 
-  // Background for the Call_timing thing: <see comment in Session_impl::session_shm_stats_tickle_and_schedule()>.
-  arena->sample_hi_wmarks(Call_timing::S_POSSIBLY_UNSAFE);
+  arena->sample_hi_wmarks();
 
   m_async_periodic_worker.schedule_from_now(TICKLE_PERIOD, [this, app_name](auto&&) mutable
   {

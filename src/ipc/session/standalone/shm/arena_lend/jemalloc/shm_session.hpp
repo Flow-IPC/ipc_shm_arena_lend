@@ -522,15 +522,8 @@ public:
    * @param target_info_dump
    *        The non-`->m_fmt` parts shall be assigned.  `->m_fmt.m_verbose` is also consulted (so set it, if desired,
    *        before calling); see util::Info_dump_format::m_verbose.
-   * @param call_timing
-   *        This is ignored and can be left at its default.  It is present for generic-programming synergy
-   *        versus jemalloc::Ipc_arena versus SHM-classic's classic::Pool_arena.  The latter, in the land of
-   *        arena-sharing SHM-providers (cf. SHM-jemalloc: arena-lending SHM-provider) is *both* the arena
-   *        type *and* the SHM-session type.  So all 3 objects have the same info_dump() signature (modulo
-   *        `const`ness potentially).
    */
-  void info_dump(Info_dump* target_info_dump,
-                 util::Call_timing call_timing = util::Call_timing::S_ALWAYS_SAFE);
+  void info_dump(Info_dump* target_info_dump);
 
   /**
    * Returns the process-wide borrower-side stat-set Borrower_pool_lookup_global_stats,

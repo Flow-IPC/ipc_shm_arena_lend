@@ -77,7 +77,6 @@ class Shm_pool_offset_ptr; // See notes about Difference_type[=int] in namespace
 
 class Borrower_shm_pool_collection;
 class Divisible_shm_pool;
-class Memory_manager;
 class Owner_shm_pool_collection;
 class Owner_shm_pool_listener;
 class Shm_pool;

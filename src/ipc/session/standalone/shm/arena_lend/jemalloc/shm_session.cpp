@@ -629,7 +629,7 @@ void Shm_session::Shm_pool_listener_impl::notify_removed_shm_pool(const std::sha
   m_owner.remove_lender_shm_pool(m_collection_id, shm_pool);
 }
 
-void Shm_session::info_dump(Info_dump* target_info_dump, [[maybe_unused]] util::Call_timing)
+void Shm_session::info_dump(Info_dump* target_info_dump)
 {
   using flow::util::stat::stats_assign;
   using boost::adaptors::transformed;

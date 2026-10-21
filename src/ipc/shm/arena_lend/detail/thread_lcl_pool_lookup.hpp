@@ -110,10 +110,10 @@ public:
 
   /// Resets stats().  The formal meaning of a reset is discussed in `flow::util::stat` doc header.
   static void stats_reset();
-}; // struct Pool_lookup_global_stats
+}; // class Pool_lookup_global_stats
 
 /**
- * (Internal-use) `Thread_local_pool_lookup_rev<R>.s_registry`, where `R` is a distinct pool-repository type,
+ * `Thread_local_pool_lookup_rev<R>.s_registry`, where `R` is a distinct pool-repository type,
  * enables high-perf reverse-lookup from a vaddr to the containing SHM-pool's ID and
  * offset in bytes from the pool-base vaddr.
  *
@@ -122,7 +122,7 @@ public:
  * and `Thread_local_pool_lookup_rev<R2>` are completely independent, if `R1` and `R2` are different types.
  *
  * @see This is a key building block for the rev-lookup operations of Owner_shm_pool_repository (and
- *      Shm_pool_offset_ptr operating against it, owner-side) and of
+ *      Shm_pool_offset_ptr_data -- for Shm_pool_offset_ptr -- operating against it, owner-side) and of
  *      session::shm::arena_lend::detail::Borrower_shm_pool_collection_repository (ditto but borrower-side).
  *      In both cases this is done indirectly via Shm_pool_repo_lookup_core_rev which uses us directly.
  *      The rationale of separating us (Thread_local_pool_lookup_rev) from Shm_pool_repo_lookup_core_rev is the
@@ -136,7 +136,7 @@ public:
  * their respective #pool_id_t values.  This consists of two operations, and you must help us perform each:
  *   - *Pull*: A `*this` is auto-created in new thread Ti the first time it is needed.
  *     Therefore the new `*this` *pulls* the current canonical state from somewhere that you have it.
- *   - *Push*: You current canonical state is updated (e.g., memory-manager created new pool).
+ *   - *Push*: Your current canonical state is updated (e.g., memory-manager created new pool).
  *     Therefore you *push* that state, wherever you've got it, into *every* extant `*this`.
  *
  * ### How to use: pull ###
@@ -153,7 +153,8 @@ public:
  *   - `Thread_local_pool_lookup_rev<Repository>::s_registry.while_locked() {...}`.
  *   - Inside the `{...}`, obtain and loop-through each thread's extant thread-local
  *     Thread_local_pool_lookup_rev cache: `state_per_thread` from `.while_locked()` is a map whose
- *     keys are each a `Thread_local_pool_lookup_rev<Repository>`.
+ *     keys are each a `Thread_local_pool_lookup_rev<Repository>`.  (The values are some metadata like thread ID
+ *     or what-not.)
  *   - For each of those: `cache.push_pools(M)`, where `M` is the complete new mapping.
  *   - The mutex that shall be locked inside the `{...}` shall be the same mutex `Mtx` used during any pull
  *     (see above).
@@ -161,7 +162,7 @@ public:
  * ### Design / Impl ###
  * The basic lookup algorithm, even in one thread only, is that one needs a sorted-by-base-vaddr map from
  * base-vaddr to pool ID, and with logarithmic time complexity lookup() shall perform a binary-search
- * (as in `std::map::lower_bound()`) lookup of a nearby (versus the input `void*`) base-vaddr plus a possibly
+ * (as in `std::map::upper_bound()`) lookup of a nearby (versus the input `void*`) base-vaddr plus an
  * adjustment of the resulting iterator.  (That gets the pool ID; the offset is just the address minus the
  * located base-vaddr.)
  *
@@ -206,26 +207,26 @@ public:
  * The object at `static` Pool_lookup_global_stats<Shm_arena, true>::stats() -- a global, per-`decltype(*this)`
  * arena_lend::Owner_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
  *
- * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, true>::reset_stats().
+ * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, true>::stats_reset().
  *
  * ### Stats -- If #S_LOOKUP_CAN_FAIL is `false` only ###
  * The object at `static` Pool_lookup_global_stats<Shm_arena, false>::stats() -- a global, per-`decltype(*this)`
  * arena_lend::Borrower_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
  *
- * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, false>::reset_stats().
+ * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, false>::stats_reset().
  *
  * @tparam Repository_t
  *         See above.  Formally(ish) there are two requirements/properties.  1, if and only if
- *         `is_same_v<R1, R2> == true` then `Thread_local_pool_lookup_rev<R1, ...>` and
+ *         `is_same_v<R1, R2> == false` then `Thread_local_pool_lookup_rev<R1, ...>` and
  *         `Thread_local_pool_lookup_rev<R2, ...>` are independent registries; otherwise they are the same registry.
  *         2, `Repository_t::get_instance().tl_copy_rev_pull_pools()` must exist and do what is
  *         explained above.
  * @tparam LOOKUP_CAN_FAIL
- *         If `true`, lookup() may fail to find an address in any pool (returns `pool_id = 0` in that case).
+ *         If `true`, lookup() may fail to find an address in any pool (yields `pool_id = 0` in that case).
  *         This is needed on the owner side, where an `Shm_pool_offset_ptr` with `CAN_STORE_RAW_PTR == true`
  *         may call `from_address()` on a non-SHM (stack/heap) address.
  *         If `false`, every address is assumed to reside in some known pool (borrower side), and lookup()
- *         has undefined behavior on a miss (as before); pool sizes are not stored.
+ *         has undefined behavior on a miss; pool sizes are not stored.
  * @tparam Shm_arena_t
  *         See Pool_lookup_global_stats.
  */
@@ -248,9 +249,8 @@ public:
    * Reverse-lookup map type (base vaddr -> Pool_by_base).  Used internally but exposed to our direct user via
    * the push and pull APIs.
    *
-   * @internal
-   * ### Rationale for chosen type ###
-   * Used for #m_pools_sorted_by_base; is a `flat_map` (sorted contiguous vector) rather than `std::map`
+   * ### Internally: Rationale for chosen type ###
+   * Used for #m_pools_sorted_by_base; is a `flat_map` (internally: sorted contiguous vector) rather than `std::map`
    * (red-black tree).  This is ideal here: lookup() -- the perf-critical hot path -- performs `upper_bound()` on
    * contiguous memory (cache-friendly binary search) instead of pointer-chasing through scattered tree nodes.
    *
@@ -270,7 +270,7 @@ public:
    * `Thread_local_state_registry::this_thread_state()` contract).
    *
    * @warning It is public due to `Thread_local_state_registry` requirements only.  Do not call directly.
-   *          See class doc header "How to use: push" section however.
+   *          See class doc header "How to use: pull" section however.
    */
   Thread_local_pool_lookup_rev();
 
@@ -293,7 +293,8 @@ public:
    *        On return, set to the ID of the pool containing `address`; or 0 if not found
    *        (only when `S_LOOKUP_CAN_FAIL`).
    * @param pool_offset
-   *        On return, set to `address` minus the base vaddr of the containing pool; untouched if not found.
+   *        On return, set to `address` minus the base vaddr of the containing pool; untouched if not found
+   *        (<=> `pool_id == 0` on return).
    */
   void lookup(const void* address, pool_id_t& pool_id, pool_offset_t& pool_offset) const;
 
@@ -303,10 +304,10 @@ public:
    * Called from the pusher thread (not necessarily the thread owning this `*this`).
    * `s_registry.while_locked()` shall be in effect at the time of this call.
    *
-   * See class doc header "How to use: pull" section.
+   * See class doc header "How to use: push" section.
    *
    * @param pools_sorted_by_base
-   *        The complete new mapping (pool-base vaddr -> Pool_by_base); moved-from on return.
+   *        The complete new mapping (pool-base vaddr -> Pool_by_base); moved-from before return.
    */
   void push_pools(Map&& pools_sorted_by_base);
 
@@ -321,8 +322,9 @@ public:
 private:
   // Data.
 
-  /// Per-thread mutex protecting #m_pools_sorted_by_base.  Contended by at most 2 threads (local lookup vs. pusher).
+  /// Per-thread mutex protecting #m_pools_sorted_by_base.  Contended by at most 2 threads (local lookup versus pusher).
   mutable flow::util::Mutex_non_recursive m_pools_sorted_by_base_mutex;
+
   /**
    * Thread-local copy of the canonical sorted map: pool-base vaddr -> Pool_by_base.  See #Map doc and class
    * doc header.
@@ -331,7 +333,8 @@ private:
 }; // class Thread_local_pool_lookup_rev
 
 /**
- * (Internal-use) Analogous to Thread_local_pool_lookup_rev but for forward lookup: pool ID -> base vaddr.
+ * Analogous to Thread_local_pool_lookup_rev but for forward lookup: pool ID -> base vaddr.  Used borrower-side
+ * only (read on as to why not owner-side).
  *
  * As far as we know, if one needs multithreaded such lookup with high performance, then
  * borrower-side one should use Thread_local_pool_lookup_fwd.  However owner-side one can use a
@@ -351,7 +354,7 @@ private:
  * The object at `static` Pool_lookup_global_stats<Shm_arena, false>::stats() -- a global, per-`decltype(*this)`
  * arena_lend::Borrower_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
  *
- * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, false>::reset_stats().
+ * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, false>::stats_reset().
  *
  * @tparam Repository_t
  *         Same concept as for Thread_local_pool_lookup_rev.
@@ -377,10 +380,9 @@ public:
    * Forward-lookup map type (pool ID -> base vaddr).  Used internally but exposed to our direct user via
    * the push and pull APIs.
    *
-   * @internal
-   * ### Rationale for chosen type ###
+   * ### Internally: Rationale for chosen type ###
    * As the Thread_local_pool_lookup_rev::Map cousin uses `flat_map` (sorted contiguous vector) for
-   * cache-friendly `lower_bound()`, we analogously use `unordered_flat_map` (open-addressing hash table) for
+   * cache-friendly `upper_bound()`, we analogously use `unordered_flat_map` (open-addressing hash table) for
    * cache-friendly `find()`.  Same rationale.
    */
   using Map = boost::unordered_flat_map<pool_id_t, void*>;
@@ -436,8 +438,9 @@ public:
 private:
   // Data.
 
-  /// Per-thread mutex protecting #m_pool_bases_by_id.  Contended by at most 2 threads (local lookup vs. pusher).
+  /// Per-thread mutex protecting #m_pool_bases_by_id.  Contended by at most 2 threads (local lookup versus pusher).
   mutable flow::util::Mutex_non_recursive m_pool_bases_by_id_mutex;
+
   /// Thread-local copy of the canonical hash map: pool ID -> base vaddr.  See #Map doc and class doc header.
   Map m_pool_bases_by_id;
 }; // class Thread_local_pool_lookup_fwd
@@ -494,12 +497,12 @@ void Thread_local_pool_lookup_rev<Repository_t, LOOKUP_CAN_FAIL, Shm_arena_t>::l
   flow::util::Lock_guard<decltype(m_pools_sorted_by_base_mutex)> lock{m_pools_sorted_by_base_mutex};
 
   /* It would be typical in the rest of the code base to add assert(s)/guards/things like that.
-   * However we choose to skip past anything that might take cycles in production -- where it is not uncommon
+   * However we choose to skip past anything that might take cycles in production -- where it is not all that uncommon
    * to keep assertions enabled.  We're playing a little chicken here on purpose; the perf here has been
    * shown under load to be of high impact. */
 
   /* upper_bound() returns the first element with base > address.  The candidate pool (if any) is the one
-   * just before that.  Unlike lower_bound(), there is no exact-match special case: always --it. */
+   * just before that.  Unlike with lower_bound(), there is no exact-match special case: always `--it`. */
   auto it = m_pools_sorted_by_base.upper_bound(const_cast<void*>(address));
 
   if constexpr(S_LOOKUP_CAN_FAIL)

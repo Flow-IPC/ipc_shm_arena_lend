@@ -330,6 +330,7 @@ struct Zombie_obj_reaper_stats
  *     in reporting data, each reporting at least one stat-member's worth.
  *
  * @internal
+ *
  * Stat sub-`struct`s grouped in this one `struct`, so that Thread_lcl_obj_db_admin and
  * Thread_lcl_obj_db_client TL-registries can, at stat consumption time, aggregate per-thread shards corresponding to
  * each of those sub-`struct`s.  Since a `*this` is a single (composed) `Stat_set` (in the `flow::util::stat`
@@ -401,7 +402,7 @@ struct Zombie_obj_reaper_stats
  * User wants the ongoing stat-collection to be reset (in short: leave GAUGEs alone, reset ACCUMULATORs to zero,
  * and reset HI_WMARKs to match the GAUGEs' current values).  So we do the above, except that in `F()` upon
  * acquiring the set-container of extant `Admin`s, we don't feed their respective `*this`es into a single
- * `stats_aggregate_shards()` but rather `stats_reset()` each one.
+ * `stats_aggregate_shards()` but rather into `stats_reset_shard_aggregate()`.
  *
  * This also has the nice property of synchronizing (a/k/a making serial) stat-consumptions and stat-resets.
  * The `X.while_locked()` is both cases is on the same `X`, thus internally the same central mutex is being
@@ -535,8 +536,6 @@ struct Obj_db_aux_pool_stats
    * Of the mapped space tracked (in bytes) in #m_mapped_sz, the approximate/ceiling size of *resident* RAM
    * (RAM taken from general OS use): small header plus space used by #m_use_ct_active_quanta quanta.  In short
    * it's a (conservative) estimate of RAM used by the SHM aux-pools.
-   *
-   * @note The word resident is sometimes termed as *dirty*, particularly w/r/t kernel *pages*.
    *
    * Caveat(s) and fact(s):
    *   - Each active quantum added to #m_use_ct_quanta adds a constant (per-pool at least) amount of RAM
@@ -695,26 +694,15 @@ struct Obj_db_aux_pool_global_stats
  *
  * ### Background ###
  * From the perspective of the arena (hence `Owner_` prefix) in which first-class objects are constructed
- * (and GCed) and/therefore raw buffers are [de]allocated, consider the latter, most basic operation:
- * "allocate N bytes and return pointer to this area."  Ignore, temporarily, the relevance of SHared-Memory (SHM);
- * consider a regular heap `alloc(N)` albeit in a segregated arena, as in the jemalloc memory manager.
- * Before employing memory-manager internal algorithms -- free lists, size classes, who knows -- the manager
- * needs a contiguous *vaddr area* (a/k/a *extent*) in which to operate.  Hence it musk ask the OS
- * to *memory-map* (in Linux et al: `mmap()`) a chunk of some large-enough size (or use one that was mapped
- * earlier on-demand or otherwise).  Not all parts of the extent need to be actually written/read at first
- * (or possibly even ever, depending on what happens on the user's part); the extent is divided into *pages*,
- * and a page only becomes *dirty* (or *resident*) once it is written/read; that means it is assigned to actual
- * physical RAM which now cannot be used by something else.  At any rate, the `alloc(N)` in
- * particular will need some resident page(s) inside which to reserve the N bytes.
- *
- * All that is to say: inside the arena unit, the extent is the next smallest unit.  Now, consider SHM, as in
- * SHM-jemalloc.  The above still applies, but the `mmap()` (or equivalent) is no longer against the general
- * heap RAM but rather against some specific, named (at least initially at creation/opening time) *SHM-pool*
- * (a/k/a segment, SHM-object; in Flow-IPC we use "[SHM-]pool").  (A SHM-pool can be accessed by other process(es);
- * however that is not of direct interest from the owner's PoV, and therefore in the context of this discussion.)
+ * (and GCed) and/therefore raw buffers are [de]allocated: a memory manager (such as jemalloc) carves allocations
+ * out of contiguous *vaddr areas* (a/k/a *extents*), which it obtains by having memory *memory-mapped*.  Mapped
+ * space is not RAM in use: a page becomes *resident* (taken from general OS use) only once accessed.  In an
+ * arena-lend SHM-provider (such as SHM-jemalloc) each such mapping is of a named *SHM-pool* (a/k/a segment,
+ * SHM-object; in Flow-IPC we use "[SHM-]pool").  (A SHM-pool can be accessed by other process(es); however that is
+ * not of direct interest from the owner's PoV, and therefore in the context of this discussion.)
  *
  * So, here we concern ourselves with SHM-pools, which compose the arena.  Events of interest are, e.g.,
- * memory-manger requested an extent (for us, pool), so we opened a SHM-pool and mapped M total bytes in that pool;
+ * memory-manager requested an extent (for us, pool), so we opened a SHM-pool and mapped M total bytes in that pool;
  * perhaps the reverse (pool no longer needed, close it).  These are straightforward, really, but a few
  * things to keep in mind:
  *   - Pools are generally created when a user, directly or indirectly (usually indirectly in Flow-IPC),
@@ -740,11 +728,8 @@ struct Obj_db_aux_pool_global_stats
  *   - Commits/decommits:  Too hairy/inside-baseball; not really an area of SHM-provider interest; not sure if perf
  *     risk.  Probably available in native-jemalloc stats (ditto prev bullet).  Might also be more of a thing or
  *     less of a thing depending on OS which speaks to its inside-baseballhood.
- *   - Lazy-purge, forced-purge: Probably not a perf risk. (Purging is time-based -- the `dirty/muzzy_decay_ms`
- *     thresholds, ~10s by default, set how long unused space must age first.  Use of jemalloc, alloc/free specifically,
- *     provides the piggy-backed opportunities to check against these default-generous time thresholds and sometimes
- *     proceed.)  Again it seems too hairy/inside-baseball; and again probably available in native-jemalloc stats.
- *     As in prev bullet might be OS-dependent.
+ *   - Lazy-purge, forced-purge: Probably not a perf risk.  Again it seems too hairy/inside-baseball; and again
+ *     probably available in native-jemalloc stats.  As in prev bullet might be OS-dependent.
  */
 struct Owner_pool_stats
 {
@@ -837,7 +822,7 @@ struct Owner_pool_stats
    * @note Incidentally: If an optional pool-destroy request from mem-mgr is rejected by SHM-provider, mem-mgr
    *       shall likely reuse the SHM-pool for future allocations if suitable.  The fact it remains mapped indefinitly
    *       does not even mean it will *necessarily* stay resident indefinitely; mem-mgrs can and do use special
-   *       OS calls to "un-dirty" unused pages (return physical RAM back to the OS for general availability).
+   *       OS calls to *purge* unused pages (return physical RAM back to the OS for general availability).
    *
    * @internal
    * We considered adding an `_sz` counterpart to #m_pool_optional_destroy_request_count; but to me (ygoldfel) is
@@ -1099,7 +1084,7 @@ struct Borrower_pool_stats
    *   - These are in SHM; mapping this in borrower-process does not use any more RAM than is actually used by
    *     the pool owner-side.
    *   - A pool's (mapped) size does not necessarily (or even typically) equal how much RAM is taken away
-   *     from general OS use; mapped space is only so-taken (a/k/a resident, dirty) if pages have been
+   *     from general OS use; mapped space is only so-taken (a/k/a resident) if pages have been
    *     read/written.  (Furthermore, by the memory manager's prerogative, previously resident pages can be
    *     made un-resident when not in use.  How aggressively this is done is up to the memory manager; e.g.
    *     jemalloc.  All of this occurs within the owner/arena process, not borrower-side.)
@@ -1226,7 +1211,7 @@ struct Shm_pool_info
  * cross-process garbage-collectable *first-class objects* (as `.construct<T>()`ed and `.borrow_object<T>()`ed);
  * but when it is required to actually allocate (or later deallocate) a buffer in SHM, the SHM-provider uses
  * a *memory manager* (for SHM-jemalloc, that's jemalloc).  (In the middle of an allocation, sometimes
- * the memory mnanager needs a new vaddr area, which it requests of SHM-jemalloc via customization hook, so we
+ * the memory manager needs a new vaddr area, which it requests of SHM-jemalloc via customization hook, so we
  * create a SHM-pool and... so it goes; the memory manager and the leveraging SHM-provider thus cooperate.)
  *
  * So, Memory_manager_stats tracks stats that happen to have these general properties:
@@ -1242,19 +1227,19 @@ struct Shm_pool_info
  *     it well.
  *   - `_hi_wmark` (e.g.: Vaddr::m_mapped_sz_hi_wmark) fields are not reported by memory manager directly (if they
  *     were, we'd take them!), so their semantics have the same limitation as within TL-sharded `struct`s (e.g.: see
- *     Shared_stats doc header).
+ *     Sharded_stats doc header).
  *
- * This `struct` is provider-agnostic by design: it is the stat-set of arena_lend::Memory_manager (the base
- * abstraction); a given SHM-provider impl fills what it can and leaves the rest at default (usually zero).
+ * This `struct` is SHM-provider-agnostic by design; a given SHM-provider impl fills what it can and leaves the
+ * rest at default (usually zero).
  *
- * The first (as of this writing only) arena-lend provider is SHM-jemalloc, which fills these from jemalloc's
+ * The first (as of this writing only) arena-lend SHM-provider is SHM-jemalloc, which fills these from jemalloc's
  * `mallctl()` statistics surface.
  *
  * ### How it is consumed ###
  * Unlike the continuously-sampled (and often TL-sharded) stat-sets, these are *raw readings* obtained from the
  * provider at stat-consumption time -- a single consistent snapshot per consume (for SHM-jemalloc: one
- * `mallctl("epoch")` refresh, then a batch of reads).  (Internally this uses
- * `flow::util::stat::stats_since_reset_state()`/`stats_mark_reset_state()`.)
+ * `mallctl("epoch")` refresh, then a batch of reads, repeated if someone else refreshed meanwhile).  (Internally
+ * this uses `flow::util::stat::stats_since_reset_state()`/`stats_mark_reset_state()`.)
  *
  * Per-arena context: a `Shm_arena` exposes one Memory_manager_stats per native arena it maintains, each
  * self-identified by #m_uniq_arena_id (<=> `Shm_arena`) and #m_native_arena_id (<=> native arena), both emitted
@@ -1287,12 +1272,10 @@ struct Memory_manager_stats
     /**
      * (Gauge) Total bytes currently mapped from the OS into the arena's address space.  See sub-group doc header.
      *
-     * Reminder: While important, this does not represent RAM taken from OS/unavailable for general use by OS
-     * (for other applications): a given page generally start off as *not* resident (a/k/a dirty); once
-     * read/written (even 1 byte) it becomes resident/dirty (not available for general use by OS).  (A page by
-     * default is along the lines of 4Ki bytes.)  E.g.: it is entirely possible and not even unusual
-     * for a particular vaddr area (in our case backed by a SHM pool) to be, say, mapped for 100 megabytes --
-     * but only 500 kilobytes of it correspond to actual RAM use (#m_resident_sz + possibly a bit more).
+     * Reminder: This is not RAM in use (taken from general OS use); a page becomes resident only once accessed.
+     * E.g.: it is entirely possible and not even unusual for a particular vaddr area (in our case backed by a SHM
+     * pool) to be, say, mapped for 100 megabytes -- but only 500 kilobytes of it correspond to actual RAM use (at
+     * most #m_resident_sz).
      */
     size_t m_mapped_sz = 0;
 
@@ -1305,14 +1288,21 @@ struct Memory_manager_stats
      */
     size_t m_mapped_sz_hi_wmark = 0;
 
-    /// (Gauge) Total physically-resident bytes (RSS-like).  See sub-group doc header.
+    /**
+     * (Gauge) Roughly: the peak, since arena creation, of concurrently-allocated bytes (rounded up to jemalloc's
+     * internal units), plus allocator metadata, minus whatever has since been purged (returned to the OS).
+     * This approximates physically-resident bytes, as an upper bound: allocated bytes never actually touched count.
+     * See sub-group doc header.
+     */
     size_t m_resident_sz = 0;
 
     /// Max of #m_resident_sz observed so far.
     size_t m_resident_sz_hi_wmark = 0;
 
     /**
-     * (Gauge) Bytes in pages backing live (active) allocations (~= live allocated bytes + small allocator metadata).
+     * (Gauge) Bytes in pages backing live (active) allocations: ~= live allocated bytes + unused space on those same
+     * pages, set aside for future allocations of the same size.  (jemalloc packs same-size small allocations together
+     * into pages; such a page counts in full while at least one of them is live.)  Excludes allocator metadata.
      *
      * @see Memory_manager_stats::Alloc subgroup doc header discussion may be relevant.
      */
@@ -1323,10 +1313,11 @@ struct Memory_manager_stats
 
     /**
      * (Gauge) Not-active (so freed from/not yet used for allocated user-buffers; contrast with #m_active_sz) bytes
-     * that are physically resident (not available for general use by OS).  This is  cheaply reusable in-place (no
-     * syscall required; just read/write at vaddr).
+     * not yet returned to the OS; hence physically resident (not available for general use by OS) -- to the extent
+     * they were ever touched.  This is cheaply reusable in-place (no syscall required; just read/write at vaddr).
      *
-     * For SHM-jemalloc: *dirty* pages (`pdirty` x page-size).
+     * For SHM-jemalloc: jemalloc's *dirty* pages (`pdirty` x page-size).  (This "dirty" is jemalloc's term: unused
+     * but not yet purged.  It is unrelated to the OS-kernel sense of "dirty page.")
      */
     size_t m_inactive_resident_sz = 0;
 
@@ -1334,21 +1325,11 @@ struct Memory_manager_stats
     size_t m_inactive_resident_sz_hi_wmark = 0;
 
     /**
-     * (Gauge) Not-active (see also #m_inactive_resident_sz) bytes that the memory-manager formerly held as resident
-     * but has since offered to the OS for reclamation into general availability via *lazy* purge.  (In Linux: this
-     * is `madvise(MADV_FREE)` -- OS may take the physical pages at its leisure; contents stay valid unless/until
-     * it does.)  The OS having possibly not (yet) taken up the offer is why this is "inactive-but-possibly-resident"
-     * rather than simply freed; either way it is counted in this stat-member.
+     * (Gauge) Not-active (see also #m_inactive_resident_sz) bytes that the memory manager has returned to the OS
+     * *lazily*: the OS may reclaim them at its leisure, and until then they may remain resident.
      *
-     * For SHM-jemalloc: *muzzy* pages (`pmuzzy` x page-size).
-     *
-     * @note The harsher ways of returning RAM are *not* counted here, as pages so released are gone from
-     *       residence immediately: *forced* purge (generically in Linux `madvise(MADV_DONTNEED)`; for SHM-jemalloc:
-     *       SHM-object hole-punching) and un-memory-mapping (`munmap()`) the whole containing vaddr area
-     *       (a/k/a extent, pool).  Note also that SHM-jemalloc configures its memory manager *without* a
-     *       lazy-purge ability (there is no SHM analog of `MADV_FREE`'s recoverability): its physical give-back
-     *       is via the hole-punch (#m_retained_sz).  That is to say: as of this writing this stat-member should
-     *       show zero.
+     * For SHM-jemalloc: jemalloc's *muzzy* pages (`pmuzzy` x page-size).  SHM-jemalloc has no lazy-return ability
+     * (it returns pages via SHM-object hole-punching; see #m_retained_sz), so this is always zero.
      */
     size_t m_inactive_muzzy_sz = 0;
 
@@ -1378,7 +1359,7 @@ struct Memory_manager_stats
    * (e.g. each `Arena::construct<T>()` plus each nested container allocation), and the currently-live count/bytes
    * derived from them.
    *
-   * These count *raw* (low-level) allocations, NOT first-class `construct()`ed objects (those are tracked
+   * These count *raw* (low-level) allocations, *not* first-class `construct()`ed objects (those are tracked
    * elsewhere, e.g. shm::stat::Owner_obj_stats): one `construct<T>()` of a container-bearing `T` may trigger many raw
    * allocations.
    *
@@ -1400,67 +1381,48 @@ struct Memory_manager_stats
    *
    * ### Significant mechanism: jemalloc tcache ###
    * jemalloc -- and plausibly future arena-lend providers -- adds a *thread cache* (*tcache*) between the
-   * "user" and the arena proper: a small, per-thread, lock-free free-list (one per size-class) of regions kept
-   * for immediate reuse.  Its purpose is purely performance: an allocate/deallocate the tcache can service needs
-   * no arena-level locking.  SHM-jemalloc uses a tcache on *every* allocation (one tcache per thread,
-   * per-jemalloc-arena #m_native_arena_id).  (This is fully skipped, however, by enabling build flag
-   * `IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE`.  Let us assume it is not skipped, as tcache is a valuable perf
-   * mechanism.)
+   * "user" and the arena proper: a store of allocations kept on hand for quick reuse without arena-level locking.
+   * SHM-jemalloc passes a tcache (one per thread, per-jemalloc-arena #m_native_arena_id) to every allocation;
+   * jemalloc uses it for sizes up to its tcache maximum (32Ki bytes by default), while larger allocations bypass
+   * it.  (Build flag `IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE` skips tcache use entirely.  Let us assume it is not
+   * skipped, as tcache is a valuable perf mechanism.)
    *
-   * Crucially the tcache holds no memory of its own: its entries are *pointers* to regions that live
-   * in the arena's normal *slabs* (blocks of space initially available for future allocated-buffers).  A region
-   * "in the tcache" has merely been taken off its slab's free-list -- so from the arena's accounting standpoint
-   * it is *allocated* (or *active*) -- but it is held by the cache for (mega-quick) reuse, not by the user's
-   * allocated-buffer(s).
-   *
-   * @note The stuff about slabs and free-lists, while important, might be at a higher level of lower interest.
-   *       At its core, a tcache is a (thread-local!) store of would-be allocate-op-returned pointers that
-   *       sits as an intermediary between the actual arena that can dole such pointers out originally; and the
-   *       user who ultimately wants to use these pointers.  Grabbing it from that intermediary, which has
-   *       pre-grabbed it already from source, is quicker than really-grabbing it from that source.  Returning it
-   *       to that intermediary is itself quicker than really-returning it to the original source, *and*
-   *       it makes it available as-if-pre-grabbed for the next grab by whichever allocate-op of a compatible
-   *       size.  (It is even possible to slow-grab directly from source but then return to tcache intermediary;
-   *       this is not -- from jemalloc's PoV -- special.  It's just a pointer store ultimately, is the point.)
+   * Crucially, an allocation sitting in a tcache counts, from the arena's accounting standpoint, as *allocated* --
+   * though no user holds it.
    *
    * @see Thread_cache doc header for a deeper look at how jemalloc tcache works.
    *
    * The upshot for the stats here is that jemalloc's counters (whether the `_sz` byte-counts or the `_count`s)
-   * count regions becoming used/allocated or unused/free from the "point of view of the slabs,"
-   * updating which information requires a *costly mutex-lock*.  A given `allocate()` or `deallocate()` call, that
-   * goes potentially through tcache, might well not update those counters, because only updating information
-   * in the (thread-local) tcache is required.  Over time, though, the counters will be updated -- but in a
-   * lumpier/batchier way.
+   * count allocations moving between the arena proper and the caches (or the user, when a cache is bypassed), not
+   * individual user calls.  A given `allocate()` or `deallocate()` serviced by the tcache does not update them.
+   * Over time, though, the counters will be updated -- but in a lumpier/batchier way.
    *
    * Thus with the tcache in play:
-   *   - Cumulative #m_alloc_count / #m_alloc_sz (and the dealloc counterparts) measure region churn between
-   *     slabs and caches, not the count/bytes of user calls.  They differ from the user-call counts in *either*
-   *     direction: a low-traffic class shows more region-churn than calls (a batch-fill overshoots demand,
-   *     caching the surplus), while a hot, recycled class can show fewer (regions ping-pong between user and
-   *     cache without touching a slab).  The size of the gap depends on the tcache churn pattern.
-   *   - The live #m_live_count / #m_live_sz similarly reflect what is currently taken from slabs, which includes
-   *     regions in tcaches (therefore *not* used by actual user allocated-buffers).  So `m_live_*` members
-   *     overstate what the user actually holds, by the current cache contents.
-   *     - Cf. Vaddr::m_active_sz: its pages stay "active" while any of a slab's regions sit in a cache -- same effect,
-   *       same cause.
+   *   - Cumulative #m_alloc_count / #m_alloc_sz (and the dealloc counterparts) measure allocations moving between
+   *     the arena and caches, not the count/bytes of user calls.  They differ from the user-call counts in *either*
+   *     direction: a low-traffic size shows more than the calls (a cache refill fetches a batch, caching the
+   *     surplus), while a hot, recycled size can show fewer (allocations ping-pong between user and cache without
+   *     touching the arena).  The size of the gap depends on the tcache churn pattern.
+   *   - The live #m_live_count / #m_live_sz similarly reflect what is currently taken from the arena, which
+   *     includes allocations in tcaches (therefore *not* used by actual user allocated-buffers).  So `m_live_*`
+   *     members overstate what the user actually holds, by the current cache contents.
+   *     - Cf. Vaddr::m_active_sz: pages holding cached allocations stay "active" -- same effect, same cause.
    *
    * If the tcache use (by SHM-jemalloc) is compiled-out (see above), then all of this collapses: each counter
    * tracks user `allocate()`/`deallocate()` directly, and the live values are what the user holds.  That's nice
    * for understanding the stats in real-time fashion, but in terms of perf it means more mutex-locking inside
    * jemalloc.
    *
-   * @note A more truthful (assuming truth = areas allocated/deallocated/used/free from the user's PoV) per-call
-   *       counter exists in jemalloc (`nrequests`) but has no symmetric dealloc counterpart, so it
-   *       cannot feed the gauge derivations `m_live_*`; hence we account via `nmalloc`/`ndalloc` for all non-histogram
-   *       members, and histogram #m_histo_alloc_count_by_sz inherits the same view and the same caveat.
-   *       Nor do we provide any `nrequests`-based stat, though a by-size *request-count* histogram would be a
-   *       nice complement to #m_histo_alloc_count_by_sz: with explicit tcaches, jemalloc files each tcache's
-   *       locally-tallied `nrequests` into the books of the tcache's *associated* arena -- an association
-   *       chosen at tcache-creation via a thread-internal binding that public jemalloc API cannot influence
-   *       (`thread.arena` affects only the application-arena binding; no internal-arena counterpart exists) --
-   *       so those tallies land in an unrelated automatic arena, and per-*our*-arena request-counts are
-   *       unobtainable.  (Verified against jemalloc 5.3.0 through 5.4.0 source.  Only tcache-ineligible --
-   *       huge -- size classes would report; not worth a misleading partial stat.)
+   * @note jemalloc also counts per-call allocation requests (`nrequests`), but with no deallocation counterpart, so
+   *       it cannot feed the live values; hence all members here (including #m_histo_alloc_count_by_sz) use the
+   *       `nmalloc`/`ndalloc` view, with the above caveats.  Nor do we offer an `nrequests`-based stat: with
+   *       explicit tcaches, jemalloc files part of those tallies under a different (automatic) arena, so
+   *       per-*our*-arena request counts would be an undercount of unknowable size.
+   *
+   * @internal
+   * On `nrequests` (verified against jemalloc 5.3.0 and 5.4.0 source): tallies recorded at a tcache refill go to
+   * the filling arena (ours); those recorded at a tcache flush or destruction go to the tcache's *associated* arena,
+   * chosen internally at tcache creation; no public API can point it at our arena.
    */
   struct Alloc
   {
@@ -1510,8 +1472,7 @@ struct Memory_manager_stats
      *
      * For SHM-jemalloc this is jemalloc's small `bins` followed by its large `lextents`, concatenated into one
      * ascending sequence: the small/large split is a jemalloc implementation detail.  We combine them into
-     * this one histogram.  (The small-vs-large boundary remains visible in the bucket sizes, for SHM-jemalloc
-     * around 14-16Ki bytes.)
+     * this one histogram.
      *
      * @note The bucket structure of the histogram is determined by the memory manager's size classes which (1) are
      *       process-constant but (2) reported at run-time by the memory manager (e.g.: jemalloc).  This is

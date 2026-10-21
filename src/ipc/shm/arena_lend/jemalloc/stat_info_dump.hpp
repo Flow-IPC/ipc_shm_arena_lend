@@ -85,7 +85,7 @@ struct Arena_info_dump
   /// If unavailable then empty; otherwise the newline-terminated output of Memory_manager::stats_dump_to_ostream().
   std::string m_mem_mgr_stats_dump;
 
-  /// If unavailable then empty; otherwise the target `Ipc_arena`'s stats from: Ipc_arena::memory_manager_stats().
+  /// Target `Ipc_arena`'s stats from: Ipc_arena::memory_manager_stats().
   std::vector<arena_lend::stat::Memory_manager_stats> m_mem_mgr_stats;
 
   /// Target `Ipc_arena`'s stats from: Ipc_arena::sharded_stats().

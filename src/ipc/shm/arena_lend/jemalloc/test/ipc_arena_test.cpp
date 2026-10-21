@@ -40,6 +40,7 @@
 #include <sys/mman.h>
 #include <array>
 #include <deque>
+#include <memory>
 #include <new>
 #include <random>
 
@@ -1493,6 +1494,30 @@ TEST_F(Ipc_arena_test, Oversized_allocation)
   EXPECT_NE(p2, nullptr);
   collection->deallocate(p2);
   collection->deallocate(p1);
+}
+
+/* A construct()ed handle keeps its arena alive (see TEST Interface) -- but only until the handle group's ref-count
+ * reaches 0, even if `weak_ptr`s to that group remain.  The latter is a regression check: a `shared_ptr`
+ * implementation may keep the group's deleter (which references the arena) alive as long as such `weak_ptr`s do
+ * (libstdc++ does as of this writing, that we've seen); so the deleter must let go of the arena itself,
+ * upon running. */
+TEST_F(Ipc_arena_test, Weak_ptr_does_not_prevent_arena_gc)
+{
+  using std::weak_ptr;
+
+  auto collection = create_collection();
+  collection->start();
+  const weak_ptr<Test_ipc_arena> collection_observer = collection;
+
+  auto obj = collection->construct<int>(5);
+  const weak_ptr<int> obj_observer = obj;
+
+  collection.reset();
+  EXPECT_FALSE(collection_observer.expired()); // The live handle keeps the arena alive.
+
+  obj.reset();
+  EXPECT_TRUE(obj_observer.expired());
+  EXPECT_TRUE(collection_observer.expired()); // The key check: obj_observer must not keep it alive.
 }
 
 } // namespace ipc::shm::arena_lend::jemalloc::test

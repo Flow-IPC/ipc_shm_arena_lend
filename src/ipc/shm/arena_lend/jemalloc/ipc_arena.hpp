@@ -246,9 +246,11 @@ public:
    *
    * ### Errors ###
    * If jemalloc fails to create a jemalloc-arena a `flow::error::Runtime_error` exception shall be thrown.
+   * In particular jemalloc's `opt.retain` must be enabled (it is by default in 64-bit Linux); if not this throws
+   * as noted (with `.code() == boost::system::errc::not_supported`) before creating a jemalloc-arena.
    * One particular condition which can be a result of user error is if `pool_name_base` is malformed in some way
    * (contains illegal characters most likely), and therefore internally SHM-pool creation by name (based off
-   * `pool_name_base`) failed.  For certain internal reasons this will manifest as having `exception.code()`,
+   * `pool_name_base`) failed.  For certain internal reasons this will manifest as having `.code()`,
    * probably, a-la `resource_unavailable_try_again` (Linux: from `EAGAIN`).  With a non-null `logger` you
    * should see logged WARNING(s) to that effect.
    *
@@ -470,7 +472,7 @@ public:
    *        The allocation size, which must be greater than zero.
    * @return A non-null pointer to the base address of the allocation.
    */
-  void* allocate(size_t size) override;
+  void* allocate(size_t size);
 
   /**
    * Undoes allocate(): deallocates a previously allocated, by this arena, buffer in SHM.
@@ -478,7 +480,7 @@ public:
    * ### Perf notes ###
    * A jemalloc thread cache will be used for extra perf, assuming the calling thread has one for `*this`
    * arena -- which it does if it has ever allocate()d here (a thread's first allocate() creates its cache).
-   * Notably it does *not* matter which thread allocate()d `address` itself: any buffer of this arena may be
+   * Notably it does *not* matter which thread `allocate(address)`ed: any buffer of this arena may be
    * deallocated via any thread's cache (see Thread_cache doc header for the mechanism and why this is so).
    * In the unusual case of a thread deallocating here without *ever* having allocated here, deallocation
    * still proceeds and succeeds, albeit at a perf penalty (an arena-level mutex lock inside jemalloc) by forgoing
@@ -488,7 +490,7 @@ public:
    * @param address
    *        The address to be deallocated, which must be non-null.
    */
-  void deallocate(void* address) noexcept override;
+  void deallocate(void* address) noexcept;
 
   /**
    * Synchronously garbage-collects, in the calling thread, any objects `x = A.construct()`ed by this thread, for *all*
@@ -567,14 +569,8 @@ public:
    * @param target_info_dump
    *        The non-`->m_fmt` parts shall be assigned.  `->m_fmt.m_verbose` is also consulted (so set it, if desired,
    *        before calling); see util::Info_dump_format::m_verbose.
-   * @param call_timing
-   *        See util::Call_timing doc header(s).  Reminder: By convention: If your code can guarantee that
-   *        reasons for making this unsafe cannot exist in the chosen build/otherwise environment, then
-   *        leave this at its default.  In this case: see jemalloc::Memory_manager doc header; it explains
-   *        the specific potential danger.  (Spoiler alert: With jemalloc>=5.3.0 linked, there is no problem.)
    */
-  void info_dump(Info_dump* target_info_dump,
-                 util::Call_timing call_timing = util::Call_timing::S_ALWAYS_SAFE);
+  void info_dump(Info_dump* target_info_dump);
 
   /**
    * Internally samples certain stats so as to update `_hi_wmark`s that are computed at stat-consume time as
@@ -589,11 +585,8 @@ public:
    *
    * ### Thread safety ###
    * Always safe.
-   *
-   * @param call_timing
-   *        See info_dump(): same thing here.
    */
-  void sample_hi_wmarks(util::Call_timing call_timing = util::Call_timing::S_ALWAYS_SAFE);
+  void sample_hi_wmarks();
 
   /**
    * Outputs the stat-set stat::Sharded_stats for `*this` arena.  See that type's doc header for the
@@ -685,6 +678,8 @@ public:
    *
    * ### Thread safety ###
    * Safe to call concurrently with any other method on the same `*this`.  Also applies to our `..._reset()`.
+   * Moreover the returned values remain mutually consistent even if jemalloc statistics are being read elsewhere
+   * in the process concurrently (e.g., by other `Ipc_arena`s or via `Memory_manager::...stats_dump...()`).
    *
    * @return See above.
    */
@@ -877,7 +872,7 @@ protected:
    * Returns the memory manager.
    * @return See above.
    */
-  std::shared_ptr<Memory_manager> get_jemalloc_memory_manager() const;
+  const std::shared_ptr<Memory_manager>& get_jemalloc_memory_manager() const;
 
   /**
    * Creates a shared memory pool (jemalloc extent hook).
@@ -1091,6 +1086,14 @@ private:
    *        # of jemalloc-arenas to create/maintain.
    */
   void start_impl(unsigned int n_arenas);
+
+  /**
+   * start_impl() helper: creates one jemalloc-arena, wired to our extent hooks, and applies the per-arena
+   * settings SHM-jemalloc requires.  Throws `flow::error::Runtime_error` on failure (see create() "Errors").
+   *
+   * @return The jemalloc-arena ID.
+   */
+  arena_id_t create_jemalloc_arena();
 
   /**
    * Helper core of allocate() that, in reaction to jemalloc-allocate failure, simply returns null (no further action
@@ -1317,14 +1320,39 @@ private:
   Uniq_arena_id uniq_arena_id() const;
 
   /**
+   * Reads the raw jemalloc-sourced stat-members -- the `m_vaddr` and `m_alloc` sub-groups -- of each
+   * `(*rows)[idx]`, where `idx` is the index of a native arena-ID within #m_arenas; all from one jemalloc stats
+   * snapshot.  Pre-conditions: detail::jemalloc_stats_mutex() locked; jemalloc-stats enabled within jemalloc.
+   *
+   * ### Design: Who else refreshes jemalloc stats? ###
+   * jemalloc serves every `"stats.*"` read from one snapshot for the entire process, replaced by any refresh (see
+   * detail::stat::epoch_refresh()).  Flow-IPC's own stats operations are excluded by detail::jemalloc_stats_mutex()
+   * (see its doc header, including for what a refresh in the middle of our reads would do).  But other code in the
+   * process may use jemalloc stats/dump APIs directly; nothing in Flow-IPC forbids this, nor should it.  No mutex of
+   * ours can exclude that.
+   *
+   * So for those we use jemalloc's epoch counter, which each refresh increments: refresh (noting the epoch); read
+   * everything; then check the epoch again.  It is a time stamp of sorts; the jemalloc `man` page names exactly this
+   * purpose for it.  So: if unchanged then all values came from one snapshot.  Otherwise something refreshed
+   * concurrently, possibly (not necessarily) between two of our reads: read everything again, this time from the
+   * new snapshot (which is at least as new as ours; so no need to re-refresh).  Such outside refreshes are
+   * presumably rare, so it should take 1, maybe 2, attempts.  (In theory outside code refreshing nonstop, more often
+   * than one attempt takes, would keep us retrying indefinitely.)
+   *
+   * @param rows
+   *        `rows->size()` must equal `m_arenas.size()`.  Only the `m_vaddr` and `m_alloc` sub-groups are written.
+   */
+  void memory_manager_snapshot_read(std::vector<Memory_manager_stats>* rows) const;
+
+  /**
    * Helper that for the given jemalloc-arena `arena_id` reads the values into stat::Memory_manager_stats::Vaddr
    * by querying jemalloc.  Pre-conditions: relevant mutex locked (if `*vaddr` is concurrently accessible),
-   * jemalloc-stats enabled within jemalloc, jemalloc-stats epoch refreshed.
+   * jemalloc-stats enabled within jemalloc.  Intended to be called (only) from memory_manager_snapshot_read().
    *
    * @param arena_id
    *        See get_jemalloc_arena_id().
    * @param vaddr
-   *        Out: filled with the current gauge values.  Must not be null.
+   *        Out-arg: filled with the current gauge values.  Must not be null.
    */
   void memory_manager_vaddr_stats_read(arena_id_t arena_id, Memory_manager_stats::Vaddr* vaddr) const;
 
@@ -1351,6 +1379,9 @@ private:
 
   /// Owner (this) process's PID, captured at construction; the first half of uniq_arena_id().
   uint64_t m_owner_id;
+
+  /// The jemalloc memory manager given to create().
+  const std::shared_ptr<Memory_manager> m_memory_manager;
 
   /// The segregated memory areas.  Empty until start(); non-empty and unchanging thereafter.
   std::set<arena_id_t> m_arenas;
@@ -1429,15 +1460,12 @@ private:
    */
   Sharded_stats m_sharded_stats;
 
-  /// Protects the *mapped-values* in #m_mem_mgr_base_stats during (possibly concurrent) stat-consumption/reset.
-  mutable Mutex m_mem_mgr_base_stats_mutex;
-
   /**
    * Per-native-arena reset-state ("base") for memory_manager_stats() / memory_manager_stats_reset(): for each
-   * arena in #m_arenas it holds the since-reset baseline (presently just the running high-water marks).
-   * Populated once at start() (one zero-init entry per arena); the structure is fixed thereafter (no runtime
-   * insert/erase).  Its *values* are mutated during (possibly concurrent) stat-consumption under
-   * #m_mem_mgr_base_stats_mutex.
+   * arena in #m_arenas it holds the since-reset baseline (the ACCUMULATOR values as of the last reset; and the
+   * running high-water marks).  Populated once at start() (one zero-init entry per arena); the structure is fixed
+   * thereafter (no runtime insert/erase).  Its *values* are mutated during stat-consumption/reset; see "Thread
+   * safety" below.
    *
    * @see memory_manager_stats(), stat::Memory_manager_stats.
    *
@@ -1448,13 +1476,19 @@ private:
    * this and of `m_arenas` grows.
    *
    * ### Thread safety ###
-   * `memory_manager_stats*()` is advertised as safe to call concurrently with any method on same `*this`, hence
-   * the mutex.  Why the contract though?  In short: the various other stats (e.g., #m_pool_stats) have
-   * the same property advertised via their relevant API(s).  There is no black-box reason why this should be
-   * any different.  To stengthen it further:
+   * The public `memory_manager_stats*()` API is advertised as safe to call concurrently with any method on the same
+   * `*this`, including each other.  That is delivered by detail::jemalloc_stats_mutex(), which (for its own,
+   * process-wide reasons; see its doc header) is held throughout each memory_manager_stats() and
+   * memory_manager_stats_reset() -- jemalloc reads included, not merely the access to `*this`.  It must be held that
+   * long: otherwise a stat-consumption's raw values could predate a baseline that a concurrent reset installed in
+   * the meantime, and its since-reset counters would underflow.
+   *
+   * Even if that mutex did not deliver this guarantee for free, we would maintain it.  Why the contract?  In short:
+   * the various other stats (e.g., #m_pool_stats) have the same property advertised via their relevant API(s).
+   * There is no black-box reason why this should be any different.  To strengthen it further:
    *
    * Technically the following is not in our purview here but nevertheless --
-   * `ipc::session::shm::arena_lend::jemalloc`, which is Flow-IPC's recommend method of setting up arenas
+   * `ipc::session::shm::arena_lend::jemalloc`, which is Flow-IPC's recommended method of setting up arenas
    * like `*this` (though it can be done standalone also), shall periodically stat-consume (spoiler: partially
    * to keep the HI_WMARKs decently useful by sampling regularly, partially perhaps to log) in the background.
    * So if this were not thread-safe, the user couldn't safely stat-consume on-demand, as it could be concurrent
@@ -1532,7 +1566,7 @@ Ipc_arena::Handle<T> Ipc_arena::construct(Ctor_args&&... ctor_args)
       /* Call object's destructor (works for primitives but might be a pointless perf cost; have seen it in un-good
        * STL impls before, though the context was a bit different... but can't hurt to just skip it).
        * Key context: an allocator-equipped T (usually STL-compliant container) here will (in T::~T())
-       * call-through to m_pool_collection->deallocate() for each buffer that T had allocated for itself
+       * call-through to `arena->deallocate()` for each buffer that T had allocated for itself
        * (e.g., for vector<> internal buffer; for list<> the various nodes).  In the process more destructors
        * may be invoked which would quite possibly do more dtor calling and thus deallocate()ing.  And so on.
        * Hence the present operator()() is called at just the outer layer, then the inner deallocations (if any)

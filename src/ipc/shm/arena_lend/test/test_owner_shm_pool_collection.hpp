@@ -28,12 +28,7 @@
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/util/util_fwd.hpp"
 
-namespace ipc::shm::arena_lend
-{
-
-class Memory_manager;
-
-namespace test
+namespace ipc::shm::arena_lend::test
 {
 
 /**
@@ -53,7 +48,6 @@ public:
    *
    * @param logger Used for logging purposes.
    * @param id Identifier for the collection.
-   * @param memory_manager The memory allocator.
    * @param pool_name_base Pool-name prefix.
    * @param permissions_level The file permissions for the shared memory pool that are created.
    *
@@ -61,20 +55,11 @@ public:
    */
   Test_owner_shm_pool_collection(flow::log::Logger* logger,
                                  collection_id_t id,
-                                 const std::shared_ptr<Memory_manager>& memory_manager,
                                  Shared_name&& pool_name_base = create_test_pool_name_base(),
                                  util::Permissions_level permissions_level = util::Permissions_level::S_GROUP_ACCESS);
   /// Destructor.
   virtual ~Test_owner_shm_pool_collection() override;
 
-  /**
-   * Allocates memory from the memory manager.
-   *
-   * @param size The amount of memory to allocate.
-   *
-   * @return The resulting allocation upon success (failure throws).
-   */
-  virtual void* allocate(std::size_t size) override;
   /**
    * Creates a shared memory object and maps it in the process' address space.
    *
@@ -169,5 +154,4 @@ bool Test_owner_shm_pool_collection::remove_shm_pool(const std::shared_ptr<Shm_p
   return Owner_shm_pool_collection::remove_shm_pool(shm_pool, m_memory_unmap_functor, unmapped_memory_pool);
 }
 
-} // namespace test
-} // namespace ipc::shm::arena_lend
+} // namespace ipc::shm::arena_lend::test

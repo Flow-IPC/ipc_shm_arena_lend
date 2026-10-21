@@ -36,17 +36,17 @@ namespace ipc::shm::arena_lend::jemalloc::detail::stat
 // Template implementations.
 
 template<typename T>
-bool mallctl_read(const char* name, T* val)
+int mallctl_read(const char* name, T* val)
 {
   auto val_size = sizeof(T);
-  return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)(name, val, &val_size, nullptr, 0) == 0;
+  return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)(name, val, &val_size, nullptr, 0);
 }
 
 template<typename T>
-bool mallctl_read_mib(const size_t* mib, size_t mib_len, T* val)
+int mallctl_read_mib(const size_t* mib, size_t mib_len, T* val)
 {
   auto val_size = sizeof(T);
-  return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctlbymib)(mib, mib_len, val, &val_size, nullptr, 0) == 0;
+  return IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctlbymib)(mib, mib_len, val, &val_size, nullptr, 0);
 }
 
 } // namespace ipc::shm::arena_lend::jemalloc::detail::stat

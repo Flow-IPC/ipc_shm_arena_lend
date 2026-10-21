@@ -49,6 +49,7 @@
 #include <cstring>
 #include <filesystem>
 #include <future>
+#include <memory>
 #include <optional>
 #include <thread>
 #include <gtest/gtest.h>
@@ -143,7 +144,8 @@ using Shm_channel = Shm_session::Shm_channel; // (Unstructured; a Shm_session su
  *   [Standalone_hold_edges]
  * - A3: Each borrow_object()-returned handle keeps the borrower-side Shm_session alive. Hence the user may
  *   drop their session handle while still holding borrowed objects; the session truly dies -- performing its
- *   borrower-side cleanup -- only once the last such handle is gone. [Standalone_hold_edges]
+ *   borrower-side cleanup -- only once the last such handle is gone (`weak_ptr`s to it notwithstanding).
+ *   [Standalone_hold_edges, Standalone_weak_ptr_does_not_prevent_session_gc]
  * - A4: The reverse direction deliberately does *not* hold: a lent-but-unreturned object does not keep the
  *   owner's arena alive. If the arena gets destroyed anyway, its objects are considered moot -- use-counts
  *   notwithstanding -- and are reclaimed. [Disconnected pair; and see C2]
@@ -3070,6 +3072,42 @@ TEST_F(Shm_session_test, Standalone_hold_edges)
    * session's death above hoses side A's channel); that is contractual and harmless -- the Standalone
    * session-end test asserts the specifics. */
 } // TEST_F(Shm_session_test, Standalone_hold_edges)
+
+/**
+ * Hold-edge 2 of Standalone_hold_edges (borrowed handle -> borrower-side session) lasts only until the borrowed
+ * handle group's ref-count reaches 0, even if `weak_ptr`s to that group remain.  The latter is a regression check:
+ * a `shared_ptr` implementation may keep the group's deleter (which references the session) alive as long as such
+ * `weak_ptr`s do (libstdc++ does); so the deleter must let go of the session itself, upon running.  (The owner-side
+ * counterpart: Ipc_arena_test.Weak_ptr_does_not_pin_arena.)
+ *
+ * Covers, per the master list at the top of this file: A3.
+ */
+TEST_F(Shm_session_test, Standalone_weak_ptr_does_not_prevent_session_gc)
+{
+  using std::weak_ptr;
+
+  Standalone_session_pair rig(get_logger());
+  auto& session_b = rig.m_session_b;
+  const weak_ptr<Shm_session> session_b_observer = session_b;
+
+  ASSERT_TRUE(rig.m_session_a->lend_arena(rig.m_arena));
+  auto owner_handle = rig.m_arena->construct<Reclaim_probe>(1337);
+  ASSERT_NE(owner_handle, nullptr);
+  const auto blob = rig.m_session_a->lend_object(owner_handle);
+  ASSERT_FALSE(blob.empty());
+  auto borrowed_handle = session_b->borrow_object<Reclaim_probe>(blob);
+  ASSERT_NE(borrowed_handle, nullptr);
+  const weak_ptr<Reclaim_probe> borrowed_observer = borrowed_handle;
+
+  session_b.reset();
+  EXPECT_FALSE(session_b_observer.expired()); // The live borrowed handle keeps the session alive.
+
+  borrowed_handle.reset();
+  EXPECT_TRUE(borrowed_observer.expired());
+  EXPECT_TRUE(session_b_observer.expired()); // The key check: borrowed_observer must not keep it alive.
+
+  // Rig destruction cleans up the rest (as in Standalone_hold_edges).
+} // TEST_F(Shm_session_test, Standalone_weak_ptr_does_not_prevent_session_gc)
 
 /**
  * Standalone-mode (no ipc::session) test of the advertised Shm_session session-end/error contract, in both

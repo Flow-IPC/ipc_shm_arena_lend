@@ -36,9 +36,9 @@
 #include <atomic>
 #include <bitset>
 #include <memory>
+#include <sstream>
 #include <string>
 #include <vector>
-#include <sys/mman.h>
 #include <limits.h>
 
 using std::size_t;
@@ -434,379 +434,6 @@ private:
   Hooks_wrapper m_extent_hooks_wrapper;
 }; // class Test_memory_manager
 
-/**
- * Wrapper around default hooks that tracks callback execution.
- */
-class Default_jemalloc_memory_manager :
-  public jemalloc::Memory_manager,
-  public Extent_hooks_tracker
-{
-public:
-  /**
-   * Constructor. Overrides the extent hooks in the default arena.
-   */
-  Default_jemalloc_memory_manager() :
-    m_default_hooks(get_default_hooks()),
-    m_extent_hooks_wrapper(
-      {
-        .alloc = &create_memory_pool_handler,
-        .dalloc = &optional_remove_memory_pool_handler,
-        .destroy = &remove_memory_pool_handler,
-        .commit = &commit_memory_pages_handler,
-        .decommit = &decommit_memory_pages_handler,
-        .purge_lazy = nullptr,
-        .purge_forced = nullptr,
-        .split = &split_memory_pages_handler,
-        .merge = nullptr
-      },
-      this)
-  {
-    if (m_default_hooks == nullptr)
-    {
-      throw std::runtime_error("Default hooks not found");
-    }
-
-    m_extent_hooks_wrapper.purge_lazy = m_default_hooks->purge_lazy;
-    m_extent_hooks_wrapper.purge_forced = m_default_hooks->purge_forced;
-    m_extent_hooks_wrapper.merge = m_default_hooks->merge;
-
-    // Set the extent hooks to use for operations
-    extent_hooks_t* hooks = &m_extent_hooks_wrapper;
-    size_t input_size = sizeof(hooks);
-    if (IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)
-          (S_DEFAULT_ARENA_EXTENT_HOOKS_OP, nullptr, nullptr, &hooks, input_size) != 0)
-    {
-      throw std::runtime_error("Could not set extent hooks");
-    }
-
-    // Set the arena to use for this thread
-    unsigned arena_id = S_DEFAULT_ARENA;
-    if (IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)
-          (S_DEFAULT_ARENA_OP, nullptr, nullptr, &arena_id, sizeof(arena_id)) != 0)
-    {
-      throw std::runtime_error("Could not set arena");
-    }
-  }
-
-  /**
-   * Destructor. Restores the extent hooks in the default arena.
-   */
-  ~Default_jemalloc_memory_manager()
-  {
-    // Restore extent hooks
-    size_t input_size = sizeof(m_default_hooks);
-    if (IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)
-          (S_DEFAULT_ARENA_EXTENT_HOOKS_OP, nullptr, nullptr, &m_default_hooks, input_size) != 0)
-    {
-      ADD_FAILURE() << "Could not set default extent hooks";
-    }
-  }
-
-private:
-  /// Convenience type.
-  using Hooks_wrapper = Memory_manager::Extent_hooks_wrapper<Default_jemalloc_memory_manager>;
-
-  /**
-   * Retrieves the jemalloc extent hooks in the default arena.
-   *
-   * @return See above.
-   */
-  static extent_hooks_t* get_default_hooks()
-  {
-    extent_hooks_t* default_hooks;
-    size_t output_size = sizeof(default_hooks);
-    if (IPC_SHM_ARENA_LEND_JEMALLOC_API(mallctl)
-          (S_DEFAULT_ARENA_EXTENT_HOOKS_OP, &default_hooks, &output_size, nullptr, 0) != 0)
-    {
-      return nullptr;
-    }
-
-    EXPECT_NE(default_hooks->alloc, nullptr);
-    EXPECT_NE(default_hooks->dalloc, nullptr);
-    EXPECT_NE(default_hooks->destroy, nullptr);
-    EXPECT_NE(default_hooks->commit, nullptr);
-    EXPECT_NE(default_hooks->decommit, nullptr);
-    EXPECT_NE(default_hooks->purge_lazy, nullptr);
-    EXPECT_NE(default_hooks->purge_forced, nullptr);
-    EXPECT_NE(default_hooks->split, nullptr);
-    EXPECT_NE(default_hooks->merge, nullptr);
-
-    return default_hooks;
-  }
-
-  /**
-   * Jemalloc callback when a memory pool is requested to be created.
-   *
-   * @param extent_hooks The set of callbacks containing this callback.
-   * @param address The desired location to map this memory pool, which can be null for system specification.
-   * @param size The size of the memory pool to be created.
-   * @param alignment The value to align the resulting address on, which is generally a multiple of page size.
-   * @param zero Output parameter indicating whether the contents have been zeroed.
-   * @param commit Whether the system should designate the pages to be readable and writable (marked active and
-   *               can be put into physical memory). If they system is set to overcommit memory, commit is always
-   *               enabled. The value will be updated as an output parameter to indicate whether the memory was
-   *               committed.
-   * @param arena_id The memory area that the pool will be placed into.
-   *
-   * @return Upon success, the created memory pool; otherwise, nullptr.
-   */
-  static void* create_memory_pool_handler(extent_hooks_t* extent_hooks,
-                                          void* address,
-                                          size_t size,
-                                          size_t alignment,
-                                          bool* zero,
-                                          bool* commit,
-                                          unsigned arena_id)
-  {
-    assert(extent_hooks != nullptr);
-    Default_jemalloc_memory_manager* memory_manager = static_cast<Hooks_wrapper*>(extent_hooks)->get_owner();
-    return memory_manager->create_memory_pool(address, size, alignment, zero, commit, arena_id);
-  }
-
-  /**
-   * Jemalloc callback when a memory pool is no longer needed.
-   *
-   * @param extent_hooks The set of callbacks containing this callback.
-   * @param address The memory pool to remove.
-   * @param size The size of the memory pool to be removed.
-   * @param committed Whether the memory pool is currently committed to physical memory.
-   * @param arena_id The memory area that the pool resides in.
-   *
-   * @return Whether the memory was NOT removed.
-   */
-  static bool optional_remove_memory_pool_handler(extent_hooks_t* extent_hooks,
-                                                  void* address,
-                                                  size_t size,
-                                                  bool committed,
-                                                  unsigned arena_id)
-  {
-    assert(extent_hooks != nullptr);
-    Default_jemalloc_memory_manager* memory_manager = static_cast<Hooks_wrapper*>(extent_hooks)->get_owner();
-    return !memory_manager->optional_remove_memory_pool(address, size, committed, arena_id);
-  }
-
-  /**
-   * Jemalloc callback when a memory pool is instructed to be removed.
-   *
-   * @param extent_hooks The set of callbacks containing this callback.
-   * @param address The memory pool to remove.
-   * @param size The size of the memory pool to be removed.
-   * @param committed Whether the memory pool is currently committed to physical memory.
-   * @param arena_id The memory area that the pool resides in.
-   */
-  static void remove_memory_pool_handler(extent_hooks_t* extent_hooks,
-                                         void* address,
-                                         size_t size,
-                                         bool committed,
-                                         unsigned arena_id)
-  {
-    assert(extent_hooks != nullptr);
-    Default_jemalloc_memory_manager* memory_manager = static_cast<Hooks_wrapper*>(extent_hooks)->get_owner();
-    memory_manager->remove_memory_pool(address, size, committed, arena_id);
-  }
-
-  /**
-   * Jemalloc callback when a contiguous set of memory pages are instructed to be marked as readable and writable.
-   *
-   * @param extent_hooks The set of callbacks containing this callback.
-   * @param address The memory pool where the pages reside in.
-   * @param size The size of the memory pool.
-   * @param offset The offset from the address to commit.
-   * @param length The length of the pages to commit.
-   * @param arena_id The memory area that the pages reside in.
-   *
-   * @return Whether the pages were NOT successfully committed.
-   */
-  static bool commit_memory_pages_handler(extent_hooks_t* extent_hooks,
-                                          void* address,
-                                          size_t size,
-                                          size_t offset,
-                                          size_t length,
-                                          unsigned arena_id)
-  {
-    assert(extent_hooks != nullptr);
-    Default_jemalloc_memory_manager* memory_manager = static_cast<Hooks_wrapper*>(extent_hooks)->get_owner();
-    return memory_manager->commit_memory_pages(address, size, offset, length, arena_id);
-  }
-
-  /**
-   * Jemalloc callback when a contiguous set of memory pages are instructed to be marked as inaccessible
-   * (non-writable and non-readable).
-   *
-   * @param extent_hooks The set of callbacks containing this callback.
-   * @param address The memory pool where the pages reside in.
-   * @param size The size of the memory pool.
-   * @param offset The offset from the address to decommit.
-   * @param length The length of the pages to decommit.
-   * @param arena_id The memory area that the pages reside in.
-   *
-   * @return Whether the pages were NOT successfully decommitted.
-   */
-  static bool decommit_memory_pages_handler(extent_hooks_t* extent_hooks,
-                                            void* address,
-                                            size_t size,
-                                            size_t offset,
-                                            size_t length,
-                                            unsigned arena_id)
-  {
-    assert(extent_hooks != nullptr);
-    Default_jemalloc_memory_manager* memory_manager = static_cast<Hooks_wrapper*>(extent_hooks)->get_owner();
-    return memory_manager->decommit_memory_pages(address, size, offset, length, arena_id);
-  }
-
-  /**
-   * Jemalloc callback to logically split a contiguous set of memory pages into two memory pools.
-   *
-   * @param extent_hooks The set of callbacks containing this callback.
-   * @param address The memory pool where the pages reside in.
-   * @param size The size of the memory pool.
-   * @param size_a The size of the first memory pool.
-   * @param size_b The size of the second memory pool.
-   * @param committed Whether the memory pool is currently committed to physical memory.
-   * @param arena_id The memory area that the pages reside in.
-   *
-   * @return Whether the pages are NOT allowed to split.
-   */
-  static bool split_memory_pages_handler(extent_hooks_t* extent_hooks,
-                                         void* address,
-                                         size_t size,
-                                         size_t size_a,
-                                         size_t size_b,
-                                         bool committed,
-                                         unsigned arena_id)
-  {
-    assert(extent_hooks != nullptr);
-    Default_jemalloc_memory_manager* memory_manager = static_cast<Hooks_wrapper*>(extent_hooks)->get_owner();
-    return !memory_manager->split_memory_pages(address, size, size_a, size_b, committed, arena_id);
-  }
-
-  /**
-   * Creates a memory pool.
-   *
-   * @param address The desired location to map this memory pool, which can be null for system specification.
-   * @param size The size of the memory pool to be created.
-   * @param alignment The value to align the resulting address on, which is generally a multiple of page size.
-   * @param zero Output parameter indicating whether the contents have been zeroed.
-   * @param commit Whether the system should designate the pages to be readable and writable (marked active and
-   *               can be put into physical memory). If they system is set to overcommit memory, commit is always
-   *               enabled. The value will be updated as an output parameter to indicate whether the memory was
-   *               committed.
-   * @param arena_id The memory area that the pool will be placed into.
-   *
-   * @return Upon success, the created memory pool; otherwise, nullptr.
-   */
-  void* create_memory_pool(void* address,
-                           size_t size,
-                           size_t alignment,
-                           bool* zero,
-                           bool* commit,
-                           unsigned arena_id)
-  {
-    set_action_flag(Action_flags_enum::CREATE);
-    return m_default_hooks->alloc(&m_extent_hooks_wrapper, address, size, alignment, zero, commit, arena_id);
-  }
-
-  /**
-   * Decides whether to remove an unneeded memory pool or preserve it for future use, and remove it as appropriate.
-   * We will always remove in our case.
-   *
-   * @param address The memory pool to remove.
-   * @param size The size of the memory pool to be removed.
-   * @param committed Whether the memory pool is currently committed to physical memory.
-   * @param arena_id The memory area that the pool resides in.
-   *
-   * @return Whether the memory pool was unmapped.
-   */
-  bool optional_remove_memory_pool(void* address, size_t size, bool committed, unsigned arena_id)
-  {
-    set_action_flag(Action_flags_enum::OPTIONAL_REMOVE);
-    return !m_default_hooks->dalloc(&m_extent_hooks_wrapper, address, size, committed, arena_id);
-  }
-
-  /**
-   * Removes a memory pool.
-   *
-   * @param address The memory pool to remove.
-   * @param size The size of the memory pool to be removed.
-   * @param committed Whether the memory pool is currently committed to physical memory.
-   * @param arena_id The memory area that the pool resides in.
-   */
-  void remove_memory_pool(void* address, size_t size, bool committed, unsigned arena_id)
-  {
-    set_action_flag(Action_flags_enum::REMOVE);
-    m_default_hooks->destroy(&m_extent_hooks_wrapper, address, size, committed, arena_id);
-  }
-
-  /**
-   * Mark memory pages as readable and writable.
-   *
-   * @param address The memory pool where the pages reside in.
-   * @param size The size of the memory pool.
-   * @param offset The offset from the address to commit.
-   * @param length The length of the pages to commit.
-   * @param arena_id The memory area that the pages reside in.
-   *
-   * @return Whether the pages were successfully committed.
-   */
-  bool commit_memory_pages(void* address, size_t size, size_t offset, size_t length, unsigned arena_id)
-  {
-    set_action_flag(Action_flags_enum::COMMIT);
-    return !m_default_hooks->commit(&m_extent_hooks_wrapper, address, size, offset, length, arena_id);
-  }
-
-  /**
-   * Mark memory pages as inaccessible (non-writable and non-readable).
-   *
-   * @param address The memory pool where the pages reside in.
-   * @param size The size of the memory pool.
-   * @param offset The offset from the address to decommit.
-   * @param length The length of the pages to decommit.
-   * @param arena_id The memory area that the pages reside in.
-   *
-   * @return Whether the pages were successfully decommitted.
-   */
-  bool decommit_memory_pages(void* address, size_t size, size_t offset, size_t length, unsigned arena_id)
-  {
-    set_action_flag(Action_flags_enum::DECOMMIT);
-    return !m_default_hooks->decommit(&m_extent_hooks_wrapper, address, size, offset, length, arena_id);
-  }
-
-  /**
-   * Returns whether memory pages can be logically split.
-   *
-   * @param address The memory location.
-   * @param size The size of the region.
-   * @param size_a The proposed size of the lower addressed region.
-   * @param size_b The proposed size of the higher addressed region.
-   * @param committed Whether the memory pool is currently committed to physical memory.
-   * @param arena_id The memory area that the pages reside in.
-   *
-   * @return Whether the pages are allowed to split.
-   */
-  bool split_memory_pages(void* address,
-                          size_t size,
-                          size_t size_a,
-                          size_t size_b,
-                          bool committed,
-                          unsigned arena_id)
-  {
-    set_action_flag(Action_flags_enum::SPLIT);
-    return !m_default_hooks->split(&m_extent_hooks_wrapper, address, size, size_a, size_b, committed, arena_id);
-  }
-
-  /// The default extent hooks.
-  extent_hooks_t* m_default_hooks;
-  /// The extent hooks that wrap around the default.
-  Hooks_wrapper m_extent_hooks_wrapper;
-
-  /// Default jemalloc arena used for allocations.
-  static constexpr arena_id_t S_DEFAULT_ARENA = 0;
-  /// Command used to get/set the extent hooks.
-  static constexpr char S_DEFAULT_ARENA_EXTENT_HOOKS_OP[] = "arena.0.extent_hooks";
-  /// Command used to get/set the jemalloc arena used for this thread.
-  static constexpr char S_DEFAULT_ARENA_OP[] = "thread.arena";
-}; // class Default_jemalloc_memory_manager
-
 /// Class interface death tests.
 TEST(Memory_manager_DeathTest, Interface)
 {
@@ -818,8 +445,8 @@ TEST(Memory_manager_DeathTest, Interface)
     Memory_manager memory_manager;
 
     // Allocation and deallocation
-    EXPECT_DEATH(memory_manager.allocate(0UL, ARENA), "size > 0");
-    EXPECT_DEATH(memory_manager.deallocate(nullptr, ARENA), "address");
+    EXPECT_DEATH(memory_manager.allocate_no_tcache(0UL, ARENA), "size > 0");
+    EXPECT_DEATH(memory_manager.deallocate_no_tcache(nullptr), "address");
   }
 }
 
@@ -875,9 +502,9 @@ TEST(Jemalloc_memory_manager_test, Interface)
     arena_id_t arena_id = *(arena_ids.begin());
     // Non-thread cache allocation
     {
-      void* p = memory_manager.allocate(1000, arena_id);
+      void* p = memory_manager.allocate_no_tcache(1000, arena_id);
       EXPECT_NE(p, nullptr);
-      memory_manager.deallocate(p, arena_id);
+      memory_manager.deallocate_no_tcache(p);
     }
 
     // Thread cache allocation
@@ -886,13 +513,13 @@ TEST(Jemalloc_memory_manager_test, Interface)
       void* p = memory_manager.allocate(1000, arena_id, tid);
       EXPECT_NE(p, nullptr);
       EXPECT_EQ(tid, Thread_cache::this_thread_cache()->id(arena_id));
-      memory_manager.deallocate(p, arena_id, tid);
+      memory_manager.deallocate(p, tid);
     }
     // Thread cache allocation / non-thread-cache deallocation [added versus original test-case/see above notes]
     {
       void* p = memory_manager.allocate(1000, arena_id, Thread_cache::this_thread_cache()->id(arena_id));
       EXPECT_NE(p, nullptr);
-      memory_manager.deallocate(p, arena_id);
+      memory_manager.deallocate_no_tcache(p);
     }
 
     // Clean up arenas
@@ -950,10 +577,10 @@ TEST(Jemalloc_memory_manager_test, Interface)
     memory_manager.reset_action_flags();
 
     // Use heap mapping as we don't want to open shared memory for this test
-    void* p = memory_manager.allocate(ALLOC_SIZE, arena);
+    void* p = memory_manager.allocate_no_tcache(ALLOC_SIZE, arena);
     EXPECT_NE(p, nullptr);
     EXPECT_TRUE(memory_manager.did_create_action());
-    memory_manager.deallocate(p, arena);
+    memory_manager.deallocate_no_tcache(p);
     memory_manager.reset_action_flags();
 
     Log_context_mt log_ctx;
@@ -962,6 +589,105 @@ TEST(Jemalloc_memory_manager_test, Interface)
     memory_manager.reset_action_flags();
   }
 }
+
+/* The non-arena-specific APIs: vanilla (default-arena, auto-tcache) allocate()/deallocate(); and the stats-dump
+ * trio -- formats, `extra_opts` passthrough, the trailing-newline contract, log_stats_dump() filtering.  The
+ * expected dump markers are from jemalloc's stats.c (verified identical in 5.3.0 and 5.4.0). */
+TEST(Jemalloc_memory_manager_test, Vanilla_alloc_and_stats_dumps)
+{
+  using flow::log::Logger;
+  using flow::log::Sev;
+  using flow::log::Component;
+  using flow::log::Msg_metadata;
+  using flow::util::String_view;
+  using std::string;
+
+  // Records each logged message; passes messages at least as severe as m_sev.
+  class Capture_logger : public Logger
+  {
+  public:
+    explicit Capture_logger(Sev sev) : m_sev(sev) {}
+    bool should_log(Sev sev, const Component&) const override { return sev <= m_sev; }
+    bool logs_asynchronously() const override { return false; }
+    void do_log(Msg_metadata*, String_view msg) override { m_msgs.emplace_back(msg); }
+
+    const Sev m_sev;
+    std::vector<string> m_msgs;
+  }; // class Capture_logger
+
+  const Memory_manager memory_manager{};
+
+  // Vanilla allocate()/deallocate(): plain je_malloc()/je_free().
+  {
+    constexpr size_t ALLOC_SIZE = 1000;
+    auto* const p = static_cast<char*>(memory_manager.allocate(ALLOC_SIZE));
+    ASSERT_NE(p, nullptr);
+    p[0] = 'x'; // Writable end to end.
+    p[ALLOC_SIZE - 1] = 'y';
+    memory_manager.deallocate(p);
+  }
+
+  const auto ends_with = [](const string& str, String_view suffix) -> bool
+  {
+    return (str.size() >= suffix.size()) && (String_view{str}.substr(str.size() - suffix.size()) == suffix);
+  };
+
+  constexpr String_view BEGIN_MARKER = "___ Begin jemalloc statistics ___";
+  constexpr String_view END_MARKER = "--- End jemalloc statistics ---\n";
+  constexpr String_view VERSION_MARKER = "Version: "; // Part of the general-info section ('g' option omits it).
+
+  // Text (default): jemalloc's own bracketing; ends in newline per contract.
+  const auto text_dump = memory_manager.stats_dump_to_string();
+  EXPECT_EQ(text_dump.find(BEGIN_MARKER), 0u);
+  EXPECT_TRUE(ends_with(text_dump, END_MARKER));
+  EXPECT_NE(text_dump.find(VERSION_MARKER), string::npos);
+
+  // extra_opts passthrough: 'g' omits the general-info section.
+  const auto text_dump_no_general = memory_manager.stats_dump_to_string(Memory_manager::Stat_format::S_TEXT, "g");
+  EXPECT_EQ(text_dump_no_general.find(BEGIN_MARKER), 0u);
+  EXPECT_EQ(text_dump_no_general.find(VERSION_MARKER), string::npos);
+
+  /* JSON: jemalloc emits it compact, sans trailing newline; we add exactly that newline (contract).  Also no
+   * table-format markers. */
+  const auto json_dump = memory_manager.stats_dump_to_string(Memory_manager::Stat_format::S_JSON);
+  ASSERT_GE(json_dump.size(), 3u);
+  EXPECT_EQ(json_dump.front(), '{');
+  EXPECT_TRUE(ends_with(json_dump, "}\n"));
+  EXPECT_EQ(json_dump.find('\n'), json_dump.size() - 1);
+  EXPECT_EQ(json_dump.find(BEGIN_MARKER), string::npos);
+
+  // stats_dump_to_ostream() directly (the others are built on it).
+  {
+    std::ostringstream os;
+    memory_manager.stats_dump_to_ostream(os);
+    const auto dump = os.str();
+    EXPECT_EQ(dump.find(BEGIN_MARKER), 0u);
+    EXPECT_TRUE(ends_with(dump, END_MARKER));
+  }
+
+  // log_stats_dump(): null logger => no-op (and no crash).
+  memory_manager.log_stats_dump(nullptr);
+
+  // log_stats_dump(): passes filter => exactly 1 message, bracketing the dump.
+  {
+    Capture_logger logger{Sev::S_INFO};
+    memory_manager.log_stats_dump(&logger); // Default sev = INFO.
+    ASSERT_EQ(logger.m_msgs.size(), 1u);
+    const auto& msg = logger.m_msgs.front();
+    EXPECT_NE(msg.find(string{"STATS_DUMP[[[\n"} + string{BEGIN_MARKER}), string::npos);
+    EXPECT_NE(msg.find(string{END_MARKER} + "]]]STATS_DUMP."), string::npos);
+    EXPECT_NE(msg.find("as-text"), string::npos);
+
+    memory_manager.log_stats_dump(&logger, Memory_manager::Stat_format::S_JSON, Sev::S_INFO, "g");
+    ASSERT_EQ(logger.m_msgs.size(), 2u);
+    EXPECT_NE(logger.m_msgs.back().find("as-JSON"), string::npos);
+    EXPECT_NE(logger.m_msgs.back().find("extra-opts[g]"), string::npos);
+
+    // Filtered out (TRACE is more verbose than the logger's INFO) => nothing logged.
+    memory_manager.log_stats_dump(&logger, Memory_manager::Stat_format::S_TEXT, Sev::S_TRACE);
+    EXPECT_EQ(logger.m_msgs.size(), 2u);
+  }
+} // TEST(Jemalloc_memory_manager_test, Vanilla_alloc_and_stats_dumps)
 
 /**
  * Concurrency regression guard for detail::jemalloc_arena_list_mutex() (see doc header).  Hammers concurrent jemalloc
@@ -1136,49 +862,5 @@ TEST(Jemalloc_memory_manager_test, Arena_list_mutex_concurrency)
    * The recorded-error check then catches the softer failures (a worker throw or an empty dump). */
   EXPECT_TRUE(first_error.empty()) << "A worker thread reported: [" << first_error << "].";
 } // TEST(Jemalloc_memory_manager_test, Arena_list_mutex_concurrency)
-
-/**
- * Tests to ensure default allocators/deallocators are not overridden.
- * NOTE: This only passes if jemalloc is not the default allocator.
- *
- * ygoldfel adds: As of this writing (11/2023) this test appears to ~always fail, at least if run as part of
- * the overall suite.  I discussed briefly with echan (test author); he didn't have time to get into it yet,
- * but generally I believe it might be a matter of ordering of this test versus others in the suite.
- * For now disabling it (DISABLED_) to have a look later.
- */
-TEST(Jemalloc_memory_manager_test, DISABLED_No_default_override)
-{
-  // Allocate a large enough size that an allocation or split would likely be performed if jemalloc was used
-  const size_t ALLOC_SIZE = Jemalloc_pages::get_page_size() * 1024 * 1024;
-  Default_jemalloc_memory_manager memory_manager;
-
-  // C interface
-  {
-    void* p = malloc(ALLOC_SIZE);
-    EXPECT_NE(p, nullptr);
-    EXPECT_FALSE(memory_manager.did_any_action());
-    free(p);
-    memory_manager.reset_action_flags();
-  }
-
-  // C++ interface
-  {
-    uint8_t* p = new uint8_t[ALLOC_SIZE];
-    EXPECT_NE(p, nullptr);
-    EXPECT_FALSE(memory_manager.did_any_action());
-    delete[] p;
-    memory_manager.reset_action_flags();
-  }
-
-  // Make sure our hooks get called
-  {
-    void* p = memory_manager.allocate(ALLOC_SIZE);
-    EXPECT_NE(p, nullptr);
-    // We should have either created a new extent or split one
-    EXPECT_TRUE(memory_manager.did_create_action() || memory_manager.did_split_action());
-    memory_manager.deallocate(p);
-    memory_manager.reset_action_flags();
-  }
-}
 
 } // namespace ipc::shm::arena_lend::jemalloc::test

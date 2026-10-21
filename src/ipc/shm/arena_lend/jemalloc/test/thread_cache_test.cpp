@@ -257,8 +257,8 @@ TEST_F(Thread_cache_test, Per_arena_tcaches)
     {
       for (uint idx = 0; idx != S_N_PER_ARENA; ++idx) // Interleaved, for maximum seeding-mixture.
       {
-        mem_manager.deallocate(ptrs_a[idx], arena_a, tcache_a);
-        mem_manager.deallocate(ptrs_b[idx], arena_b, tcache_b);
+        mem_manager.deallocate(ptrs_a[idx], tcache_a);
+        mem_manager.deallocate(ptrs_b[idx], tcache_b);
       }
     };
 
@@ -279,7 +279,7 @@ TEST_F(Thread_cache_test, Per_arena_tcaches)
     auto* const post_flush_ptr = mem_manager.allocate(S_ALLOC_SZ, arena_a, tcache_a);
     ASSERT_TRUE(post_flush_ptr);
     EXPECT_EQ(arena_of(post_flush_ptr), arena_a);
-    mem_manager.deallocate(post_flush_ptr, arena_a, tcache_a);
+    mem_manager.deallocate(post_flush_ptr, tcache_a);
 
     dealloc_wave(ptrs_a, ptrs_b);
   });
@@ -310,7 +310,7 @@ TEST_F(Thread_cache_test, Destroy_arena_synchronous)
   const auto tcache_id = Thread_cache::this_thread_cache()->id(arena_id);
   auto* const ptr = mem_manager.allocate(64, arena_id, tcache_id);
   ASSERT_TRUE(ptr);
-  mem_manager.deallocate(ptr, arena_id, tcache_id);
+  mem_manager.deallocate(ptr, tcache_id);
 
   bool done = false;
   Thread_cache::destroy_arena_safely(arena_id, &log_ctx,
@@ -357,7 +357,7 @@ TEST_F(Thread_cache_test, Destroy_arena_deferred)
     const auto tcache_id = Thread_cache::this_thread_cache()->id(arena_id);
     auto* const ptr = mem_manager.allocate(64, arena_id, tcache_id);
     ASSERT_TRUE(ptr);
-    mem_manager.deallocate(ptr, arena_id, tcache_id);
+    mem_manager.deallocate(ptr, tcache_id);
   };
   post_wait(&worker_1, make_seeded_tcache);
   post_wait(&worker_2, make_seeded_tcache);
