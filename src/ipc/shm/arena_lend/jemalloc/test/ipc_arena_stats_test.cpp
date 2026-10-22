@@ -186,7 +186,7 @@ TEST(Ipc_arena_stats_test, field_coverage_manifests)
        "obj.zombie.scans", "obj.zombie.exhaustive_scans", "obj.zombie.hints_sufficient_scans",
        "obj.zombie.fifo_scans", "obj.zombie.fifo_exhausted_scans", "obj.zombie.histo_zombie_ct_estimate",
        "obj.zombie.events.hints_checked", "obj.zombie.events.hints_stale",
-       "obj.zombie.events.hints_found_resurrected_zombie",
+       "obj.zombie.events.hints_stale_and_slots_reused",
        "obj.zombie.events.fifo_objs_checked", "obj.zombie.events.fifo_objs_live",
        "obj.zb.drn.scans", "obj.zb.drn.exhaustive_scans", "obj.zb.drn.hints_sufficient_scans",
        "obj.zb.drn.fifo_scans", "obj.zb.drn.fifo_exhausted_scans", "obj.zb.drn.histo_zombie_ct_estimate" },
@@ -195,7 +195,7 @@ TEST(Ipc_arena_stats_test, field_coverage_manifests)
         * events; the drain reaper's own scan counters (and histogram) are asserted above.
         * @todo We could still spot-check this. */
        "obj.zb.drn.events.hints_checked", "obj.zb.drn.events.hints_stale",
-       "obj.zb.drn.events.hints_found_resurrected_zombie",
+       "obj.zb.drn.events.hints_stale_and_slots_reused",
        "obj.zb.drn.events.fifo_objs_checked", "obj.zb.drn.events.fifo_objs_live" });
 
   check_manifest
@@ -473,10 +473,10 @@ TEST(Ipc_arena_stats_test, zombie_and_main_reaper)
     EXPECT_EQ(reaper.m_exhaustive_scans.load(), 0u);
     EXPECT_GE(reaper.m_scans.load(), 2u); // Piggy scans ride several arena ops; most short-circuit on estimate==0.
     EXPECT_GE(reaper.m_events.m_hints_checked.load(), 1u);
-    EXPECT_EQ(reaper.m_events.m_hints_found_resurrected_zombie.load(), 0u); // The canary's canary.
-    /* m_events.m_hints_stale: deterministically staging a stale hint -- one that outlives its object's
-     * deletion -- is ~impossible from a test; intentionally unexercised.  Like the resurrected-zombie
-     * canary above, just assert the expected quiet. */
+    /* m_events.m_hints_stale, m_events.m_hints_stale_and_slots_reused: deterministically staging a stale hint
+     * (one that outlives its object's deletion; for the latter also outliving the object's use-count slot's reuse)
+     * is ~impossible from a test; intentionally unexercised.  Just assert the expected quiet. */
+    EXPECT_EQ(reaper.m_events.m_hints_stale_and_slots_reused.load(), 0u);
     EXPECT_EQ(reaper.m_events.m_hints_stale.load(), 0u);
     // The estimate histogram: exactly one sample so far -- the estimate (1) read by the reaping scan.
     EXPECT_EQ(reaper.m_histo_zombie_ct_estimate.count_for_bucket_containing_outcome(1), 1u);

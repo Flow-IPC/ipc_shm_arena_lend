@@ -216,7 +216,7 @@ bool Owner_shm_pool_collection::remove_range_and_pool_if_empty(const void* addre
   removed_range = false;
   unmapped_pool = false;
 
-  if (size <= 0)
+  if (size == 0)
   {
     FLOW_LOG_WARNING("Removal size is zero");
     return false;

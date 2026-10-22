@@ -436,12 +436,12 @@ TEST_F(Jemalloc_pages_test, Interface)
     size_t rss_after = get_rss();
     // Ensure that purging the memory reduced RSS by a significant amount of the memory previously paged in
     // This is approximate, and hopefully, does not lead to false positives
-    EXPECT_GT((rss_after - rss_before), (S_HUGE_PAGE_SIZE * 3 / 4));
+    EXPECT_GT(rss_before, rss_after + (S_HUGE_PAGE_SIZE * 3 / 4));
 
     // Check data is zeroed
     EXPECT_TRUE(check_zeroes(p, S_HUGE_PAGE_SIZE));
 
-    Jemalloc_pages::unmap(p, S_PAGE_SIZE);
+    Jemalloc_pages::unmap(p, S_HUGE_PAGE_SIZE);
 
     // Restore flag
     Test_jemalloc_pages::set_os_overcommit_memory(overcommit);

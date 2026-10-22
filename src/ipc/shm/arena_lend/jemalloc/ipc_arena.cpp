@@ -980,7 +980,7 @@ void* Ipc_arena::create_shm_pool(void* address, size_t size, size_t alignment, b
     void* const actual_address = Jemalloc_pages::map(address, size, alignment, *commit, fd);
     if (!actual_address)
     {
-      return nullptr; // Handle error. @todo Fill in.
+      return nullptr; // Our caller cleans up (closes `fd`, removes SHM object); we then log a WARNING.
     }
 
     // Extracted (somewhat) from extent_mmap.c
@@ -1312,13 +1312,13 @@ bool Ipc_arena::compute_pool_and_offset(void* address, size_t size, size_t offse
   Shm_pool::size_t address_offset;
   if (!pool->is_subset(address, size, &address_offset))
   {
-    // Alert - specified range is not complete resident in pool
-    FLOW_LOG_WARNING("Requested pool [" << address << "], size [" << size << "] does not completely "
+    // Alert - specified range does not reside completely in pool
+    FLOW_LOG_WARNING("Requested range [" << address << "], size [" << size << "] does not completely "
                      "reside in pool.");
     return false;
   }
 
-  // Avoid overflow in checks.  @todo What does this comment mean?  Figure out/clarify. -ygoldfel
+  // Check `offset` and `length` individually first, so that `offset + length` cannot overflow.
   if ((offset > size) || (length > size) || (offset + length) > size)
   {
     FLOW_LOG_WARNING("Requested offset [" << offset << "] and length [" << length << "] is > size "

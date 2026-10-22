@@ -33,16 +33,28 @@
 namespace ipc::shm::arena_lend::detail
 {
 
-Use_count_registry::Use_count_registry(size_t sz, size_t extra_hdr_sz) :
-  m_header({ sz,
-             extra_hdr_sz,
-             /* m_data_start_minus_this: This is actually quite important.  (See its doc header for reason why
-              * we are storing it instead of placing it into a function... and more.)  We can reuse get_min_size(),
-              * as it assumes the layout we want. */
-             get_min_size(extra_hdr_sz) - (S_USE_COUNTS_CAPACITY * S_ALLOC_SZ),
-             0,
-             {}, 0, 0, {} }) // Would be fine to leave them uninitialized temporarily (compiler doesn't like).
+Use_count_registry::Use_count_registry(size_t sz, size_t extra_hdr_sz)
 {
+  /* m_header is cted via its no-arg ctor; as advertised that means all scalars are uninitialized (actually the bits
+   * are logically zero but whatever), optional<> empty, and m_bitmap_words untouched/uninitialized (see below about
+   * that).  So let's finish the job of setting it up: */
+
+  m_header.m_pool_sz = sz;
+  m_header.m_extra_hdr_sz = extra_hdr_sz;
+
+  /* This is actually quite important.  (See its doc header for reason why we are storing it instead of placing
+   * it into a function... and more.)  We can reuse get_min_size(), as it assumes the layout we want. */
+  m_header.m_data_start_minus_this = (get_min_size(extra_hdr_sz) - (S_USE_COUNTS_CAPACITY * S_ALLOC_SZ));
+
+  m_header.m_allocated_sz = 0;
+
+  /* The following m_header stuff is effectively garbage until .m_meta_obj_sz (currently null) gets set by first
+   * allocate(); at that point we set these to real init values:
+   *   m_meta_obj_sz, m_bitmap_words_sz, m_bitmap_words_next_search_idx.
+   * @todo Zero the non-optional<>s anyway?  Avoid false compiler/sanitizer warnings?  If so do it in Header ctor. */
+
+  // That just leaves big array m_bitmap_words.
+
 #if 0
   m_header.m_bitmap_words.assign(0);
 
@@ -67,9 +79,6 @@ Use_count_registry::Use_count_registry(size_t sz, size_t extra_hdr_sz) :
    * (We leave the historical explicit .assign(0) and @todo (now to-done) for posterity, as it includes the
    * justification/reasoning for omitting it; in short there's a RAM-use improvement due to non-resident pages.) */
 
-  /* The following m_header stuff is effectively garbage until .m_meta_obj_sz (currently null) gets set by first
-   * allocate(); at that point we set these to real init values:
-   *   m_meta_obj_sz, m_bitmap_words_sz, m_bitmap_words_next_search_idx. */
 } // Use_count_registry::Use_count_registry()
 
 void* Use_count_registry::allocate(size_t sz)
@@ -97,7 +106,7 @@ void* Use_count_registry::allocate(size_t sz)
     // Note that (sz == 0) is allowed.  The logic below will work (essentially no-op).
 
     /* sz bytes => ceil(sz / ALLOC_SZ) data-area slots => ceil(sz / ALLOC_SZ) bitmap bits
-     *   => ceil(ceil(sz / ALLOC_SZ) / 8) bytes to holds ceil(sz / ALLOC_SZ) bitmap bits.  Call this K.
+     *   => ceil(ceil(sz / ALLOC_SZ) / 8) bytes to hold ceil(sz / ALLOC_SZ) bitmap bits.  Call this K.
      * => ceil(K / sizeof(word)) words to hold K bytes.  Call that M.
      *  - Set all those bits to 1 (a/k/a set all those words to 0b111111...1).
      *  - Next search will begin at the word right after that (its LSB shall in fact be 0).
@@ -107,6 +116,8 @@ void* Use_count_registry::allocate(size_t sz)
     m_header.m_bitmap_words_next_search_idx = ceil_div(ceil_div(ceil_div(sz, S_ALLOC_SZ),
                                                                 size_t(8)),
                                                        sizeof(bit_word_t));
+    assert((m_header.m_bitmap_words_next_search_idx <= BITMAP_QUANTUM_WORDS)
+           && "Metadata area must fit within the 1st quantum; see allocate() doc header.");
     fill_n(bitmap_words_start,
            m_header.m_bitmap_words_next_search_idx,
            ~(bit_word_t(0)));
@@ -127,7 +138,7 @@ void* Use_count_registry::allocate(size_t sz)
   {
     return nullptr; // Be forgiving as promised.  @todo Maybe should assert() instead?
   }
-  // else if (sz != 0):
+  // else if (sz == S_ALLOC_SZ):
 
   // This is the fast-path.  Needless to say performance is of the essence.
 
@@ -364,7 +375,7 @@ size_t Use_count_registry::stats_record_at_deletion(Obj_db_aux_pool_stats* targe
 {
   using flow::util::stat::fetch_sub;
 
-  /* See stats_record().  That should make the below resonably clear.
+  /* See stats_record().  That should make the below reasonably clear.
    * @todo A bit of code reuse w/r/t stats_record() w/r/t some of this math wouldn't hurt. */
 
   const auto quanta_active_x_bitmap_qtm_words = stat_quanta_active();
@@ -404,6 +415,12 @@ size_t Use_count_registry::get_size() const
 size_t Use_count_registry::get_free_memory() const
 {
   return (S_USE_COUNTS_CAPACITY * S_ALLOC_SZ) - m_header.m_allocated_sz;
+}
+
+Use_count_registry::Header::Header()
+{
+  /* Nothing.  As advertised, most importantly, m_bitmap_words was not initialized (actively zero-filled).
+   * Use_count_registry ctor will do the rest. */
 }
 
 } // namespace ipc::shm::arena_lend::detail

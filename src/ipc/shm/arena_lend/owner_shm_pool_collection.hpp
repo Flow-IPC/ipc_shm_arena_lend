@@ -132,14 +132,14 @@ protected:
    */
   using Memory_unmap_functor = std::function<bool(const std::shared_ptr<Shm_pool>&)>;
   /**
-   * Function to decommit memory, which means purging from physical memory and marking as read only.
+   * Function to decommit memory, which means purging from physical memory and marking as inaccessible.
    *
    * The input parameters are:
    * 1. shm_pool - The memory pool.
    * 2. offset - The offset from the start of the pool to purge.
    * 3. size - The size to purge.
    *
-   * The output parameter is whether unmap was successful.
+   * The output parameter is whether decommit was successful.
    */
   using Memory_decommit_functor = std::function<bool(const std::shared_ptr<Shm_pool>&, std::size_t, std::size_t)>;
 
@@ -156,7 +156,7 @@ protected:
     private boost::noncopyable
   {
   public:
-    /// Single-reader, single-writer mutex.
+    /// Mutex type (exclusive) guarding the pool's remaining-size accounting.
     using Mutex = std::mutex;
     /// Exclusive lock for the mutex.
     using Lock = std::lock_guard<Mutex>;

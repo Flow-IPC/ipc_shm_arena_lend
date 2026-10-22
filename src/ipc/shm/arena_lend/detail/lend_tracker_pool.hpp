@@ -59,7 +59,7 @@ namespace ipc::shm::arena_lend::detail
  * or decrement or exchange (etc.).
  *
  * ### How to use ###
- * Assume all discusion is of one specific arena (in SHM-jemalloc represented by a jemalloc::Ipc_arena object) A.
+ * Assume all discussion is of one specific arena (in SHM-jemalloc represented by a jemalloc::Ipc_arena object) A.
  * Broadly the users of Lend_tracker_pool can be classified as follows:
  *
  *   - (Admin mode) When A is asked to `construct<T>(...)` in thread X, it shall either construct or access
@@ -220,7 +220,7 @@ public:
    *
    * @param log_ctx
    *        All logging is done through this; it is assumed the `Logger*` stored inside can change at any time.
-   *        A each TRACE-or-more-verbose log-call-site, `*log_ctx` is touched only if the
+   *        At each TRACE-or-more-verbose log-call-site, `*log_ctx` is touched only if the
    *        `skip_fast_path_verbose_logging_ptr` fast-path filter passes.
    * @param skip_fast_path_verbose_logging_ptr
    *        Before any TRACE-or-more-verbose log-op is performed (including the already-cheap `.should_log()`),
@@ -282,7 +282,7 @@ public:
    * Allocates a new use-count slot and initializes its value to 1 (one extant handle: the just-constructed
    * object).  This is to be called in admin mode upon a successful `construct<T>()`.
    *
-   * If the pool has no free slots (all Use_count_registry::S_USE_COUNTS_CAPACITY` are in use), an exception
+   * If the pool has no free slots (all Use_count_registry::S_USE_COUNTS_CAPACITY are in use), an exception
    * (likely `bad_alloc`) is thrown.
    *
    * @return The index of the newly allocated use-count slot; suitable for storage alongside the constructed
@@ -341,7 +341,7 @@ public:
 
   /**
    * Atomically decrements the use-count at the given slot; for use in admin mode (#m_is_creator is `true`: the
-   * in thread that created the slot via use_count_new()).  If the use-count thereby reaches zero,
+   * thread that created the slot via use_count_new()).  If the use-count thereby reaches zero,
    * the slot is immediately returned (deallocated), and `*use_ct_idx_ptr` is set to 0 (not-an-index).
    *
    * This is more efficient than the client-mode use_count_dec() path (see class doc header).
@@ -412,7 +412,7 @@ public:
    *      in the first place.)
    *
    * The value behaves in fully-synchronized manner (as-if protected by a standard mutex).  That is it is always
-   * set and (here) read with `seq_cst` (most restrictive) memory-ordering.  As such it assumed it will not be
+   * set and (here) read with `seq_cst` (most restrictive) memory-ordering.  As such it is assumed it will not be
    * accessed sufficiently frequently for this to matter.
    *
    * @return See above.
@@ -462,7 +462,7 @@ private:
    * from who knows where (received over an IPC transport, quite likely); then we call use_ct_idx_to_ptr() on it;
    * this computes the location of that use-count slot, as a vaddr `Atomic_use_ct*` located inside the SHM-pool
    * bounds; and then we dereference this `atomic` and do things like `auto use_ct_prev = (...).fetch_sub(1)` to it.
-   * Thing is, given the computation in use_ct_idx_ptr(), this breaks aliasing guidelines: a byte address is
+   * Thing is, given the computation in use_ct_idx_to_ptr(), this breaks aliasing guidelines: a byte address is
    * computed, `reinterpret_cast<>`ed to an unrelated pointer type `Atomic_use_ct*`, and then dereferenced.
    * Is it fine + is there any alternative?  Short answer: in practice yes and no respectively.  Longer answer:
    *
@@ -538,7 +538,7 @@ private:
      *     - If an element equals 0, it is to be ignored.
      *     - If an element is 1 or higher, then the `use_ct_idx` equal to the stored value, minus 1, is likely
      *       to be unused-referencing.  The algorithm must confirm this and dispose if confirmed; and place 0 here
-     *       (whether confirmed ot not).  (The check for non-zero and replacement by zero shall be done with
+     *       (whether confirmed or not).  (The check for non-zero and replacement by zero shall be done with
      *       an atomic-exchange operation.)  Hence it is a (highly likely to be accurate) hint.
      *
      * This is essentially a very high-perf communication pipe from Lend_tracker_pool (client-type) instances:
@@ -669,11 +669,11 @@ private:
    *   - As an offset base: Since Use_count_registry::get_metadata() is formally guaranteed to point to the
    *     start of the data area, with actual use-count slots stored in bulk following the Metadata:
    *     - use_ct_ptr_to_idx(), given a pointer to a use-count slot, subtracts `m_metadata` (the pointer)
-   *       to get the offset in bytes; then multiplies by the slot width to obtain the index.
-   *       - It is quick: subtract, then shift left.
-   *     - use_ct_idx_to_ptr(), conversely, will first divide by the slot width, then add `m_metadata` (the pointer).
+   *       to get the offset in bytes; then divides by the slot width to obtain the index.
+   *       - It is quick: subtract, then shift right.
+   *     - use_ct_idx_to_ptr(), conversely, will first multiply by the slot width, then add `m_metadata` (the pointer).
    *       That gets the actual pointer to the slot.
-   *       - It is quick: shift right, then add.
+   *       - It is quick: shift left, then add.
    *     - Hence, say `Metadata` (with padding determined by Use_count_registry) uses 256 bytes; and
    *       `sizeof(Atomic_use_ct) == 4` (the slot width).  Then the lowest possible index returned by
    *       use_ct_ptr_to_idx() is (256 / 4) = 64.  Then the next ones are 65 (at 65 * 4 bytes off base), 66, etc.
@@ -718,7 +718,7 @@ void Lend_tracker_pool::emit_unused_ct_idx_hints(Container* container)
        * the non-hints-array-enabled search phase; so they might have already returned it to the pool, hence
        * it is not 0 -- it is not an active slot at all.  It might even have been assigned to another object
        * entirely!  To tell the difference, at the least we'd have to be able to check whether a slot is
-       * allocate()d or not (as of this writing we can't; anyway Use_count_registry would need expose such a thing,
+       * allocate()d or not (as of this writing we can't; anyway Use_count_registry would need to expose such a thing,
        * with some computational cost, checking its internal bitmap and all).
        *
        * So that'd be wrong, or at least non-trivial to make right.  So keep it simple and clean:

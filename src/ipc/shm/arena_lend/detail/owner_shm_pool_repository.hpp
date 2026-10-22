@@ -130,7 +130,7 @@ public:
   void tl_copy_rev_pull_pools(typename Tl_copy::Map* pools_sorted_by_base) const;
 
   /**
-   * Performs a high-performance, as for (e.g.) Owner_shm_pool_repository::from_address().  The contract
+   * Performs a high-performance reverse-lookup, as for (e.g.) Owner_shm_pool_repository::from_address().  The contract
    * is identical (within reason).
    *
    * @param address
@@ -149,10 +149,10 @@ private:
    * Helper for insert() and erase() that pushes the current canonical #m_pools_by_base state into all
    * per-thread #Tl_copy caches.  `Tl_copy::s_registry.while_locked()` must be in effect at entry.
    *
-   * @param state_per_thread
+   * @param caches_per_thread
    *        Arg passed to `Tl_copy::s_registry.while_locked()` in the caller.
    */
-  void tl_copy_push_pools(const typename decltype(Tl_copy::s_registry)::State_per_thread_map& state_per_thread) const;
+  void tl_copy_push_pools(const typename decltype(Tl_copy::s_registry)::State_per_thread_map& caches_per_thread) const;
 
   // Data.
 
@@ -423,7 +423,7 @@ private:
    *
    * Bottom line: It is as if we have a `static thread_local Pool_bases_cache_map s_cache` here, and to access
    * `s_cache` -- so as to do something with it -- one instead uses `*(Pool_bases_cache::this_thread_obj_or_null())`;
-   * except that that accessor returns null when `s_map` has been destroyed already.  (Then we can fall-back to
+   * except that that accessor returns null when `s_cache` has been destroyed already.  (Then we can fall-back to
    * cache-avoiding behavior that does not need would-be `s_cache`.)
    */
   using Pool_bases_cache = flow::util::Thread_local_obj_deinit_safe<Pool_bases_cache_map, Owner_shm_pool_repository>;

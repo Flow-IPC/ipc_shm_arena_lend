@@ -144,7 +144,7 @@ struct Zombie_obj_reaper_stats
      * @see Zombie_obj_reaper_stats::m_hints_sufficient_scans doc header for related background.
      *
      * Modulo concurrency artifacts, one can derive the quantity
-     * `m_hints_checked - m_hints_stale - m_hints_found_resurrected_zombie`.
+     * `m_hints_checked - m_hints_stale - m_hints_stale_and_slots_reused`.
      * This quantity is the following: Of the single-object hints counted in #m_hints_checked, count of how many
      * were indeed accurate hints (object is zombie and therefore reaped).
      */
@@ -160,13 +160,15 @@ struct Zombie_obj_reaper_stats
     /**
      * Of the single-object hints counted in #m_hints_checked, count of how many resulted in the finding that
      * the indicated object was in fact not a zombie but live (1+ references are held cross-process).
+     * Like #m_hints_stale this phenomenon is not an error but a consequence of concurrent events though less likely.
      *
-     * @warning (Canary stat) Based on our own understanding of the system, this count should remain zero.
-     *          However, the code is written defensively, so that instead of panicking/crashing/etc.,
-     *          it is tracked here.  If a user sees this stat showing non-zero, we should investigate
-     *          the sequence of events that led to it.  (As of this writing we have not seen this.)
+     * It would be interesting if this were often seen to be much greater than zero.
+     *
+     * @internal
+     *
+     * Thread_lcl_obj_db_admin::unused_obj_scan() explains how this could happen.
      */
-    Counter m_hints_found_resurrected_zombie = 0;
+    Counter m_hints_stale_and_slots_reused = 0;
 
     /**
      * In the (typically-unnecessary, we hope) FIFO-zombie-search phases of the zombie-reaping scans,
@@ -1527,7 +1529,7 @@ void declare_stats(const flow::util::stat::Stat_name& name_prefix,
   FLOW_UTIL_STAT_DECLARE(m_histo_zombie_ct_estimate, ACCUMULATOR);
   FLOW_UTIL_STAT_DECLARE(m_events.m_hints_checked, ACCUMULATOR);
   FLOW_UTIL_STAT_DECLARE(m_events.m_hints_stale, ACCUMULATOR);
-  FLOW_UTIL_STAT_DECLARE(m_events.m_hints_found_resurrected_zombie, ACCUMULATOR);
+  FLOW_UTIL_STAT_DECLARE(m_events.m_hints_stale_and_slots_reused, ACCUMULATOR);
   FLOW_UTIL_STAT_DECLARE(m_events.m_fifo_objs_checked, ACCUMULATOR);
   FLOW_UTIL_STAT_DECLARE(m_events.m_fifo_objs_live, ACCUMULATOR);
 }

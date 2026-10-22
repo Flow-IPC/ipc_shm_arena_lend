@@ -1963,7 +1963,22 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
       auto use_ct_idx_copy = unused_ct_idx_possibly;
       if (!lend_tracker_pool.use_count_return_if_unused(&use_ct_idx_copy))
       {
-        // Nope.
+        /* Nope.
+         *
+         * It is rare but can happen.  It takes 2+ scans (a scan collects the hints before its FIFO phase; and objects
+         * are constructed only in this thread, hence not during a scan):
+         *   -# A client decrements the use-count to 0; it posts the hint a little later, but before it does:
+         *   -# Meanwhile a scan (the hints already collected, hence excluding that one) reaches the object in its
+         *      FIFO phase and reaps it; in particular n_unused() could have already been incremented.
+         *   -# The hint is placed into the hint-area (but the scan already did not see that).
+         *      It may stay unread for a while (and that's fine; it got reaped anyway): Non-exhaustive scans skip
+         *      this arena while n_unused() is 0, which it likely is after that reaping.
+         *   -# This thread constructs a new object -- constructing_obj() -- and that use-count slot is reused for
+         *      it, depending on Use_count_registry pattern of movement around the pool area.
+         *   -# n_unused() is non-zero again, and a later scan reads the hint, finds the new object at that index:
+         *      but it's live.
+         * (Without step 4 this would have been a stale hint instead; see above.) */
+
         if (!skip_fast_path_verbose_logging())
         {
           FLOW_LOG_TRACE_LOCKED("Tl_obj_db_admin: For arena/collection (ID [" << collection_id << "]), piggy-scan "
@@ -1974,12 +1989,7 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
         }
         // else { Skip ~any cycle use on logging along fast-path. }
 
-        /* @todo As noted in the doc header for this stat, this shouldn't actually be possible.  We are nevertheless
-         * being defensive and not crashing out if it does somehow happen.  Eventually this should be revisited;
-         * a WARNING might be in order, at least; maybe something more drastic.  For now though we'll just count
-         * it as a canary stat (if it's non-zero, look into it, something is not how we expected. */
-
-        ++batched_stats.m_hints_found_resurrected_zombie;
+        ++batched_stats.m_hints_stale_and_slots_reused;
         continue;
       }
       /* else: Found one!  It reached 0 (end state), and it is live, and we are the only ones who can remove it, so
@@ -2119,9 +2129,9 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
       (batched_stats.m_hints_stale == 0)
         || fetch_add(&zombie_obj_reaper_stats.m_events.m_hints_stale,
                      batched_stats.m_hints_stale);
-      (batched_stats.m_hints_found_resurrected_zombie == 0)
-        || fetch_add(&zombie_obj_reaper_stats.m_events.m_hints_found_resurrected_zombie,
-                     batched_stats.m_hints_found_resurrected_zombie);
+      (batched_stats.m_hints_stale_and_slots_reused == 0)
+        || fetch_add(&zombie_obj_reaper_stats.m_events.m_hints_stale_and_slots_reused,
+                     batched_stats.m_hints_stale_and_slots_reused);
       (batched_stats.m_fifo_objs_checked == 0)
         || fetch_add(&zombie_obj_reaper_stats.m_events.m_fifo_objs_checked,
                      batched_stats.m_fifo_objs_checked);

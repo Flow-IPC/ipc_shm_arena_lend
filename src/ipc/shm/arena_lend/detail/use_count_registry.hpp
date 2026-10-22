@@ -204,7 +204,7 @@ public:
    *
    * ### Trade-offs ###
    * The higher this is, the higher the (presumably) max use-count value you can store.  That is good.
-   * On the other hand, the higher this is, the more RAM is used (at mimimum and at maximum, both) to store
+   * On the other hand, the higher this is, the more RAM is used (at minimum and at maximum, both) to store
    * the use-counts.  The bitmap area's size does not depend on this; however the main/largest area
    * can be sized up to `S_ALLOC_SZ * S_USE_COUNTS_CAPACITY` bytes; and is at minimum
    * sized `S_ALLOC_SZ * S_USE_COUNTS_CAPACITY_QUANTUM_SZ`.
@@ -327,7 +327,8 @@ public:
    *     pool users).
    *     - `sz == 0` is allowed (meaning no metadata area needed).  You must still make the `allocate(0)` initial
    *       call in this case.
-   *     - If `sz > #S_USE_COUNTS_CAPACITY * S_ALLOC_SZ`, behavior is undefined.
+   *     - If `sz > S_USE_COUNTS_CAPACITY_QUANTUM_SZ * S_ALLOC_SZ` (1 quantum's worth of the data area), behavior is
+   *       undefined.
    *   - All allocate() calls after the 1st are *normal* allocations.
    *     - `sz != S_ALLOC_SZ`, in the spirit of forgiveness, yields null and allocates no space.  Otherwise:
    *     - `sz == S_ALLOC_SZ`: N (a/k/a #S_ALLOC_SZ) bytes are allocated for a new use-count and its address returned.
@@ -384,7 +385,7 @@ public:
   void grow(size_t extra_sz);
 
   /**
-   * How many `allocate(N)` calls, divided by #S_ALLOC_SZ, would succeed now without `deallocate()` in-between,
+   * How many `allocate(N)` calls, times #S_ALLOC_SZ, would succeed now without `deallocate()` in-between,
    * until one returned null.  If allocate() has not yet been called, then assume `allocate(0)` has been
    * called (0-sized metadata area); the preceding sentence is then accurate.
    *
@@ -415,12 +416,12 @@ public:
    *
    * ### Details ###
    * The data area holds up-to #S_USE_COUNTS_CAPACITY use-counts (minus some space for `Metadata`, whose size
-   * is established by the first allocate()).  This is divided into M = #S_USE_COUNTS_CAPACITY_QUANTUM_SZ
-   * quanta.  At first, only 1 quantum is used, as a memory-use-reduction strategy.  Therefore
-   * stat_quanta_active() shall return K times 1.  Once that area runs out of slots, a quantum is added; so
-   * stat_quanta_active() shall return K times 2.  Once both areas run out of slots, a 3rd quantum is
-   * added... etc.  Potentially stat_quanta_active() can return up-to K times M.  (As of this writing the
-   * number cannot go down: only stay same or sometimes increase.)
+   * is established by the first allocate()).  This is divided into
+   * M = `S_USE_COUNTS_CAPACITY / S_USE_COUNTS_CAPACITY_QUANTUM_SZ` quanta.  At first only 1 quantum is used, as a
+   * memory-use-reduction strategy.  Therefore stat_quanta_active() shall return K times 1.  Once that area runs out
+   * of slots, a quantum is added; so stat_quanta_active() shall return K times 2.  Once both areas run out of slots,
+   * a 3rd quantum is added... etc.  Potentially stat_quanta_active() can return up-to K times M.  (As of this writing
+   * the number cannot go down: only stay same or sometimes increase.)
    *
    * If called before the first allocate(), then the data area has not yet been touched; so we return zero.
    *
@@ -436,7 +437,7 @@ public:
    * call (pre-`allocate()` and then post-`allocate()` inside stats_record) itself is each a single memory
    * load and is cheap.
    *
-   * @see stats_record(): Call this post-`allocate()`.  Call stat_quanta_active() pre-`allocate()`.  Pass the
+   * @see stats_record(): Call this post-`allocate()`.  Call stat_quanta_active() pre-`allocate()`.  Pass
    *      the result of the latter into the former as `prev_quanta_active`.
    * @see stats_record_at_deletion(): Call this to register that the aux-pool that contains `*this` shall be
    *      removed.
@@ -456,7 +457,7 @@ public:
    *      is quite helpful in understanding on this whole setup.
    *
    * @warning Since the essential values in `*target_stats` are GAUGEs, it is imperative that one
-   *          call stats_record_at_deletion() when about to delete the containg SHM-pool.  Otherwise
+   *          call stats_record_at_deletion() when about to delete the containing SHM-pool.  Otherwise
    *          GAUGEs like Obj_db_aux_pool_stats::m_resident_sz will never go down -- not even once all arenas
    *          have shut down.
    *
@@ -485,7 +486,7 @@ public:
    * to make the rest of the API as simple as possible to use.
    *
    * @param prev_quanta_active
-   *        Result of stat_quanta_active() when `*target_stats` was last accurate w/r/t to `*this`.
+   *        Result of stat_quanta_active() when `*target_stats` was last accurate w/r/t `*this`.
    *        (Note that, as the induction base, before the initial `this->allocate()` it is correct that
    *        `*this`'s contribution to `*target_stats` be zero for all GAUGEs in stat::Obj_db_aux_pool_stats.)
    * @param target_stats
@@ -523,11 +524,11 @@ private:
   static_assert((((S_USE_COUNTS_CAPACITY * S_ALLOC_SZ) % S_PAGE_SZ) == 0)
                   && (S_USE_COUNTS_CAPACITY != 0)
                   && ((S_USE_COUNTS_CAPACITY % 8) == 0),
-                "Please set USE_COUNTS_CAPACITYxPAGE_SZ to a positive multiple of PAGE_SZ; "
+                "Please set USE_COUNTS_CAPACITYxALLOC_SZ to a positive multiple of PAGE_SZ; "
                   "and set USE_COUNTS_CAPACITY to be a multiple of 8 (bits/byte).");
 
   /**
-   * The total size of the bitmap area which uses 1 bit ber 1 use-count slot (each N bytes wide) of the data area
+   * The total size of the bitmap area which uses 1 bit per 1 use-count slot (each N bytes wide) of the data area
    * which is #S_USE_COUNTS_CAPACITY times N bytes in size.
    */
   static constexpr size_t S_BITMAP_SZ = S_USE_COUNTS_CAPACITY / 8;
@@ -556,17 +557,35 @@ private:
   /// This is the data in `*this`: the stuff preceding the `extra_hdr_sz`-byte gap and then the data area.
   struct Header
   {
-    /// See get_size().
-    const size_t m_pool_sz;
+    // Constructors/destructor.
 
-    /// See ctor and/or get_min_size().
-    const size_t m_extra_hdr_sz;
+    /**
+     * Ctor that leaves all scalars uninitialized, `optional`s empty, and #m_bitmap_words untouched (therefore
+     * non-resident but zero-filled per that property of in-SHM vaddr areas).
+     *
+     * ### Rationale ###
+     * Why ctor exists instead of just letting us be aggregate-initialized a-la `{ sz, extra_hdr_sz, ... }`:
+     * See #m_bitmap_words doc header.  It'd be shorter and nicer if we could just use the aggregate-init but can't.
+     *
+     * Why ctor does not take the init values for various scalars, which are going to be immediately set anyway
+     * by daddy Use_count_registry: It'd be pointless boiler-plate for a single-use `struct` type.
+     */
+    Header();
+
+    // Data.
+
+    /// See get_size().  Essentially `const` after being assigned.
+    size_t m_pool_sz;
+
+    /// See ctor and/or get_min_size().  Essentially `const` after being assigned.
+    size_t m_extra_hdr_sz;
 
     /**
      * For speed, precomputed/memorized offset from `this` (a/k/a the start of the `Header`) where
      * the data area -- up to #S_USE_COUNTS_CAPACITY times #S_ALLOC_SZ bytes long -- begins.
+     * Essentially `const` after being assigned.
      */
-    const size_t m_data_start_minus_this;
+    size_t m_data_start_minus_this;
 
     /**
      * How much of the data area is in use, in bytes; i.e., the count of 1-bits in #m_bitmap_words,
@@ -578,12 +597,12 @@ private:
     std::optional<size_t> m_meta_obj_sz;
 
     /**
-     * At all times a positive multiple of `S_BITMAP_QUANTUM_SZ / sizeof(bit_word_t) / 8`, and at most
+     * At all times a positive multiple of `S_BITMAP_QUANTUM_SZ / sizeof(bit_word_t)`, and at most
      * `S_USE_COUNTS_CAPACITY / sizeof(bit_word_t) / 8`, this equals the number of #m_bitmap_words elements that
      * represent the currently active quanta.  I.e., it is the number of bitmap words, starting from
      * the `m_bitmap_words.begin()`, through which allocate() shall search (in the bitmap).
      * Once it fails to find a single 0-bit in the entire area, this is incremented by
-     * `S_BITMAP_QUANTUM_SZ / sizeof(bit_word_t) / 8` (number of words in 1 quantum).
+     * `S_BITMAP_QUANTUM_SZ / sizeof(bit_word_t)` (number of words in 1 quantum).
      * If it already equals `m_bitmap_words.size()` -- i.e., `S_USE_COUNTS_CAPACITY / sizeof(bit_word_t) / 8`
      * (all the available quanta) -- then allocate() fails (no slots available).
      */
@@ -610,6 +629,11 @@ private:
      * sets a small (at least 1) number of words at the start to consist of only 1-bits -- corresponding to the
      * metadata area albeit rounded up to whole words for simplicity.  These are never freed, as that `allocate()`
      * cannot be `deallocate()`d.  The rest of the bits are for the remaining (actual) `[de]allocate()` calls.
+     *
+     * C++ technicalities mean that we have to take some special measures to avoid zero-filling it (which (1) is
+     * redundant, as the in-SHM bytes are initially pre-zeroed, and (2) would make them resident which we -- see
+     * Use_count_registry ctor -- specifically don't want, as we can save some decent RAM in this area by avoiding it).
+     * Hence the presence of Header ctor.
      */
     Bitmap_words m_bitmap_words;
   }; // struct Header

@@ -288,7 +288,20 @@ unsigned int Lend_tracker_pool::use_count_dec(use_ct_idx_t use_ct_idx)
   using std::find_if;
 
   auto const use_ct_ptr = use_ct_idx_to_ptr(use_ct_idx);
-  auto use_ct = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_relaxed));
+
+  /* Attn: `release`, not `relaxed`.  This is (almost) the classic atomic ref-count pattern: whoever's decrement brings
+   * the count to 0 (or, in our case, whoever later observes the 0 -- the admin thread, possibly in another
+   * process) goes on to destroy the object and deallocate its memory (which jemalloc may then reuse).  Every
+   * holder's accesses to the object must happen-before that.  `release` here, paired with an
+   * `atomic_thread_fence(acquire)` in the destroying thread once it sees 0 (see use_count_dec_admin(),
+   * use_count_return_if_unused()), guarantees it.  (With `relaxed` it is formally a data race.)
+   * The (almost) same pattern (and a longer discussion) = in shm::classic::Pool_arena::handle_deleter_impl(); there all
+   * parties are in the deleter, whereas here the 0-observer can also be use_count_return_if_unused().
+   *
+   * The other ops on Atomic_use_ct (use_count_new()'s initialization, use_count_inc()) are `relaxed`: as with
+   * `shared_ptr` increments, the new holder's access to the object is already ordered by whatever conveyed the
+   * handle to it (IPC in particular). */
+  auto use_ct = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_release));
 
   assert((use_ct != 0) && "Use-count on reaching 0 must never be touched again... yet has become negative.  Bug?");
 
@@ -365,7 +378,8 @@ unsigned int Lend_tracker_pool::use_count_dec_admin(use_ct_idx_t* use_ct_idx_ptr
 
   auto& use_ct_idx = *use_ct_idx_ptr;
   auto const use_ct_ptr = use_ct_idx_to_ptr(use_ct_idx);
-  auto use_ct = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_relaxed));
+  // Attn: `release` (+ atomic_thread_fence() below if 0 reached).  See use_count_dec() for explanation.
+  auto use_ct = static_cast<unsigned int>(use_ct_ptr->fetch_sub(1, std::memory_order_release));
 
   assert((use_ct != 0) && "Use-count on reaching 0 must never be touched again... yet has become negative.  Bug?");
 
@@ -385,6 +399,7 @@ unsigned int Lend_tracker_pool::use_count_dec_admin(use_ct_idx_t* use_ct_idx_ptr
 
   if (use_ct == 0)
   {
+    std::atomic_thread_fence(std::memory_order_acquire); // Attn: caller shall destroy object.  See use_count_dec().
     use_count_return_bc_unused(use_ct_idx_ptr,
                                // We never incremented m_n_unused -- and must not decrement it!  Admin-style.
                                true);
@@ -409,6 +424,16 @@ bool Lend_tracker_pool::use_count_return_if_unused(use_ct_idx_t* use_ct_idx_ptr)
     return false;
   }
   // else
+
+  /* Attn: caller shall destroy object. / See use_count_dec() for explanation; as it says there, we are the observer
+   * of use-ct=0 it had potentially set.  So in a classic shared_ptr ref-count pattern this would be physically
+   * near the release-decrement code/run right after it.  (You can see that in the alternative/optimized path:
+   * use_count_dec_admin().)  In contrast for us it's in a separate function (use_count_dec() versus us) -- but more
+   * saliently use_count_dec() runs in another thread, often in another process (from
+   * Thread_lcl_obj_db_client::disposing_obj()); then presumably some other user code would execute, and then an
+   * opportunistic Thread_lcl_obj_db_admin::unused_obj_scan() in the admin thread would call us.  Formally the
+   * atomic-fu situation, as far as this use-ct slot is concerned, is the ~same either way. */
+  std::atomic_thread_fence(std::memory_order_acquire);
 
   use_count_return_bc_unused(use_ct_idx_ptr,
                              // Non-admin-style: having earlier reached 0, m_n_unused was incremented; so decrement it.

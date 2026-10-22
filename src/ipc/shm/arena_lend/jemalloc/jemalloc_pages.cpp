@@ -49,7 +49,7 @@ namespace ipc::shm::arena_lend::jemalloc
 {
 
 /* ygoldfel - My understanding is, indeed, echan needed to make some additions for SHM support
- * in a jemalloc-compatible way and thus, as he noted above, leveraged existing existing
+ * in a jemalloc-compatible way and thus, as he noted above, leveraged existing
  * *internal* jemalloc source code. Hence such code was placed here and then somewhat modified (as little
  * as possible). One complication was that, to compile/work, these pages.c snippets also needed
  * certain items from also-internal jemalloc header files: ones residing in include/internal/<...>.h. To be clear:
@@ -128,7 +128,7 @@ static_assert(false, "We are doing things here which, even if they built OK in n
 #define ALIGNMENT_CEILING(s, alignment) \
   (((s) + (alignment - 1)) & ((~(alignment)) + 1))
 
-// yoldfel - These are correct to be defined in Linux.
+// ygoldfel - These are correct to be defined in Linux.
 #define JEMALLOC_PROC_SYS_VM_OVERCOMMIT_MEMORY
 #define JEMALLOC_USE_SYSCALL
 
@@ -355,14 +355,12 @@ pages_map_slow(size_t size, size_t alignment, bool *commit, int fd) {
     void* ret2 = mmap(ret, size, prot, (determine_mmap_flags(fd) | MAP_FIXED), fd, 0);
     if (ret2 == MAP_FAILED)
     {
-      ret = NULL;
+      // ygoldfel - The anonymous placeholder mapping is still there; unmap it, or it leaks.
+      os_pages_unmap(ret, size);
+      return NULL;
     }
-    else if (ret2 != ret)
-    {
-      // We succeeded in mapping memory, but not in the right place. This is likely close to an assertion.
-      os_pages_unmap(ret2, size);
-      ret = NULL;
-    }
+    // else
+    assert((ret2 == ret) && "MAP_FIXED success must yield the requested address.");
   }
 
   assert(ret != NULL);
