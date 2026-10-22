@@ -241,7 +241,7 @@ public:
   /**
    * Default page size.  We generally try to make larger vaddr areas sized as multiples of this and aligned
    * on this versus the start of the SHM-pool in which we reside.  That is not life-or-death whatsoever, but
-   * we figure, if there will be stats about things like dirty pages, we might as well cleanly operate on entire
+   * we figure, if there will be stats about things like resident pages, we might as well cleanly operate on entire
    * such pages and get nice clean counts perhaps.
    *
    * Public for informational (not algorithmic) purposes: reporting, logging, diagnostics.

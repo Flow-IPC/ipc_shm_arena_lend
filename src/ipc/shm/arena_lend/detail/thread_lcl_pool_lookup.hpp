@@ -183,6 +183,9 @@ public:
  *   - Since, if one assumes for simplicity of exposition that there's only one update happening at a time,
  *     this implies *at most* 2 threads contending for the lock, and usually only 1, this is perf-acceptable.
  *
+ * @note That says "creates the need for locking," but it is possible to eliminate the (frequently accessed)
+ *       mutex as well which would get back some more perf.  See "Potential design improvement."
+ *
  * There is another important lock involved.  Per `flow::util::Thread_local_state_registry`, when looping
  * over extant thread-local objects (`*this`es in our case) -- a key service of that utility module -- one
  * shall lock a built-in central mutex via `Thread_local_state_registry.while_locked(F)`, where `F()` contains
@@ -202,6 +205,48 @@ public:
  * During the lookup() code-flow, only the per-thread lock is locked.
  *
  * There is no deadlock.
+ *
+ * ### Design / Impl: Potential design improvement ###
+ * This little section is basically a to-do:
+ *
+ * @todo The algorithm used in Thread_local_pool_lookup_rev (owner-side and borrower-side), and similarly
+ * Thread_local_pool_lookup_fwd (borrower-side only), that relies on a frequently locked, but ~never contended,
+ * mutex can be improved further by instead using some one-way atomic signaling.  Please read the commentary
+ * after this to-do in the code.
+ *
+ * The existing algorithm is nice.  Along the frequently-called fast-path, namely in lookup(), a mutex is
+ * [un]locked every single time, but there's almost never another thread contending for it (and even then at most 1).
+ * So the slightly annoying cost that's still there = the ~uncontended lock+unlock ops.  That's quick but may well
+ * be comparable to the map-lookup itself.  We do optimize the map-lookup, and it'd be nice to cut down the [un]lock
+ * latency too.  That said, unlike w/r/t the overall larger problem -- where we had real-world evidence that, say,
+ * doing a straight fully contended central-mutex [un]lock caused massive perf problems -- this smaller deficit is
+ * reasoned from just the code, not any field observations.  Even so the improvement might be simple enough to
+ * "just" apply preemptively.  To wit, for a given thread that would lookup():
+ *
+ * Currently there is first the *push* (lock { update thread's map }), second the *use* in `lookup()`
+ * (lock { use map for lookup }).  In short: This could be turned into a one-way
+ * hand-off/produce-consume type of thing.  The product is the thread's *pending* map copy.
+ * The producer is the push code: make the copy and set (this thread's) *pending* pointer to point to it, using an
+ * atomic release-exchange op.  The (lazy) consumer is `lookup()`: no more lock op; but atomically consume
+ * (acquire-load / possibly acquire-exchange) the *pending* pointer; typically no change; but otherwise free
+ * the *current* map (of which it is the only user) and update *current*.  Then use the map which is the *current*
+ * pointee.
+ *
+ * One technicality about the above we have to zoom into, as we don't want to mislead the implementer:
+ * The `lookup()` operation on the *pending* pointer is tempting to write as simply an atomic exchange with null:
+ * if we pop null out then no change; otherwise what we've got should become *current*.  Slick and simple,
+ * but the existing mutex-lock op is already itself a read-modify-write (granted, there's the unlock too later,
+ * adding more cycles still).  We should do better: separate into 1-2 ops instead.  First do an acquire-load (no
+ * potential write).  If null (fast-path)... done (no update needed); cycles nicely saved!  If not null, *then*
+ * do the acquire-exchange-with-null after all (but it's the infrequent/slow-path).  The thing the exchange op spits
+ * out -- cannot be null but might be different from whatever the earlier acquire-load probe yielded -- is to
+ * become *current*.
+ *
+ * In general, if this per-thread *pending* pointer is only ever modified via atomic-exchange, a clean algorithm is
+ * natural and apparent.  Whichever module (either the push-code or `lookup()`) pops out a non-null ptr value becomes
+ * responsible for, at some point subsequently, freeing the pointee map.  Push-code would free immediately: it
+ * means another central update happened before this thread got to consuming the preceding one's map.  `lookup()`
+ * module would free it once *current* map is itself replaced later.
  *
  * ### Stats -- If #S_LOOKUP_CAN_FAIL is `true` only ###
  * The object at `static` Pool_lookup_global_stats<Shm_arena, true>::stats() -- a global, per-`decltype(*this)`

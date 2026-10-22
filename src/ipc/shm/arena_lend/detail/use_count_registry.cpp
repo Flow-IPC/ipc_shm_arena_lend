@@ -46,26 +46,26 @@ Use_count_registry::Use_count_registry(size_t sz, size_t extra_hdr_sz) :
 #if 0
   m_header.m_bitmap_words.assign(0);
 
-  /* @todo The above `.assign(0)` is defensive, probably removable; and the benefit could be lowered RAM use.
+  /* @todo[done] The above `.assign(0)` is defensive, probably removable; and the benefit could be lowered RAM use.
    * Explanation: bipc is wrangling OS SHM facilities as a fairly thin
    * portability+niceness layer; in POSIX OS at least (probably Windows too but need to confirm if it becomes
    * relevant; as of this writing we're Linux-only officially) it's: ::shm_open() + ::ftruncate() => the vaddr range
-   * is already zero-filled, and the pages are not yet RSS-resident (a/k/a dirty-pages).  Without .assign(0)
-   * it should all still work the same.  Removing it (the potential to-do) would drop initial dirty-RAM by
-   * ~S_BITMAP_SZ bytes; bitmap pages would dirty on-demand as allocate() touches them, ~proportionally to
+   * is already zero-filled, and the pages are not yet resident (they use no RAM).  Without .assign(0) it should
+   * all still work the same.  Removing it (the potential to-do) would drop initial resident RAM by ~S_BITMAP_SZ
+   * bytes; bitmap pages would become resident on-demand as allocate() touches them, ~proportionally to
    * m_header.m_bitmap_words_sz growing.  (So if there are 8 quanta total, we start with 1 quantum: about 0/8
-   * of BITMAP_SZ will be dirty to start; then the algorithm is such that the entire quantum has to be filled
-   * before adding qunatum 2 -- at that point ~1/8 of BITMAP_SZ is dirty.  If both quanta get totally used-up,
-   * meaning there are that many live objects, then 2/8 of BITMAP_SZ is dirty.  Etc.)  Bottom line -- this can
+   * of BITMAP_SZ will be resident to start; then the algorithm is such that the entire quantum has to be filled
+   * before adding quantum 2 -- at that point ~1/8 of BITMAP_SZ is resident.  If both quanta get totally used-up,
+   * meaning there are that many live objects, then 2/8 of BITMAP_SZ is resident.  Etc.)  Bottom line -- this can
    * at best save BITMAP_SZ actual-RAM; as of this writing 128Ki.  The more live objects there are -- up to
    * USE_COUNTS_CAPACITY of them -- the less is saved from the bitmap area.  This appears to be "free" and involves
    * commenting-out/deleting one line; but verify the bipc create-only path's zero-fill guarantee before
    * doing so. */
 #endif
   /* m_header.m_bitmap_words is pre-zero-filled, as is required for our algorithm (all parts of the data area
-   * area are available; hence all bits in bitmap = 0).
+   * are available; hence all bits in bitmap = 0).
    * (We leave the historical explicit .assign(0) and @todo (now to-done) for posterity, as it includes the
-   * justification/reasoning for omitting it.) */
+   * justification/reasoning for omitting it; in short there's a RAM-use improvement due to non-resident pages.) */
 
   /* The following m_header stuff is effectively garbage until .m_meta_obj_sz (currently null) gets set by first
    * allocate(); at that point we set these to real init values:

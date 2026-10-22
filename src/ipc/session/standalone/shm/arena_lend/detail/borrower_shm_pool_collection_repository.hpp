@@ -49,7 +49,7 @@ namespace ipc::session::shm::arena_lend::detail
 // Types.
 
 /**
- * (Internal-use) Singleton repository for borrowed SHM-pool data.  All sessions (jemalloc::Shm_session) in this
+ * Singleton repository for borrowed SHM-pool data.  All sessions (jemalloc::Shm_session) in this
  * process funnel their borrowed pool info here, enabling offset-pointer resolution (to_address(), from_address())
  * and pool-handle lifecycle management (ref-counted open/close).
  *

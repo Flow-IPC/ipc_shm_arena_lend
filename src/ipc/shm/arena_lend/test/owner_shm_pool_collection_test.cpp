@@ -174,8 +174,8 @@ public:
    */
   void deallocate(void* address) noexcept
   {
-    std::free(address);
     m_last_address_deallocated = address;
+    std::free(address);
   }
 
   /**

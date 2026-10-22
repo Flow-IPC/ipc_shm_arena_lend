@@ -43,7 +43,7 @@ namespace ipc::shm::arena_lend::detail
 // Types.
 
 /**
- * (Internal-use) Helper singleton for each of at least the 2 essential central flat SHM-pool repositories
+ * Helper singleton for each of at least the 2 essential central flat SHM-pool repositories
  * (Owner_shm_pool_repository, `Borrower_shm_pool_collection_repository`), `Shm_pool_repo_lookup_core_rev<R>`
  * (where `R` is a repo type) encapsulates `R`'s central flat set of SHM-pool IDs and base-vaddrs
  * and, therein, a performant multi-threaded reverse-lookup from vaddr to the containing SHM-pool's ID and
@@ -164,7 +164,7 @@ private:
 }; // class Shm_pool_repo_lookup_core_rev
 
 /**
- * (Internal-use) Singleton repository for SHM-pool data pertaining to all SHM-arenas owned by this process.
+ * Singleton repository for SHM-pool data pertaining to all SHM-arenas owned by this process.
  * All arenas (each being an Owner_shm_pool_collection; for SHM-jemalloc: sub-class jemalloc::Ipc_arena)
  * in this process funnel their pool info here, enabling offset-pointer resolution
  * (to_address(), from_address()).
