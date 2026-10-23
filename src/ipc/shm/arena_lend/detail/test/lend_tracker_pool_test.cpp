@@ -90,11 +90,11 @@ TEST(Lend_tracker_pool_test, Interface)
 
   Lend_tracker_pool tracker_admin{&log_ctx, &skip_trace, S_TEST_POOL_NAME, util::CREATE_ONLY, nullptr};
   Lend_tracker_pool tracker_cli1{&log_ctx, &skip_trace, S_TEST_POOL_NAME, util::OPEN_ONLY};
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   auto idx1 = tracker_admin.use_count_new();
   auto idx2 = tracker_admin.use_count_new();
   auto idx3 = tracker_admin.use_count_new();
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   EXPECT_GE(idx1, sizeof(uint64_t)); // Internally, metadata header thing will use up 1 word (64-bits) at least.
   EXPECT_EQ(idx2, idx1 + 1);
   EXPECT_EQ(idx3, idx2 + 1);
@@ -104,15 +104,15 @@ TEST(Lend_tracker_pool_test, Interface)
   EXPECT_EQ(tracker_cli2.use_count_inc(idx1), 3u);
   EXPECT_EQ(tracker_cli1.use_count_dec(idx1), 2u);
   EXPECT_EQ(tracker_cli2.use_count_dec(idx1), 1u);
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   EXPECT_EQ(tracker_cli1.use_count_dec(idx3), 0u);
-  EXPECT_EQ(tracker_admin.n_unused(), 1u);
+  EXPECT_EQ(tracker_admin.n_unused(), 1);
   EXPECT_EQ(tracker_cli2.use_count_dec(idx1), 0u);
-  EXPECT_EQ(tracker_admin.n_unused(), 2u);
+  EXPECT_EQ(tracker_admin.n_unused(), 2);
 
   vector<use_ct_idx_t> unused_idxs;
   tracker_admin.emit_unused_ct_idx_hints(&unused_idxs);
-  EXPECT_EQ(unused_idxs.size(), tracker_admin.n_unused());
+  EXPECT_EQ(int(unused_idxs.size()), tracker_admin.n_unused());
   const auto cap = unused_idxs.capacity();
   EXPECT_GT(cap, unused_idxs.size());
   EXPECT_EQ(unused_idxs[0], idx3);
@@ -120,19 +120,19 @@ TEST(Lend_tracker_pool_test, Interface)
   tracker_admin.emit_unused_ct_idx_hints(&unused_idxs);
   EXPECT_EQ(unused_idxs.capacity(), cap);
   EXPECT_TRUE(unused_idxs.empty());
-  EXPECT_EQ(tracker_admin.n_unused(), 2u);
+  EXPECT_EQ(tracker_admin.n_unused(), 2);
 
   auto saved = idx3;
   EXPECT_TRUE(tracker_admin.use_count_return_if_unused(&idx3));
   EXPECT_EQ(idx3, 0u);
   idx3 = saved;
-  EXPECT_EQ(tracker_admin.n_unused(), 1u);
+  EXPECT_EQ(tracker_admin.n_unused(), 1);
 
   saved = idx1;
   EXPECT_TRUE(tracker_admin.use_count_return_if_unused(&idx1));
   EXPECT_EQ(idx1, 0u);
   idx1 = saved;
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
 
   constexpr size_t ROUGH_N = 1024 * 1024;
   vector<use_ct_idx_t> idxs;
@@ -170,13 +170,13 @@ TEST(Lend_tracker_pool_test, Interface)
 
   auto& mid_idx = idxs[idxs.size() / 2];
   EXPECT_EQ(tracker_cli1.use_count_dec(mid_idx), 0u);
-  EXPECT_EQ(tracker_admin.n_unused(), 1u);
+  EXPECT_EQ(tracker_admin.n_unused(), 1);
   auto& low_idx = *(idxs.begin() + 20);
   saved = mid_idx;
   EXPECT_TRUE(tracker_admin.use_count_return_if_unused(&mid_idx));
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   mid_idx = tracker_admin.use_count_new(); // Search will start from middle next...
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   EXPECT_EQ(mid_idx, saved);
   // ...will search to end, wrap around, search to middle, fail.
 
@@ -198,15 +198,15 @@ TEST(Lend_tracker_pool_test, Interface)
   FLOW_LOG_INFO("Search wrapped around, failed, reset back to middle again: [" << tracker_admin << "].");
 
   saved = low_idx;
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   EXPECT_EQ(tracker_cli2.use_count_dec(low_idx), 0u);
-  EXPECT_EQ(tracker_admin.n_unused(), 1u);
+  EXPECT_EQ(tracker_admin.n_unused(), 1);
   EXPECT_TRUE(tracker_admin.use_count_return_if_unused(&low_idx));
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   // ...but this time after the wrap-around pretty soon it'll find it near left end.
 
   low_idx = tracker_admin.use_count_new(); // Search will start from middle next...
-  EXPECT_EQ(tracker_admin.n_unused(), 0u);
+  EXPECT_EQ(tracker_admin.n_unused(), 0);
   EXPECT_EQ(low_idx, saved);
 
   FLOW_LOG_INFO("Search wrapped around, succeeded around the left side: [" << tracker_admin << "].");
@@ -246,12 +246,12 @@ TEST(Lend_tracker_pool_test, Dec_admin)
   EXPECT_EQ(idx1, use_ct_idx_t(0));
   /* Key distinction from client-mode dec: n_unused() stays 0 because
    * the slot was returned inline (no hint/scan path needed). */
-  EXPECT_EQ(admin.n_unused(), 0u);
+  EXPECT_EQ(admin.n_unused(), 0);
 
   // Same for idx2 (count was 1, never inc'd).
   EXPECT_EQ(admin.use_count_dec_admin(&idx2), 0u);
   EXPECT_EQ(idx2, use_ct_idx_t(0));
-  EXPECT_EQ(admin.n_unused(), 0u);
+  EXPECT_EQ(admin.n_unused(), 0);
 
   // Verify the returned slots can be re-allocated.
   auto idx3 = admin.use_count_new();
@@ -355,7 +355,7 @@ TEST(Lend_tracker_pool_test, Hint_saturation)
   {
     EXPECT_EQ(client.use_count_dec(idx), 0u);
   }
-  EXPECT_EQ(admin.n_unused(), N);
+  EXPECT_EQ(admin.n_unused(), int(N));
 
   // --- Phase 1: consume hints; should get exactly N_HINTS. ---
   vector<use_ct_idx_t> hints;
@@ -378,7 +378,7 @@ TEST(Lend_tracker_pool_test, Hint_saturation)
     }
   }
   EXPECT_EQ(total_returned, unsigned(N_HINTS));
-  EXPECT_EQ(admin.n_unused(), unsigned(N - N_HINTS));
+  EXPECT_EQ(admin.n_unused(), int(N - N_HINTS));
 
   // --- Phase 2: no more hints (the remaining N_HINTS never made it into the array). ---
   admin.emit_unused_ct_idx_hints(&hints);
@@ -394,7 +394,7 @@ TEST(Lend_tracker_pool_test, Hint_saturation)
     }
   }
   EXPECT_EQ(total_returned, unsigned(N));
-  EXPECT_EQ(admin.n_unused(), 0u);
+  EXPECT_EQ(admin.n_unused(), 0);
 } // TEST(Lend_tracker_pool_test, Hint_saturation)
 
 /* Tests concurrent use-count operations from multiple threads.
@@ -478,7 +478,7 @@ TEST(Lend_tracker_pool_test, Multithread)
     {
       EXPECT_EQ(admin.use_count(idx), 1u);
     }
-    EXPECT_EQ(admin.n_unused(), 0u); // No client reached 0 -- admin still holds a ref.
+    EXPECT_EQ(admin.n_unused(), 0); // No client reached 0 -- admin still holds a ref.
 
     // Admin cleans up: dec_admin brings each from 1 to 0, returning inline.
     for (auto& idx : idxs)
@@ -486,7 +486,7 @@ TEST(Lend_tracker_pool_test, Multithread)
       EXPECT_EQ(admin.use_count_dec_admin(&idx), 0u);
       EXPECT_EQ(idx, use_ct_idx_t(0));
     }
-    EXPECT_EQ(admin.n_unused(), 0u);
+    EXPECT_EQ(admin.n_unused(), 0);
   } // Scenario A.
 
   // ---- Scenario B: race to zero. ----
@@ -521,7 +521,7 @@ TEST(Lend_tracker_pool_test, Multithread)
     t2.stop();
 
     // Each slot was decremented exactly twice (from 2): all are at 0.
-    EXPECT_EQ(admin.n_unused(), N_SLOTS);
+    EXPECT_EQ(admin.n_unused(), int(N_SLOTS));
 
     /* Return all slots.  Some may be hinted (up to S_N_UNUSED_IDX_HINTS); rest need a scan.
      * The exact hint count is non-deterministic (depends on which thread
@@ -549,7 +549,7 @@ TEST(Lend_tracker_pool_test, Multithread)
         EXPECT_TRUE(admin.use_count_return_if_unused(&idx));
       }
     }
-    EXPECT_EQ(admin.n_unused(), 0u);
+    EXPECT_EQ(admin.n_unused(), 0);
   } // Scenario B.
 } // TEST(Lend_tracker_pool_test, Multithread)
 

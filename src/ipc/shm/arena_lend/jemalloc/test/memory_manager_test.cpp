@@ -29,7 +29,6 @@
 #include "ipc/shm/arena_lend/jemalloc/test/test_jemalloc_pages.hpp"
 #include "ipc/test/test_logger.hpp"
 #include <flow/test/test_common_util.hpp>
-#include <flow/error/error.hpp>
 #include <flow/log/log.hpp>
 #include <flow/util/util.hpp>
 #include <flow/util/util_fwd.hpp>
@@ -457,7 +456,6 @@ TEST(Memory_manager_DeathTest, Interface)
  */
 TEST(Jemalloc_memory_manager_test, Interface)
 {
-  using flow::error::Runtime_error;
   using std::atomic;
 
   // Arena creation and destruction
@@ -551,21 +549,14 @@ TEST(Jemalloc_memory_manager_test, Interface)
         really_destroy_arena_func(); *destroyed = true;
       });
       EXPECT_TRUE(*destroyed) << "Arena [" << iter << "] should have been synchronously destroyed.";
-
-      *destroyed = false; // Go again but "destroy" fake arena that does not exist anymore (that part should throw).
-      memory_manager.destroy_arena(iter, &log_ctx,
-                                   [destroyed](auto, auto&& really_destroy_arena_func)
-                                     { EXPECT_THROW(really_destroy_arena_func(), Runtime_error); *destroyed = true; });
-      EXPECT_TRUE(*destroyed) << "Now-fake-arena [" << iter << "] should have been synchronously fake-destroyed.";
     }
 
-    // Similar to last thing above but use fake index.
-    *destroyed = false; // Go again but destroy fake arena that does not exist anymore.
+    /* Destroying an arena that does not exist (anymore; or ever) is a jemalloc failure => FATAL + abort (see
+     * Thread_cache::destroy_arena_safely()).  (Death-test regex is empty: in NDEBUG builds the abort carries no
+     * assert() message.) */
     Log_context_mt log_ctx;
-    memory_manager.destroy_arena(INT_MAX, &log_ctx,
-                                 [destroyed](auto, auto&& really_destroy_arena_func)
-                                   { EXPECT_THROW(really_destroy_arena_func(), Runtime_error);  *destroyed = true; });
-    EXPECT_TRUE(*destroyed) << "Mega-fake-arena [" << INT_MAX << "] should have been synchronously fake-destroyed.";
+    EXPECT_DEATH(memory_manager.destroy_arena(*(arena_ids.begin()), &log_ctx), "");
+    EXPECT_DEATH(memory_manager.destroy_arena(INT_MAX, &log_ctx), "");
   }
 
   // Extent hooks test

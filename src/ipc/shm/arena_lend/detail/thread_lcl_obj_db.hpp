@@ -1209,8 +1209,11 @@ private:
    * from #m_per_arena_stats_shards (which was the goal of forgetting_shm_arena()).
    *
    * The fast-path (flag not armed) is intentionally ultra-minimal: a single atomic-flag check.
+   *
+   * @param assume_requested
+   *        Very similar to same for Thread_lcl_obj_db_admin::if_requested_forget_arena_related_resources().
    */
-  void if_requested_forget_arena_related_resources();
+  void if_requested_forget_arena_related_resources(bool assume_requested = false);
 
   /**
    * Mutable version of obj_db_aux_pool_global_stats(), for internal stat-updating.
@@ -1496,6 +1499,27 @@ Thread_lcl_obj_db_admin<Shm_arena_t>::~Thread_lcl_obj_db_admin()
 
     /* It should be clear from logs that thread was allowed to exit.  Let's not log more.
      * Also: stat::thread_end_gap_mutex() unlocks here. */
+    return;
+  }
+  // else
+
+  if (!m_locked_gap_mutex)
+  {
+    /* Live objects remain; normally we'd spawn a degraded-admin thread below.  But The Gap mutex was not locked:
+     * per m_locked_gap_mutex doc header that means we're the OS/main thread's `*this`, deleted by
+     * the Static_state::m_obj_db_registry dtor during program-exit `static` deinit.  It is too late for that
+     * thread: s_state.m_degraded_admin_threads (and its mutex) are declared after m_obj_db_registry, so they
+     * are already destroyed; std::atexit() would be invoked during exit; and the new thread would register
+     * itself in a registry that is mid-destruction.  So we are out of moves.  That said: this should not happen,
+     * if the user destroys all arenas before main() returns -- as the overall design pretty much guarantees
+     * (see "One more thing" note inside stat::Finalized_shards::get_instance()).  Nevertheless be defensive:
+     * leak those objects (the process is exiting anyway).  We also skip the stats-saving: Finalized_shards
+     * would survive it, but there's no one left to consume those stats presumably. */
+    FLOW_LOG_WARNING_LOCKED("Tl_obj_db_admin: OS/main thread's obj-DB is being destroyed at program exit (static "
+                            "destruction); yet live objects remain in at least one arena.  Too late to start a "
+                            "degraded-admin thread to reap them later; so leaking them.  Were all arenas destroyed "
+                            "before main() returned?  This is interesting; recommend looking into what exactly "
+                            "happened to lead to this occurrence.");
     return;
   }
   /* else:
@@ -1908,20 +1932,23 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
 
     auto& objs = collection_db->m_objs;
 
-    signed int n_unused; // Intentionally signed, as it can even become negative (see below near end of hint loop).
+    /* n_unused() is signed (for subtle reasons that should be understood: see its doc header), so this must be too,
+     * as initially this holds n_unused()'s ret-value.  It can also go from positive to negative, as it gets
+     * decremented with each obj-reaping; see near end of hint loop below for this "to negative" corner case. */
+    signed int n_unused;
     if (exhaustive)
     {
       n_unused = std::numeric_limits<decltype(n_unused)>::max();
     }
     else
     {
-      n_unused = static_cast<decltype(n_unused)>(lend_tracker_pool.n_unused());
-      if (n_unused == 0)
+      n_unused = lend_tracker_pool.n_unused();
+      if (n_unused <= 0) // (Can be negative; as noted just above this is explained in n_unused() doc header.)
       {
         /* An optimization.  Technically emit_unused_ct_idx_hints() can yield stuff nevertheless, and is a pretty
-         * quick constant-time search through the hints array; but if right this moment the count is 0 then don't
-         * waste a single cycle (that there is non-zero chance hints array will have something if we look is true
-         * but unlikely/not worth it). */
+         * quick constant-time search through the hints array; but if right at this moment the count is <=0,
+         * then don't waste a single cycle (that there is non-zero chance hints array will have something if we look
+         * is true but unlikely/not worth it). */
         continue;
       }
       // else: There *must* be some unused live objs.
@@ -2116,8 +2143,8 @@ void Thread_lcl_obj_db_admin<Shm_arena_t>::unused_obj_scan(bool exhaustive, bool
         case FIFO_SUFFICIENT: tgt_ctr = &zombie_obj_reaper_stats.m_fifo_scans; break;
         case EXHAUSTED: tgt_ctr = &zombie_obj_reaper_stats.m_fifo_exhausted_scans;
         /* EXHAUSTED is the normal outcome of an `exhaustive` scan: its sentinel n_unused cannot reach 0.
-         * For an estimate-driven scan it should not be possible; hence this stat exceeding m_exhaustive_scans
-         * is a canary.  See doc header for m_fifo_exhausted_scans. */
+         * For an estimate-driven scan it is occasional and harmless (the estimate is a loosely-synchronized
+         * snapshot; a later scan gets what this one missed).  See doc header for m_fifo_exhausted_scans. */
         }
         fetch_add(tgt_ctr, 1);
       }
@@ -2641,9 +2668,18 @@ stat::Sharded_stats*
 
     auto& stats_shard = collection_db.m_stats_shard;
     const auto& lend_tracker_pool_opt = collection_db.m_lend_tracker_pool; // <-- Lock needed.
-    store(&stats_shard.m_live_obj.m_live_object_zombies,
-          lend_tracker_pool_opt ? lend_tracker_pool_opt->n_unused() // .n_unused() is a relaxed-atomic load.
-                                : 0); // inactive_arenas_scan() nullified it: no live objects and none can appear.
+    if (lend_tracker_pool_opt)
+    {
+      /* .n_unused() is a relaxed-atomic load.
+       * Orthogonally: it can be (slightly) negative (see its doc header); hence clamp to 0. */
+      const signed int n_unused = lend_tracker_pool_opt->n_unused();
+      store(&stats_shard.m_live_obj.m_live_object_zombies, (n_unused < 0) ? 0 : n_unused);
+    }
+    else
+    {
+      // No pool => inactive_arenas_scan() nullified it: no live objects, and none can appear.
+      store(&stats_shard.m_live_obj.m_live_object_zombies, 0);
+    }
 
     return &stats_shard;
   } // Lock_guard{m_collection_dbs_mutex}
@@ -2755,6 +2791,14 @@ Thread_lcl_obj_db_client<Shm_arena_t>::~Thread_lcl_obj_db_client()
                          "stat-touching.");
   }
 
+  /* Similarly to ~_admin() execute any pending arena-forgettings.  new_pool_data() does it regularly, but by
+   * its nature it might simply not be called even once after a forgetting_shm_arena(), before thread-exit ends
+   * it all.  So we hoover it up.
+   *
+   * Don't bother checking the flag -- just assume it is armed (thread exit is infrequent; the scan is cheap
+   * when nothing is pending) -- and delete the state to do with arena(s) whose destruction is in-progress. */
+  if_requested_forget_arena_related_resources(true);
+
   /* *this exists specifically to execute this thread's SHM-pool use_ct++ and use_ct--, because the objects
    * involved were constructed in some other thread.  So by definition our thread exiting means nothing we do
    * matters from this point on... except the stats-dumping.  So just clean up all the resources; that's it...
@@ -2789,14 +2833,15 @@ Thread_lcl_obj_db_client<Shm_arena_t>::~Thread_lcl_obj_db_client()
      * The answer is no-ish.  There's no *this needing access to the arena itself, nor is there any
      * replacement _client possibility; _client::forgetting_shm_arena(A) is only about erasing each
      * m_per_arena_stats_shards[A], for cleanliness + avoiding small RAM-leak.  So before this ongoing teardown,
-     * [A] would be erased fine; after it, Finalized_shards::stats_erase(A) will clean it out of Finalized_shards
-     * (where we would have put it just below).  During it -- The Gap -- though, it would leak into Finalized_shards
-     * where it would stay forever.  It's certainly a bit ugly and slightly leaky but not really a big deal
-     * practically speaking... as of this writing.  That said formally we disallow it.  1, ugly+leak = let's not.
-     * 2, in _admin() it is a *real* problem, and for that one we disallow it... but _admin and _client teardowns
-     * are part of the same thing, really: in practice _admin::f_s_a() and _client::f_s_a() are called one after
-     * the other in Shm_arena (e.g., jemalloc::Ipc_arena) shutdown.  So let's just avoid all this entropy.  No
-     * forgetting_shm_arena() during _client teardown (now). */
+     * [A] would be erased fine (at the latest by the if_requested_forget_arena_related_resources() above); after
+     * it, Finalized_shards::stats_erase(A) will clean it out of Finalized_shards (where we would have put it just
+     * below).  During it -- The Gap -- though, it would leak into Finalized_shards where it would stay forever.
+     * It's certainly a bit ugly and slightly leaky but not really a big deal practically speaking... as of this
+     * writing.  That said formally we disallow it.  1, ugly+leak = let's not.  2, in _admin() it is a *real*
+     * problem, and for that one we disallow it... but _admin and _client teardowns are part of the same thing,
+     * really: in practice _admin::f_s_a() and _client::f_s_a() are called one after the other in Shm_arena (e.g.,
+     * jemalloc::Ipc_arena) shutdown.  So let's just avoid all this entropy.  No forgetting_shm_arena() during
+     * _client teardown (now). */
 
     // (No need to lock.  As noted, stat-consumption TL-state walk won't see us by now.)
     for (const auto& [collection_id, stats_shard] : m_per_arena_stats_shards)
@@ -3294,20 +3339,21 @@ void Thread_lcl_obj_db_client<Shm_arena_t>::forgetting_shm_arena(collection_id_t
 } // Thread_lcl_obj_db_client::forgetting_shm_arena()
 
 template<typename Shm_arena_t>
-void Thread_lcl_obj_db_client<Shm_arena_t>::if_requested_forget_arena_related_resources()
+void Thread_lcl_obj_db_client<Shm_arena_t>::if_requested_forget_arena_related_resources(bool assume_requested)
 {
   using flow::util::Lock_guard;
   using std::vector;
 
   /* Avoid logging work, or any unneeded work of any kind, in our fast-path... though as of this writing
-   * we are only invoked from new_pool_data() which by definition is not the fast-path of lending_obj() or
-   * disposing_obj() (owner-side).  So we're already not called that often. */
+   * we are only invoked from new_pool_data() (which by definition is not the fast-path of lending_obj() or
+   * disposing_obj() (owner-side)) and from our dtor.  So we're already not called that often. */
 
-  if (!m_forget_resources_requested_poll_flag.poll_armed())
+  if ((!assume_requested) && (!m_forget_resources_requested_poll_flag.poll_armed()))
   {
     return;
   }
-  // else if (it was requested): We will do it, and it is now re-marked as not-requested.
+  /* else if (it was requested) || assume_requested: We will do it.
+   * Unless assume_requested: It is now re-marked as not-requested. */
 
   // Non-fast-path is in effect (can log, etc.).
 

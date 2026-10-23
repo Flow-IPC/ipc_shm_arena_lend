@@ -39,7 +39,7 @@
  *     jemalloc's own arenas.lookup, to be the arena it was requested from.  [TEST Per_arena_tcaches]
  *   - destroy_arena_safely(), synchronous cases: with the only relevant tcache belonging to the calling
  *     thread, everything happens immediately; on_done_func receives the caller's own log_ctx and an F()
- *     whose invocation destroys the arena; and for a nonexistent arena F() throws as documented.
+ *     whose invocation destroys the arena; and for a nonexistent arena F() aborts as documented.
  *     [TEST Destroy_arena_synchronous]
  *   - destroy_arena_safely(), deferred case: with holdout threads owning relevant tcaches, nothing happens
  *     until each crosses itself off -- one via the opportunistic this_thread_cache*() path, the last via
@@ -298,7 +298,7 @@ TEST_F(Thread_cache_test, Per_arena_tcaches)
  * returns; on_done_func receives the caller's own log_ctx (the async case instead substitutes an internal
  * one -- the caller's may be dead by then; the other TEST covers that) plus the F() whose invocation is what
  * actually destroys the arena.  (b) The documented failure mode: for an arena jemalloc knows nothing about,
- * F() throws Runtime_error. */
+ * F() aborts the program. */
 TEST_F(Thread_cache_test, Destroy_arena_synchronous)
 {
   const flow::log::Log_context_mt log_ctx{get_logger(), Log_component::S_TEST};
@@ -322,14 +322,12 @@ TEST_F(Thread_cache_test, Destroy_arena_synchronous)
   });
   EXPECT_TRUE(done); // I.e., all of the above indeed happened synchronously.
 
-  bool bogus_done = false;
-  Thread_cache::destroy_arena_safely(arena_id_t(9999), &log_ctx,
-                                     [&](const flow::log::Log_context_mt*, auto&& dtor_func)
+  // (Death-test regex is empty: in NDEBUG builds the abort carries no assert() message.)
+  EXPECT_DEATH(Thread_cache::destroy_arena_safely(arena_id_t(9999), &log_ctx,
+                                                  [](const flow::log::Log_context_mt*, auto&& dtor_func)
   {
-    EXPECT_THROW(dtor_func(), flow::error::Runtime_error);
-    bogus_done = true;
-  });
-  EXPECT_TRUE(bogus_done);
+    dtor_func();
+  }), "");
 } // TEST_F(Thread_cache_test, Destroy_arena_synchronous)
 
 /* destroy_arena_safely(), the deferred case, exercising both documented finalization triggers.  Two workers

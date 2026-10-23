@@ -227,7 +227,7 @@ namespace ipc::shm::arena_lend::jemalloc
  *   - Trying to use X for further allocations/deallocations (especially deallocations, it appears empirically)
  *     after A is destroyed -- even with some other arena B -- will probably crash inside jemalloc.
  *
- * This is a surprisingly stringent requirement.  It is also, normally, potentially difficult to accomodate
+ * This is a surprisingly stringent requirement.  It is also, normally, potentially difficult to accommodate
  * because:
  *   - The call to destroy an arena A (`mallctl()`, etc.) will of course have to happen in some specific thread Y...
  *   - ...but there may be tcaches associated with A in threads other than Y -- possibly many threads -- depending
@@ -261,7 +261,7 @@ public:
    *    - are willing to deal with subtleties arising from how a tcache works when used with 2+ arenas, or
    *    - you only use one arena, period.
    *
-   * @see Thread_cache doc header "Background: arena versus tcache relationship."
+   * @see Thread_cache doc header "Background: arena versus tcache relationship in jemalloc."
    */
   static constexpr arena_id_t S_NO_ARENA_ID = 0;
 
@@ -285,7 +285,7 @@ public:
    *
    * `logger_ptr` is taken from Static_state::m_caches.
    *
-   * @todo The doc-header warning for the the Thread_cache::Thread_cache() ctor could be removed, if
+   * @todo The doc-header warning for the Thread_cache::Thread_cache() ctor could be removed, if
    *       (ideally) `flow::util::Thread_local_state_registry` could compile-time-check for existence of
    *       a public such ctor and avoid compiling (optional) code that would use it -- and in
    *       static-init of Static_state::m_caches we supplied a `new Thread_cache` optional-arg in that `private`
@@ -334,7 +334,7 @@ public:
    *
    * @param arena_id
    *        See above.  Either a value as from `mallctl("arena.create")` or #S_NO_ARENA_ID.
-   * @return ID of tcache ID usable in this thread (and this thread only).
+   * @return ID of tcache usable in this thread (and this thread only).
    */
   tcache_id_t id(arena_id_t arena_id);
 
@@ -347,7 +347,7 @@ public:
    *
    * @param arena_id
    *        See above.  Either a value as from `mallctl("arena.create")` or #S_NO_ARENA_ID.
-   * @return ID of tcache ID usable in this thread (and this thread only); or #S_NO_TCACHE_ID.
+   * @return ID of tcache usable in this thread (and this thread only); or #S_NO_TCACHE_ID.
    */
   tcache_id_t id_or_none(arena_id_t arena_id) const;
 
@@ -364,7 +364,7 @@ public:
    * was originally created via this_thread_cache() call.
    *
    * @return See above.  Recall that this can be the empty string, if the thread nickname was never set
-   *         (which occurs automatically for flow.async-create threads; or if one explicitly calls
+   *         (which occurs automatically for flow.async-created threads; or if one explicitly calls
    *         `flow::log::Logger::this_thread_set_logged_nickname()`).  Can be cross-referenced with
    *         thread nicknames logged by flow.log.
    */
@@ -381,9 +381,7 @@ public:
    * failed jemalloc calls, such as due to getting a bad ID, essentially because in practice it was not
    * important to contend with such scenarios; but it'd be nice to be more resilient about it nevertheless.
    * As of this writing jemalloc errors within Thread_cache cause a logged message, assertion-trip if enabled,
-   * and finally a hard `std::abort()` if the assertion-trip attempt did not do it.  Update: We explicitly
-   * make an exception (no pun intended) to this in the case of arena-destruction failing; that throws.  See
-   * destroy_arena_safely() for details.
+   * and finally a hard `std::abort()` if the assertion-trip attempt did not do it.
    */
   void flush_tcache(tcache_id_t id);
 
@@ -434,34 +432,35 @@ public:
    *     By then the `log_ctx` given to this method may be invalid; so we give it our valid one.
    *
    * More importantly: `F()` shall destroy the arena in question, so you should synchronously invoke it.  Do note that
-   *   - `on_done_func()` can be called in any thread within which this_thread_cache() has been called;
+   *   - `on_done_func()` can be called synchronously in the calling thread, or in any thread within which
+   *     this_thread_cache() has been called;
    *   - but only once total;
    *   - possibly even while the program is exiting;
    *   - never in parallel with *another* `on_done_func()` from *another* destroy_arena_safely() call.
    *     - We shall arrange synchronization on your behalf among the `on_done_func()` calls.
    *
-   * ### Exception possibility ###
-   * If the actual arena destruction, which occurs only within `F()` passed to `on_done_func()` and therefore
-   * only in `on_done_func()` via your explicit call of `F()`, fails -- if jemalloc reports such failure, that is --
-   * then `F()` shall throw `flow::error::Runtime_error` with appropriate details.  In practice we only know of this
-   * occurring if `arena_id` is invalid.
+   * ### Failure ###
+   * If, whether synchronously or otherwise, the arena destruction fails -- in practice, we only know of this
+   * happening on bogus `arena_id` -- we will log and `std::abort()`.
+   *
+   * `on_done_func()` must not throw.
    *
    * ### Mechanism ###
    * If the destruction must be deferred due to other threads' tcaches, it shall occur at the earliest possible
-   * future this_thread_cache() or this_thread_cache_or_null() call.  Each such call shall (opportunistically)
-   * flush/destroy as many relevant tcaches as are accessible in that thread; and the last such needed
-   * procedure will then finalize by destroying the arena `arena_id`.
+   * future this_thread_cache() or this_thread_cache_or_null() call (or thread exit).  Each such call shall
+   * (opportunistically) flush/destroy as many relevant tcaches as are accessible in that thread; and the last such
+   * needed procedure will then finalize by destroying the arena `arena_id`.
    *
    * Since the arena and all relevant tcaches apply only to `arena_id`, none of it should affect the rest of
    * your work.  In terms of perf, any slowdown shall be only due to the destroying/flushing itself -- which
-   * presumably will be quite rare -- while the fast-path (wherein in no such work is required) is a single
+   * presumably will be quite rare -- while the fast-path (wherein no such work is required) is a single
    * atomic-check per `this_thread_cache*()`.
    *
    * ### Suggestion for `on_done_func()` ###
    * Destroying the jemalloc arena is not a drop-everything-suddenly type of operation.  It will potentially write
    * to currently mapped vaddr-segments a/k/a extents a/k/a pools; it will certainly try to operate on extents
    * such as to close/unmap them; and in particular this will invoke various extent hooks, if you've registered such
-   * on the arena `arena_id`.  Bottom line: until the arena is actually destroyed, jemalloc may offically
+   * on the arena `arena_id`.  Bottom line: until the arena is actually destroyed, jemalloc may officially
    * require that certain resources that *you* potentially registered with it using the extent-hook system --
    * SHM-pools, extent hooks themselves -- still be live.  Therefore it would then make sense to capture
    * such items in `on_done_func` functor object (perhaps lambda) and only let them expire once the functor
@@ -544,12 +543,12 @@ private:
     flow::util::Mutex_non_recursive m_arenas_death_row_map_on_done_func_mutex;
 
     /**
-     * State shared -- and acted upon using the new `Polled_shared_state` pattern -- between extant Thread_cache
+     * State shared -- and acted upon using the `Polled_shared_state` pattern -- between extant Thread_cache
      * per-thread objects, consisting of which of them must destroy relevant tcaches in order to finish
      * 1+ destroy_arena_safely() ops.
      *
      * Each key is an arena being destroyed; that key's value is the progress state of what is yet to be done
-     * before completing the destruction of that arena fully.  The star is
+     * before completing the destruction of that arena fully.  The key item is
      * Arena_death_progress::m_caches_left_to_destroy: set of Thread_cache objects that
      * must, at the next opportunity (this_thread_cache(), this_thread_cache_or_null(), dtor calls in the respective
      * threads) destroy the tcache (if any) corresponding to that arena ID; and if doing so
@@ -572,7 +571,8 @@ private:
 
   /**
    * Perform deferred cross-thread tcache and arena-destruction as triggered by destroy_arena_safely() call(s)
-   * made earlier.  This is piggy-backed onto this_thread_cache() and this_thread_cache_or_null().
+   * made earlier.  This is piggy-backed onto this_thread_cache() and this_thread_cache_or_null(); and invoked
+   * from the dtor.
    *
    * @note The fast-path -- wherein no deferred tcache/arena destruction processing is in fact required -- is
    *       intentionally ultra-minimal computationally.  See #m_destroy_tcaches_requested_poll_flag and such.

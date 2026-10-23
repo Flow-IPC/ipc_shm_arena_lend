@@ -33,6 +33,7 @@
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/shm/arena_lend/test/test_shm_pool_collection.hpp"
 #include <flow/async/single_thread_task_loop.hpp>
+#include <atomic>
 
 using ipc::test::Test_logger;
 using std::make_shared;
@@ -298,6 +299,98 @@ TEST(Borrower_shm_pool_collection_repository_test, Mutation_visibility)
   EXPECT_TRUE(owner_collection->remove_shm_pool(owner_pool_b));
   EXPECT_TRUE(ensure_empty_collection_at_destruction(owner_collection));
 } // TEST(Borrower_shm_pool_collection_repository_test, Mutation_visibility)
+
+/* Concurrent deregister_shm_pool() of pool A versus register_shm_pool() of pool B (as from 2 `Shm_session`s in
+ * 2 threads), round after round; after each round pool B must round-trip, and pool A must be gone.
+ *
+ * Generally/somewhat black-boxily, there are as of this writing 2 mutexes involved both when registering
+ * and deregistering, so it's worth exercising concurrency.
+ *
+ * A white-boxier specific danger is the OS reusing A's just-freed vaddr for B: deregister_shm_pool() must not
+ * unmap A until A is out of the reverse-lookup structure, else B's reverse-lookup entry can get wiped out.  (Start
+ * with `Impl: forward/reverse lookup and the 2 mutexes` in Borrower_shm_pool_collection_repository class doc header;
+ * it should point to further detail.)
+ *
+ * This is a general stress test concerning the above.  It'll exercise the concurrency in general and *might*
+ * be able to exercise the "white-boxier specific danger".  Truthfully, though, supposing the ordering that
+ * would lead to the hypothetical problem were actually broken, it'd be hard to get the ABBA order to occur with
+ * proper timing.  (We do log when the pool-vaddr gets reused; doesn't mean we got the ABBA order to happen though.)
+ *
+ * @todo Make it deterministic: a test-only hook in deregister_shm_pool(), between its 2 lock-sections, would let
+ * the test block thread A there while thread B registers pool B to completion; then release thread A.  Breaking
+ * the unmap-after-reverse-lookup-erase ordering would then fail every time (B being mapped at A's old vaddr). */
+TEST(Borrower_shm_pool_collection_repository_test, Concurrent_pool_dereg_reg)
+{
+  using flow::async::Single_thread_task_loop;
+  using std::atomic;
+
+  const owner_id_t OWNER_ID = FAKE_OWNER_ID_BASE + 50; // See FAKE_OWNER_ID_BASE.
+  constexpr collection_id_t COLL_ID = 1;
+  constexpr unsigned int N_ROUNDS = 1000;
+
+  auto& repository = Repository::get_instance();
+  Test_logger logger;
+  FLOW_LOG_SET_CONTEXT(&logger, Log_component::S_TEST);
+  const auto SHM_POOL_SIZE = ipc::shm::arena_lend::jemalloc::Jemalloc_pages::get_page_size();
+  const auto pool_name_base = create_test_pool_name_base();
+
+  auto owner_collection = make_shared<Test_shm_pool_collection>(&logger, COLL_ID, Shared_name(pool_name_base));
+  repository.register_collection(OWNER_ID, COLL_ID, Shared_name(pool_name_base));
+  auto owner_pool_a = owner_collection->create_shm_pool(SHM_POOL_SIZE);
+  repository.register_shm_pool(OWNER_ID, COLL_ID, owner_pool_a->get_id(), SHM_POOL_SIZE);
+
+  Single_thread_task_loop thread_a{&logger, "brwRepoA"};
+  Single_thread_task_loop thread_b{&logger, "brwRepoB"};
+  thread_a.start();
+  thread_b.start();
+
+  unsigned int n_reused = 0;
+  for (unsigned int round = 0; (round != N_ROUNDS) && (!HasFailure()); ++round)
+  {
+    const auto pool_id_a = owner_pool_a->get_id();
+    const auto base_a = Repository::to_address(pool_id_a, 0);
+    auto owner_pool_b = owner_collection->create_shm_pool(SHM_POOL_SIZE);
+    const auto pool_id_b = owner_pool_b->get_id();
+
+    // Both threads spin until `go`, to maximize the overlap.
+    atomic<bool> go{false};
+    thread_a.post([&]()
+    {
+      while (!go) {}
+      repository.deregister_shm_pool(OWNER_ID, COLL_ID, pool_id_a);
+    });
+    thread_b.post([&]()
+    {
+      while (!go) {}
+      repository.register_shm_pool(OWNER_ID, COLL_ID, pool_id_b, SHM_POOL_SIZE);
+    });
+    go = true;
+    // Each loop runs tasks in order; so once these no-ops are done, so are the above.
+    post_wait(&thread_a, []() {});
+    post_wait(&thread_b, []() {});
+
+    EXPECT_FALSE(Repository::to_address_safe(pool_id_a, 0));
+    check_round_trips(pool_id_b, SHM_POOL_SIZE);
+    if (Repository::to_address(pool_id_b, 0) == base_a)
+    {
+      ++n_reused;
+    }
+
+    EXPECT_TRUE(owner_collection->remove_shm_pool(owner_pool_a));
+    owner_pool_a = std::move(owner_pool_b);
+  }
+
+  thread_a.stop();
+  thread_b.stop();
+
+  FLOW_LOG_INFO("Pool B mapped at pool A's just-freed vaddr in [" << n_reused << "] of [" << N_ROUNDS << "] "
+                "rounds.");
+
+  repository.deregister_shm_pool(OWNER_ID, COLL_ID, owner_pool_a->get_id());
+  repository.deregister_collection(OWNER_ID, COLL_ID);
+  EXPECT_TRUE(owner_collection->remove_shm_pool(owner_pool_a));
+  EXPECT_TRUE(ensure_empty_collection_at_destruction(owner_collection));
+} // TEST(Borrower_shm_pool_collection_repository_test, Concurrent_pool_dereg_reg)
 
 /* The bounded per-arena stats breakdown: stats() reports per-arena stat-sets for at most a fixed number of
  * arenas, forgetting the least-recently-touched one when that number would be exceeded.  ("Touched" = any of

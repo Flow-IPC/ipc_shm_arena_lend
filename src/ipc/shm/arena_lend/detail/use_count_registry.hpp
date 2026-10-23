@@ -82,7 +82,7 @@ namespace ipc::shm::arena_lend::detail
  * first-thing:
  *   - `const auto mdt = M->allocate(sizeof(Metadata)); construct_at(mdt, ...);`
  *     - If you don't need any such `Metadata`, use an empty `struct Metadata`.  You must do that one allocation,
- *       even if it is 0-sized.
+ *       even if it is ~0-sized.
  *
  * You can now use `*mdt` for whatever.  Subsequently, you can (must) issue
  * `const auto p = M->allocate(N); ...; M->deallocate(p);` at will.  If storing things such as
@@ -144,7 +144,7 @@ namespace ipc::shm::arena_lend::detail
  *     - And/or we could be smarter/more dynamic about the bitmap itself also at the expense of code simplicity
  *       (and, possibly, speed).
  *
- * We never give RAM "back," outside of deleting the backing SHM-pool.
+ * We never give RAM "back" (make it un-resident), outside of deleting the backing SHM-pool.
  *
  * ### The algorithm ###
  * The above probably gives decent hints as to how it works (bitmap with 1 bit per N-byte/use-count slot;
@@ -296,7 +296,7 @@ public:
    * in get_min_size() (and in stats) at least, so we declared it here.
    *
    * ### Rationale ###
-   * Internally we prefer to keep the main data area (where #S_USE_COUNTS_CAPACITY times #S_ALLOC_SZ bytes available
+   * Internally we prefer to keep the main data area (with #S_USE_COUNTS_CAPACITY times #S_ALLOC_SZ bytes available
    * to allocate()) aligned to the page size (and a multiple of page size), and certain subdivisions therein
    * are also similarly aligned to/multiples of page size (4Ki bytes as of this writing/Linux/x86-64 at least),
    * relative to the start of the containing SHM-pool.  Whether that's a worthwhile endeavour or not is not
@@ -658,8 +658,6 @@ constexpr size_t Use_count_registry::get_min_size(size_t extra_hdr_sz)
   using flow::util::round_to_multiple;
 
   /* Using similar technique to what boost.ipc rbtree_best_fit uses here.
-   * I *think* this *might* be overzealous, estimating *maybe* too conservatively where C++ would actually plop
-   * the various parts... but if so then only a little, and it is safe.
    *
    * Do note that, as of this writing, the true size used (with all allocate() space used-up to the byte)
    * is an exact number; we cannot grow (or shrink) from there.  So get_min_size() is not just the minimal

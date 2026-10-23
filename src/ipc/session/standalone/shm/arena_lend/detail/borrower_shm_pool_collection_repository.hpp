@@ -128,11 +128,14 @@ namespace ipc::session::shm::arena_lend::detail
  * in `[de]register_shm_pool()` we always lock/unlock one, then the other.  E.g., there could be 1 `Shm_session`
  * registering a pool while another is shutting down and deregistering a pool, so the update order of the
  * Fwd and Rev structures might look chronologically like F1R1F2R2 or F1F2R1R2 or F2F1R1R2 or....
- * If there is some danger to this, we don't see it.  The benefit is that we can place the relevant blocks of
+ * If there is some danger to this, we don't see it (vv).  The benefit is that we can place the relevant blocks of
  * code to be next to each other but independent -- no shared mutex, basically.  This helps impl simplicity, as the
  * primitives we use for each task (Fwd data update, Rev data update) are separate modules, and at least in one
  * case a primitive (detail::Shm_pool_repo_lookup_core_rev) is reused in owner-land (detail::Owner_shm_pool_repository).
  * Having to link the 2 things together code-wise by sharing a mutex would have been very annoying.
+ *
+ * (vv): Footnote: There is one racy danger, in fact, having to do with pool-address reuse by the OS.
+ * deregister_shm_pool() avoids this while explaining the specifics inside.
  *
  * So now we can talk about how each of those is implemented, separately.
  *
@@ -156,7 +159,7 @@ namespace ipc::session::shm::arena_lend::detail
  * If you're wondering why Rev is so simple and encapsulated, while Fwd required a bunch of bullet points and
  * code: It's just because we are the only place in Flow-IPC that needs to do what we do for Fwd lookup.
  * (Owner-side Fwd lookup is algorithmically far simpler.  The reason for that is, as of this writing, briefly explained
- * in doc header of detail::Thread_local_pool_lookup_fwd doc header.)  However Rev lookup is ~identical
+ * in detail::Thread_local_pool_lookup_fwd doc header.)  However Rev lookup is ~identical
  * for us and in owner-land; hence it is encapsulated in `Shm_pool_repo_lookup_core_rev` and used here and ~identically
  * in detail::Owner_shm_pool_repository.
  *
@@ -515,7 +518,7 @@ private:
 
   /**
    * Generally similar to Shm_session::m_borrower_pool_stats but across *all* `Shm_session`s (for the
-   * same SHM-provider <=> #Shm_arena type).  Reads that guy's doc header first.  Then continue here:
+   * same SHM-provider <=> #Shm_arena type).  Read that guy's doc header first.  Then continue here:
    *
    * Regarding perf: basically same thing; there shall be potentially multiple `Shm_session`s around, but
    * not so many that the frequency-of-stat-updates picture is fundamentally changed.
@@ -548,7 +551,7 @@ private:
    *       this map.  Its then being borrowed again would, for example, increment its
    *       Borrower_pool_stats::m_arena_register_count by a total of 2 (1 at the first borrowing, 1 at the second).
    *       (Among other things that implies we cannot just shove a Borrower_pool_stats into Collection_data
-   *       amd therefore into #m_collection_data_map.)
+   *       and therefore into #m_collection_data_map.)
    *       The only vaguely degenerate semantic thing is that here Borrower_pool_stats::m_n_borrowed_arenas
    *       cannot exceed 1: an arena is either currently being borrowed by 1+ `Shm_session`s, or it is not.
    *
@@ -862,7 +865,7 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_collection
        *   Normally this won't happen, as a thing must be registered before it can be deregistered, and the former
        *   would have inserted `key`, but there is a corner case: an, apparently, incredibly long-lived
        *   session/arena, such that a massive # of others have been more recently messed-with than the last time
-       *   this one was touched stats-wise.  It would then get evicted; and it is conceivable that finally the
+       *   this one was touched stats-wise.  It would then get evicted; and it is conceivable that the
        *   borrowing finally ended now... but too late: no per-arena stats to update.  There isn't a great way
        *   to deal with it without producing some odd-looking values in the individual `Borrower_pool_stats`.  This
        *   case is basically pathological, so they'll just have to make do without this particular arena's stats.
@@ -1003,10 +1006,14 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
                                                                                collection_id_t collection_id,
                                                                                pool_id_t pool_id)
 {
+  using ipc::shm::arena_lend::Shm_pool;
   using flow::util::stat::fetch_add;
   using flow::util::stat::fetch_sub;
+  using std::shared_ptr;
 
-  void* removed_pool_base = {};
+  shared_ptr<Shm_pool> removed_pool;
+  size_t removed_pool_size = {}; // Init to avoid some false compiler/sanitizer warnings.
+  shared_ptr<Borrower_shm_pool_collection> removed_pool_containing_collection;
 
   // Locks and unlocks central mutex 1.
   Tl_copy_fwd::s_registry.while_locked([&](const auto& state_per_thread)
@@ -1014,7 +1021,6 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
     const Uniq_collection_id key{owner_id, collection_id};
     const auto rc_iter = m_rc_pools_by_id.find(pool_id);
     assert((rc_iter != m_rc_pools_by_id.end()) && "Deregistering unknown pool; bug?");
-    size_t removed_pool_size = {}; // Init to avoid some false compiler/sanitizer warnings.
 
     auto& rc = rc_iter->second;
     if (rc.m_use_count == 1)
@@ -1023,25 +1029,13 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
       const auto coll_iter = m_collection_data_map.find(key);
       assert((coll_iter != m_collection_data_map.end()) && "Collection not found during pool deregistration; bug?");
 
+      removed_pool = rc.m_shm_pool;
+      removed_pool_containing_collection = coll_iter->second.m_collection;
       removed_pool_size = rc.m_shm_pool->get_size();
 
-      if (!coll_iter->second.m_collection->release_shm_pool(rc.m_shm_pool))
-      {
-        FLOW_LOG_FATAL_LOCKED("Failed to fully close/unmap (as borrower) SHM pool [" << pool_id << "], "
-                              "size [" << removed_pool_size << "], in collection [" << collection_id << "], "
-                              "owner [" << owner_id << "].  Something is likely borked about the machine now.  "
-                              "Bailing out.");
-        assert(false && "Failed to fully close/unmap (as borrower) SHM pool.  "
-                          "Something is likely borked about the machine now.");
-        std::abort();
-      }
-      // else
-      FLOW_LOG_TRACE_LOCKED("Successfully closed SHM pool [" << pool_id << "], size [" << removed_pool_size << "], "
-                            "in collection [" << collection_id << "], owner [" << owner_id << "].");
-
-      removed_pool_base = rc.m_shm_pool->get_address();
-
       m_rc_pools_by_id.erase(rc_iter);
+      // *removed_pool still alive (via removed_pool shared_ptr); we'll eliminate it last-thing below.
+
       tl_copy_fwd_push_pools(state_per_thread);
     }
     else
@@ -1061,7 +1055,7 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
         // See note in register_collection() w/r/t why the following is inside lock-section instead of outside.
 
         fetch_add(&per_arena_stats_ptr->m_pool_deregister_count, 1);
-        if (removed_pool_base)
+        if (removed_pool)
         {
           fetch_add(&per_arena_stats_ptr->m_pool_close_count, 1);
           fetch_sub(&per_arena_stats_ptr->m_n_open_pools, 1);
@@ -1079,7 +1073,7 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
 
       { // Same deal, for the total-stats guy.
         fetch_add(&m_borrower_pool_stats.m_pool_deregister_count, 1);
-        if (removed_pool_base)
+        if (removed_pool)
         {
           fetch_add(&m_borrower_pool_stats.m_pool_close_count, 1);
           fetch_sub(&m_borrower_pool_stats.m_n_open_pools, 1);
@@ -1089,14 +1083,57 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
     } // Stats.
   }); // Tl_copy_fwd::s_registry.while_locked() // Locks and unlocks central mutex 1.
 
-  if (removed_pool_base)
+  if (removed_pool)
   {
-    Core_rev::get_instance().erase(removed_pool_base); // Locks and unlocks central mutex 2.
+    Core_rev::get_instance().erase(removed_pool->get_address()); // Locks and unlocks central mutex 2.
 
-    FLOW_LOG_TRACE_LOCKED("Deregistered SHM pool [" << pool_id << "] in collection [" << collection_id << "], "
+    /* We saved removed_pool[_containing_collection] until this point to avoid a race between us
+     * (deregister_shm_pool() of pool A=removed_pool) and another Shm_session performing register_shm_pool() of pool B.
+     * Pools A and B are unrelated, but OS can (and, in Linux, very well might in practice) choose to map B
+     * (hence B->get_address()) to an available vaddr including any used in the past (and not currently mapped).
+     * That reuse (in itself) is absolutely fine, but for our data structures there could be trouble.  The class
+     * doc header impl section mentions this in a Footnote.  So now we get into the specifics of it:
+     *
+     * We've got, in threads TA and TB:
+     *   TA: lock M1 { Aaddr = A->get_address() }; lock M2 { Core_rev::map.erase(Aaddr) }; { release (unmap) Aaddr }
+     *   TB: lock M1 { Baddr = <map new pool> }; lock M2 { Core_rev::map.insert(Baddr) }
+     * Of these sections, since M1 and M2 are locked separately, the order TA-M1/TB-M1/TB-M2/TA-M2/unmap-Aaddr
+     * is possible.  Let's consider that order.
+     *
+     * As written: No problems here.  In particular notice Baddr=/=Aaddr in that scenario: TB-M1 happens-before
+     * unmap-Aaddr, so OS cannot reuse Aaddr (yet).
+     *
+     * Now consider the counterfactual; suppose the `release (unmap) Aaddr` part were instead done earlier
+     * (which is tempting; just do it greedily in there and just save Aaddr alone for the `lock M2` part):
+     *   TA: lock M1 { Aaddr = A->get_address(); release (unmap) Aaddr }; lock M2 { Core_rev::map.erase(Aaddr) }
+     *   TB: lock M1 { Baddr = <map new pool> }; lock M2 { Core_rev::map.insert(Baddr) }
+     * Consider again the order TA-M1/TB-M1/TB-M2/TA-M2 (with unmap-Aaddr now folded into TA-M1).
+     * The chaos, of one kind or another, begins in TB-M2: Core_rev::map.insert(Baddr), with Baddr=Aaddr,
+     * is an attempt to insert at key that already exists; then TA-M2 erases at that same key.  The various ways
+     * that's bad should be clear.  (Depends on what the double-insert would do.  Either it loudly fails in
+     * some way, or it doesn't -- but then the subsequent map.erase() removes the Aaddr=Baddr entry;
+     * reverse-lookups for this SHM-pool don't work, etc. etc.)
+     *
+     * This way, instead: Aaddr=Baddr => unmap-Aaddr happened => map.erase(Aaddr) happened => map.insert(Baddr) is
+     * perfectly fine. */
+
+    if (!removed_pool_containing_collection->release_shm_pool(removed_pool))
+    {
+      FLOW_LOG_FATAL_LOCKED("Failed to fully close/unmap (as borrower) SHM pool [" << pool_id << "], "
+                            "size [" << removed_pool_size << "], in collection [" << collection_id << "], "
+                            "owner [" << owner_id << "].  Something is likely borked about the machine now.  "
+                            "Bailing out.");
+      assert(false && "Failed to fully close/unmap (as borrower) SHM pool.  "
+                        "Something is likely borked about the machine now.");
+      std::abort();
+    }
+    // else
+    FLOW_LOG_TRACE_LOCKED("Successfully closed, deregistered SHM pool [" << pool_id << "], "
+                          "size [" << removed_pool_size << "], in collection [" << collection_id << "], "
                           "owner [" << owner_id << "].");
   }
-  // else { Pool structure unchanged; no rev-lookup (or fwd-lookup for that matter) update needed. }
+  /* else { Pool structure unchanged; no rev-lookup (or fwd-lookup for that matter) update needed; no pool
+   *        to release. } */
 } // Borrower_shm_pool_collection_repository::deregister_shm_pool()
 
 template<typename Shm_arena_t>
@@ -1118,7 +1155,7 @@ Shared_name Borrower_shm_pool_collection_repository<Shm_arena_t>::recompute_pool
 
 template<typename Shm_arena_t>
 void Borrower_shm_pool_collection_repository<Shm_arena_t>::tl_copy_fwd_push_pools
-       (const typename decltype(Tl_copy_fwd::s_registry)::State_per_thread_map& caches_per_thread) const
+       (const typename decltype(Tl_copy_fwd::s_registry)::State_per_thread_map& state_per_thread) const
 {
   using Map = typename Tl_copy_fwd::Map;
 
@@ -1132,8 +1169,8 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::tl_copy_fwd_push_pool
   tl_copy_fwd_pull_pools(&pool_bases_by_id);
 
   // As a small optimization, for the last one move the temp pool_bases_by_id itself.
-  std::size_t n = caches_per_thread.size();
-  for (const auto& [cache, nil] : caches_per_thread)
+  std::size_t n = state_per_thread.size();
+  for (const auto& [cache, nil] : state_per_thread)
   {
     // The per-thread mutex is locked inside here (reminder: to protect against simultaneous read in thread Ti).
     cache->push_pools(((--n) == 0) ? std::move(pool_bases_by_id)

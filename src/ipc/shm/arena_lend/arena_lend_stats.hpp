@@ -211,8 +211,8 @@ struct Zombie_obj_reaper_stats
 
   /**
    * Of the scans counted in #m_scans, count of how many were *exhaustive* scans; that is performed up to once
-   * per constructing-thread, when that (user) thread exits.  #m_fifo_exhausted_scans shall equal this
-   * value; if it exceeds it... see #m_fifo_exhausted_scans doc header for more.
+   * per constructing-thread, when that (user) thread exits.  Each such scan also counts toward
+   * #m_fifo_exhausted_scans.
    */
   std::atomic<uint64_t> m_exhaustive_scans = 0;
 
@@ -243,7 +243,7 @@ struct Zombie_obj_reaper_stats
    *
    * The phase after the hint-phase is called here the FIFO-scan phase; so-named because while
    * it is in a sense a brute-force search through the obj-DB -- importantly, one that stops once N
-   * zombies have been reapted -- it is performed in FIFO order; that is based on chronological order
+   * zombies have been reaped -- it is performed in FIFO order; that is based on chronological order
    * of `.construct()`ion.  It is arguably likely (but certainly not guaranteed) that objects become
    * zombies roughly in the same order that they came into existence as fresh live objects.
    */
@@ -254,10 +254,9 @@ struct Zombie_obj_reaper_stats
    * zombie-object-count estimate N equalling zero; and then ultimately failed to find at least N
    * zombies to reap.
    *
-   * @warning (Canary stat) Based on our own understanding of the system, this count should remain
-   *          equal to #m_exhaustive_scans but never exceed it (modulo concurrency artifacts).
-   *          If a user sees this stat exceeding `m_exhaustive_scans`, we should investigate
-   *          the sequence of events that led to it.  (As of this writing we have not seen this.)
+   * Every exhaustive scan (#m_exhaustive_scans) counts here, since it has no real estimate by definition.
+   * A non-exhaustive scan *occasionally* is counted here too: N is a cheap, loosely-synchronized snapshot, so
+   * it can count a zombie that this scan cannot yet see as one.  That is harmless; a later scan reaps it.
    *
    * @see #m_fifo_scans doc header for related background.
    */
@@ -286,7 +285,7 @@ struct Zombie_obj_reaper_stats
    *
    *
    * Suppose `"Lend_tracker_pool::S_N_UNUSED_IDX_HINTS"` is 16; then we get this bucket structure:
-   * [1..3 | 4..7 | 8..11 | 12..16 | 16..19 | 20..23 | 24..27 | 28..31 | 32..35.. ].
+   * [1..3 | 4..7 | 8..11 | 12..15 | 16..19 | 20..23 | 24..27 | 28..31 | 32..35.. ].
    * Recall that, as usual, the final bucket gets all the overflow events; meaning cases where the
    * estimate N showed anything over 32 -- not necessarily only up to 35.
    */

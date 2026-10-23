@@ -86,7 +86,7 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
   m_metadata = static_cast<decltype(m_metadata)>(pool_allocate(sizeof(*m_metadata)));
   flow::util::construct_at(m_metadata);
 
-  /* This atomic<uint> m_metadata->m_n_unused is constructed via atomic<uint>{0} (see Metadata definition).
+  /* This atomic<> m_metadata->m_n_unused is constructed via atomic<>{0} (see Metadata definition).
    * Thus omitting: m_metadata->m_n_unused = 0; */
 
   /* However m_metadata->m_unused_idx_hints is an array<atomic<use_ct_idx_t>>, and array<> elements are emphatically
@@ -100,7 +100,6 @@ Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
 
   assert((m_metadata == m_pool->core()->get_segment_manager()->get_memory_algorithm().get_metadata<Metadata>())
          && "By definition this should be that: we just made it!");
-
 } // Lend_tracker_pool::Lend_tracker_pool(Create_only)
 
 Lend_tracker_pool::Lend_tracker_pool(const flow::log::Log_context_mt* log_ctx,
@@ -501,7 +500,7 @@ Lend_tracker_pool::Atomic_use_ct* Lend_tracker_pool::use_ct_idx_to_ptr(use_ct_id
             + (use_ct_idx * USE_CT_SZ));
 }
 
-unsigned int Lend_tracker_pool::n_unused() const
+signed int Lend_tracker_pool::n_unused() const
 {
   return m_metadata->m_n_unused.load(std::memory_order_relaxed);
 }

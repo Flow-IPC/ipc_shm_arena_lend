@@ -27,7 +27,6 @@
 #include "ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp"
 #include "ipc/common.hpp"
 #include <flow/util/util.hpp>
-#include <flow/error/error.hpp>
 #include <jemalloc/jemalloc.h>
 #include <vector>
 
@@ -81,7 +80,7 @@ Thread_cache::Thread_cache(flow::log::Logger* logger_ptr) :
 
   // That's it for now; id() -- likely to be called very soon -- will create an actual tcache.
 
-  // All good; ostream<< will print all the stuff (m_id, m_thread_token, etc.) incidentally.
+  // All good; ostream<< will print all the stuff (thread token and nickname, etc.) incidentally.
   FLOW_LOG_INFO_LOCKED("Jem_tcache[" << *this << "]: "
                        "Created cache object for this thread (details to the left in this message); "
                        "no tcaches yet until next id() call.");
@@ -248,7 +247,6 @@ void Thread_cache::if_requested_destroy_tcaches_and_possibly_finish_arena_kills(
   /* else if (it was requested) || assume_requested: We will do it.
    * Unless assume_requested: It is now re-marked as not-requested. */
 
-
   // Non-fast-path is in effect (can log, etc.).
 
   vector<decltype(Arena_death_progress::m_on_done_func)> on_done_funcs_to_execute;
@@ -331,7 +329,6 @@ void Thread_cache::destroy_arena(arena_id_t arena_id, const flow::log::Log_conte
   using flow::util::ostream_op_string;
   using flow::util::Lock_guard;
   using flow::util::Mutex_non_recursive;
-  using flow::error::Runtime_error;
   using boost::system::system_category;
 
   FLOW_LOG_SET_LOCKED_CONTEXT(log_ctx);
@@ -350,8 +347,17 @@ void Thread_cache::destroy_arena(arena_id_t arena_id, const flow::log::Log_conte
   }
 
   if (code != 0)
-  { // In this specific case we specifically promised to throw -- not abort as elsewhere as of this writing.
-    throw Runtime_error{Error_code{code, system_category()}, "Thread_cache::destroy_arena():mallctl(arena.destroy)"};
+  {
+    /* Same as other jemalloc failures in this class.  Throwing is not really an option anyway: we may be (and are,
+     * when deferred) invoked from this_thread_cache*() -- called at times even from noexcept contexts such as
+     * Ipc_arena::deallocate() -- or from ~Thread_cache().
+     *
+     * Incidentally: in practice we only know of this occurring, if arena_id is invalid. */
+    const Error_code sys_err_code{code, system_category()};
+    FLOW_LOG_FATAL_LOCKED("Arena [" << arena_id << "] destruction: System error occurred: [" << sys_err_code << "] "
+                          "[" << sys_err_code.message() << "].");
+    assert(false && "Arena-destruction failed -- as of this writing we consider this catastrophic.  @todo Revisit.");
+    std::abort();
   }
   // else
   FLOW_LOG_INFO_LOCKED("Destroyed arena [" << arena_id << "].");
@@ -373,7 +379,9 @@ Thread_cache::Static_state::Static_state() :
 
 std::ostream& operator<<(std::ostream& os, const Thread_cache& val)
 {
-  os << "[tcaches=" << val.m_tcaches_by_arena.size() << " thread=[tok-" << val.thread_token();
+  /* Print only immutable stuff: e.g., destroy_arena_safely() prints other threads' `*this`es.
+   * (So, e.g., no m_tcaches_by_arena.size().) */
+  os << "[thread=[tok-" << val.thread_token();
   if (!val.thread_nickname().empty())
   {
     os << '|' << val.thread_nickname();

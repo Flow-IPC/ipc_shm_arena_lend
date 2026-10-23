@@ -61,14 +61,15 @@ namespace ipc::shm::arena_lend
  * native calls might be needed at times; but boost.interprocess is already a helpfully thin wrapper around
  * native resources and provides native handle access when desired. (E.g., in SHM-classic we use boost.interprocess
  * SHM primitives in shm::classic::Pool_arena; in some parts of SHM-arena-lend/SHM-jemalloc, like
- * detail::Lend_tracker_pool, we do as well. It's nice.)
+ * detail::Lend_tracker_pool, we do as well. It's nice. Though, there can be naughty surprises; hence things like
+ * shm::bipc_ext::Sparse_managed_shm.)
  *
  * @todo ipc::shm::arena_lend::Borrower_shm_pool_collection (among others) should be
  * officially classified an internal API (at least, per coding guide, placed in `detail/` header; optionally in `detail`
- * sub-namespace).  Once `ipc::shm::arena_lend` (the SHM-arena-lend module) becomes officially extensible
+ * sub-namespace). Once `ipc::shm::arena_lend` (the SHM-arena-lend module) becomes officially extensible
  * to handle other memory-managers beyond jemalloc, thus allowing for user's own arena-lending SHM-provider impls
  * (not just SHM-jemalloc), then *maybe* move this back out of `detail`, if
- * indeed referencing it is expected in that case.  (As of this writing we estimate it should not be.)
+ * indeed referencing it is expected in that case. (As of this writing we estimate it should not be.)
  */
 class Borrower_shm_pool_collection :
   public Shm_pool_collection

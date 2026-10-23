@@ -50,11 +50,9 @@ Use_count_registry::Use_count_registry(size_t sz, size_t extra_hdr_sz)
 
   /* The following m_header stuff is effectively garbage until .m_meta_obj_sz (currently null) gets set by first
    * allocate(); at that point we set these to real init values:
-   *   m_meta_obj_sz, m_bitmap_words_sz, m_bitmap_words_next_search_idx.
-   * @todo Zero the non-optional<>s anyway?  Avoid false compiler/sanitizer warnings?  If so do it in Header ctor. */
+   *   m_meta_obj_sz, m_bitmap_words_sz, m_bitmap_words_next_search_idx. */
 
   // That just leaves big array m_bitmap_words.
-
 #if 0
   m_header.m_bitmap_words.assign(0);
 
@@ -351,7 +349,7 @@ size_t Use_count_registry::stats_record(size_t prev_quanta_active, Obj_db_aux_po
      *
      * The m_use_ct_quanta value is not strictly necessary, as it could be computed from m_aux_pool_count:
      * multiply that by # of quanta, hence by MAX_QUANTA below; but we've decided to track it as-if the # of max quanta
-     * per pool is not a compile-time decision; the perf impact should be negligible due to relative rarity
+     * per pool is not a compile-time decision; the perf impact should be negligible due to relative rarity of
      * this code executing. */
     constexpr auto MAX_QUANTA = S_USE_COUNTS_CAPACITY / S_USE_COUNTS_CAPACITY_QUANTUM_SZ;
     const auto mapped_sz = get_min_size(m_header.m_extra_hdr_sz) + base_offset();
@@ -395,7 +393,7 @@ size_t Use_count_registry::stats_record_at_deletion(Obj_db_aux_pool_stats* targe
   fetch_sub(&target_stats->m_mapped_sz, mapped_sz);
   fetch_sub(&target_stats->m_use_ct_active_quanta, quanta_active);
   fetch_sub(&target_stats->m_resident_sz,
-            // resident_sz should be (mapped_sz - <unused quanta> x <1 quantum's contribution>)).
+            // resident_sz should be (mapped_sz - (<unused quanta> x <1 quantum's contribution>)).
             mapped_sz - ((MAX_QUANTA - quanta_active)
                          * ((S_USE_COUNTS_CAPACITY_QUANTUM_SZ * S_ALLOC_SZ) + S_BITMAP_QUANTUM_SZ)));
 

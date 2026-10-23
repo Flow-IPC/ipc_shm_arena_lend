@@ -31,7 +31,6 @@
 #include <fcntl.h>
 
 using std::shared_ptr;
-using std::string;
 using std::size_t;
 using std::make_shared;
 

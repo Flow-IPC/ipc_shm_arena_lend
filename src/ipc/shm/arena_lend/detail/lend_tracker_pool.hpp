@@ -107,7 +107,8 @@ namespace ipc::shm::arena_lend::detail
  *     two key tools to aid any such algorithm:
  *     - n_unused() returns the total number of extant (in-use/not-returned) use-count slots for which the use-count
  *       has decreased to `0` (zero).  Therefore one can stop any exhaustive scan upon reaching this-many
- *       use_count_return_if_unused() calls returning `true`.
+ *       use_count_return_if_unused() calls returning `true`.  (It can be a slight, basically temporary under-estimate,
+ *       even negative; see n_unused() doc header.)
  *     - emit_unused_ct_idx_hints() emits up to a small number (e.g., 16 as of this writing) of use-count slots
  *       for which the use-count has decreased to zero.  Therefore, before (typically even instead of) doing an
  *       exhaustive scan, one can begin with these emitted ones, executing use_count_return_if_unused() on each.
@@ -390,16 +391,69 @@ public:
    * as a bound: stop scanning once this-many slots have been found and returned.
    *
    * ### Tips ###
-   * The value may change concurrently; it is a hint, not a hard guarantee for any particular length of time.
+   * The value may change concurrently; it is a hint/estimate, not a hard guarantee for any particular length of time.
    * However the following truth can be used to your advantage: Unless something might *concurrently return*
-   * (as via use_count_return_if_unused() or use_count_dec_admin()) slots, the value this returns will not
+   * (as via use_count_return_if_unused()) slots, the value this returns will not
    * concurrently go *down*.  So if your algorithm only does opportunistic-disposal scans from one thread,
    * it is never wrong to scan until one has returned N values, where N equals `n_unused()` at scan start.
    * (If it concurrently *increased*, then a future scan will "see" the new ones.)
    *
+   * Secondly (foreshadows the thing explained in the next subsection): zero should be treated as "no objects to
+   * reap"; and *less than zero* should *also* be taken to mean that same thing.
+   *
+   * ### Why signed?  Can it be negative?  How to handle it? ###
+   * (This may feel like a corner case and uninteresting, but it's best not to treat it that way.  Dealing with it
+   * is easy, but it's important to understand it.)
+   *
+   * Think of this value -- call it N -- as a tracker of the equilibrium of a simple one-way produce-consume algorithm.
+   *   - Product = 1 active use-count slot whose use-count has just reached zero (<=> it has become reapable).
+   *   - Producer = use_count_dec() or use_count_dec_admin() which in fact, per name, decrements use-ct -- possibly to
+   *     zero.  If so:
+   *     - Effect on N: `++N`.
+   *   - Consumer = *in admin thread* thing that checks a slot and *observes* that use-count
+   *     is zero.  (Therefore: it frees the slot!  Caller reaps the tracked obj.)
+   *     - Effect on N: `--N`.
+   *
+   * (Hence N is a good estimate of how many reapable, subsequently-unused objs are currently tracked.)  Specifically
+   * then:
+   *   - use_count_dec_admin() is delightful, as it opportunistically both produces and immediately consumes.
+   *     Per name it runs in admin thread.  If it happens to take use-ct to zero (produce!), then (being in admin
+   *     thread already) it has "observed" the now-zero-use-ct-bearing slot (consume!).  So conceptually it does
+   *     `++N` and then immediately `--N` (=> return slot, caller frees obj!).  That's why it simply does not touch N.
+   *   - use_count_dec(), however, can only (potentially) do the produce part (`++N`); it is running in non-admin
+   *     thread.  The admin-thread detection of this product has to happen in the next bullet:
+   *   - use_count_return_if_unused() (potentially) does the consume part (`--N`)... that is if its hopeful (on
+   *     the caller's part) querying of the slot shows use-ct=0.  So this is an admin-thread
+   *     scan (Thread_lcl_obj_db_admin::unused_obj_scan()) asking `*this` to check that slot based on a suspicion
+   *     that it tracks a reapable obj.
+   *
+   * Finally we get to why N can be briefly under-counted or even negative: By design of this overall algorithm, the
+   * opportunistic/heuristic checking via use_count_return_if_unused() occurs orthogonally -- and concurrently -- to
+   * non-admin-thread use_count_dec().
+   *   - Produce-code is: produce (set use-ct=0); then account it via `++N`.
+   *   - Consume-code is: consume (observe use-ct=0); then account it via `--N`.
+   *
+   * While "produce" happens-before "consume," the accountings-thereof could happen in reverse order.  In the window
+   * between the thus-reversed accountings N is under-counted, possibly to below zero.  (Observing a negative N
+   * implies under-count, but observing otherwise does not imply lack of under-count.)
+   *
+   * @note If the client thread (recall it's possibly in another process) doing use_count_dec() stalls/dies
+   *       before the produce-accounting (`++N`) happens within that function, then the window is not
+   *       brief/temporary.  In practice this non-briefness/non-transience is rare, but no algorithm should
+   *       rely on its being impossible.  N can be lastingly-negative, and more generally it can be positive but
+   *       lastingly-under-counted.  We leave it to the reader to work out the implications on the scan-algo
+   *       that uses n_unused(), but in short: future scans will "get it" eventually; and an arena
+   *       shutdown will eventually reap everything including any -- very few given how rare a lasting-under-count
+   *       is -- possible straggler reapable objs.
+   *
+   * So then lastly: How does one, big-picture, use N (and as a special case, what if it is zero or even negative)?
+   * Answer: Just as we said: "used by the admin-thread scan algorithm as a bound: stop scanning
+   * once this-many slots have been found and returned."  Zero means all-done with the reaping; therefore
+   * negative means same.
+   *
    * @return See above.
    */
-  unsigned int n_unused() const;
+  signed int n_unused() const;
 
   /**
    * Returns `false` (indicating liveness of the SHM-pool we handle) throughout; until the admin-mode
@@ -523,8 +577,15 @@ private:
      * Thread_lcl_obj_db_admin::this_thread_piggy_scan()).  When scanning for such objects to dispose, the algorithm
      * can stop upon encountering #m_n_unused such objects.  (Yes, `m_n_unused` can be concurrently incremented during
      * this procedure; that is fine: we'll get it next time then, when that same algorithm runs opportunistically.)
+     *
+     * ### It can be (slightly) negative ###
+     * Please see n_unused() doc header which provides a nice mental model for what #m_n_unused counts, why
+     * it can temporarily under-count (and even therefore possibly be negative), and what it implies about using
+     * this value.
+     *
+     * Since it can be negative, it is signed.
      */
-    std::atomic<unsigned int> m_n_unused{0};
+    std::atomic<signed int> m_n_unused{0};
     static_assert(decltype(m_n_unused)::is_always_lock_free, "Another atomic counter in SHM.");
 
     /**

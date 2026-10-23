@@ -408,8 +408,8 @@ TEST(Ipc_arena_stats_test, sharded_stats_basics)
  *     m_sync_destroy_count/m_drain_destroy_count (a plain main-mode reap).
  *   - Scan-outcome bookkeeping: only estimate-driven scans record an outcome or a histogram sample; a scan
  *     short-circuiting on estimate==0 records neither (but counts in m_scans); an *exhaustive* scan (thread
- *     exit) always lands in m_fifo_exhausted_scans -- by design m_fifo_exhausted_scans == m_exhaustive_scans,
- *     and only *exceeding* it is a canary.
+ *     exit) always lands in m_fifo_exhausted_scans -- so in these sequential setups
+ *     m_fifo_exhausted_scans == m_exhaustive_scans exactly.
  *   - m_non_owner_destroy_count is always 0 in SHM-jemalloc by design (destroys only ever run in owner admin
  *     threads). */
 TEST(Ipc_arena_stats_test, zombie_and_main_reaper)
@@ -604,6 +604,11 @@ TEST(Ipc_arena_stats_test, drain_reaper)
     }
     sleep_for(milliseconds{100});
   }
+  /* Consume once more: the snapshot that ended the poll may be torn.  Stat consumption loads fields one by one
+   * (no cross-field consistency), and it loads m_owner_obj before m_live_obj -- while the reap updates
+   * m_live_objects last.  So that snapshot may show the reap's m_live_objects decrement yet miss its earlier
+   * m_destroy_count increment. */
+  consume();
   EXPECT_EQ(out.m_live_obj.m_live_objects.load(), 0u);
   EXPECT_EQ(out.m_live_obj.m_live_object_zombies.load(), 0u);
   EXPECT_EQ(out.m_owner_obj.m_destroy_count.load(), 1u);
