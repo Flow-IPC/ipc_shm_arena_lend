@@ -128,13 +128,13 @@ namespace ipc::session::shm::arena_lend::detail
  * in `[de]register_shm_pool()` we always lock/unlock one, then the other.  E.g., there could be 1 `Shm_session`
  * registering a pool while another is shutting down and deregistering a pool, so the update order of the
  * Fwd and Rev structures might look chronologically like F1R1F2R2 or F1F2R1R2 or F2F1R1R2 or....
- * If there is some danger to this, we don't see it (vv).  The benefit is that we can place the relevant blocks of
+ * If there is some danger to this, we don't see it (v).  The benefit is that we can place the relevant blocks of
  * code to be next to each other but independent -- no shared mutex, basically.  This helps impl simplicity, as the
  * primitives we use for each task (Fwd data update, Rev data update) are separate modules, and at least in one
  * case a primitive (detail::Shm_pool_repo_lookup_core_rev) is reused in owner-land (detail::Owner_shm_pool_repository).
  * Having to link the 2 things together code-wise by sharing a mutex would have been very annoying.
  *
- * (vv): Footnote: There is one racy danger, in fact, having to do with pool-address reuse by the OS.
+ * (v): Footnote: There is one racy danger, in fact, having to do with pool-address reuse by the OS.
  * deregister_shm_pool() avoids this while explaining the specifics inside.
  *
  * So now we can talk about how each of those is implemented, separately.
@@ -1097,14 +1097,18 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
      * We've got, in threads TA and TB:
      *   TA: lock M1 { Aaddr = A->get_address() }; lock M2 { Core_rev::map.erase(Aaddr) }; { release (unmap) Aaddr }
      *   TB: lock M1 { Baddr = <map new pool> }; lock M2 { Core_rev::map.insert(Baddr) }
-     * Of these sections, since M1 and M2 are locked separately, the order TA-M1/TB-M1/TB-M2/TA-M2/unmap-Aaddr
-     * is possible.  Let's consider that order.
+     * The danger, in short, is that map.insert(Baddr), where Baddr=Aaddr due to address reuse by OS, would
+     * happen-before map.erase(Addr) -- at which point everything about Baddr=Addr in Core_rev::map is messed up.
+     * As written above (which represents how it's actually coded), though, that cannot happen: Aaddr=Baddr =>
+     * unmap-Aaddr happened => map.erase(Aaddr) happened => map.insert(Baddr); all perfectly fine.
      *
+     * How would it not be fine?  An answer: Of these sections, since M1 and M2 are locked separately, the order
+     * TA-M1/TB-M1/TB-M2/TA-M2/unmap-Aaddr is possible.  Let's consider that order.
      * As written: No problems here.  In particular notice Baddr=/=Aaddr in that scenario: TB-M1 happens-before
      * unmap-Aaddr, so OS cannot reuse Aaddr (yet).
      *
-     * Now consider the counterfactual; suppose the `release (unmap) Aaddr` part were instead done earlier
-     * (which is tempting; just do it greedily in there and just save Aaddr alone for the `lock M2` part):
+     * Now consider the counterfactual; suppose the `release (unmap) Aaddr` part were instead done earlier.
+     * (This is tempting; just do it greedily in there and just save Aaddr alone for the `lock M2` part.)
      *   TA: lock M1 { Aaddr = A->get_address(); release (unmap) Aaddr }; lock M2 { Core_rev::map.erase(Aaddr) }
      *   TB: lock M1 { Baddr = <map new pool> }; lock M2 { Core_rev::map.insert(Baddr) }
      * Consider again the order TA-M1/TB-M1/TB-M2/TA-M2 (with unmap-Aaddr now folded into TA-M1).
@@ -1112,10 +1116,7 @@ void Borrower_shm_pool_collection_repository<Shm_arena_t>::deregister_shm_pool(o
      * is an attempt to insert at key that already exists; then TA-M2 erases at that same key.  The various ways
      * that's bad should be clear.  (Depends on what the double-insert would do.  Either it loudly fails in
      * some way, or it doesn't -- but then the subsequent map.erase() removes the Aaddr=Baddr entry;
-     * reverse-lookups for this SHM-pool don't work, etc. etc.)
-     *
-     * This way, instead: Aaddr=Baddr => unmap-Aaddr happened => map.erase(Aaddr) happened => map.insert(Baddr) is
-     * perfectly fine. */
+     * reverse-lookups for this SHM-pool don't work, etc. etc.) */
 
     if (!removed_pool_containing_collection->release_shm_pool(removed_pool))
     {

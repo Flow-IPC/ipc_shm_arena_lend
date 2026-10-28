@@ -494,6 +494,9 @@ Ipc_arena::Ipc_arena(flow::log::Logger* logger,
   m_owner_id(uint64_t(util::Process_credentials::own_process_id())),
   m_memory_manager(memory_manager),
   m_arena0(0), // Not valid.
+  /* (gcc and clang accept this init style for C++17 even with warnings turned up (non-pedantically), though it is not
+   * allowed by standard.  In C++20 this is officially allowed.  It's nice so leaving it, as long as it doesn't blow
+   * up one of our build targets; so far, so good.) */
   m_extent_hooks_wrapper({ .alloc = &create_shm_pool_handler,
                            .dalloc = &optional_remove_shm_pool_handler,
                            .destroy = &remove_shm_pool_handler,
