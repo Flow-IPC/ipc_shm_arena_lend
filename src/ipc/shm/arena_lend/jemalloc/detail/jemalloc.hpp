@@ -80,7 +80,7 @@ static_assert(false, "IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX macro must be defin
  *       building the library and unit tests -- that is by Flow-IPC's internal build scripts -- via
  *       compiler command-line macro-defines.  If headers begin using jemalloc APIs -- in templates, `constexpr`s,
  *       and/or perhaps inlined functions -- then we would need to dynamically generate and export a header
- *       containing ``IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX` definition (e.g., using a .hpp.in file turned into
+ *       containing `IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX` definition (e.g., using a .hpp.in file turned into
  *       .hpp file by the build script).  We would then `#include` that dynamically-generated header
  *       above this macro's definition in its containing header file (detail/jemalloc.hpp as of this writing).
  */

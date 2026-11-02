@@ -114,7 +114,7 @@ flow::util::Mutex_non_recursive& jemalloc_stats_mutex();
 
 /**
  * Stats-related sub-namespace within SHM-jemalloc's `detail`, for general organization (and ADL segregation if needed).
- * It contains the low-level *substrate* over jemalloc's `mallctl()` statistics surface: thin, stateless helpers
+ * It contains the low-level *substrate* over jemalloc's `mallctl()` statistics API: thin, stateless helpers
  * (epoch refresh, typed `mallctl`/`mallctlbymib` reads, MIB resolution) on which the higher-level bespoke
  * SHM-jemalloc stat snapshots and the `malloc_stats_print()` dump are built.
  *

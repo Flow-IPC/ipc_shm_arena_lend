@@ -536,7 +536,7 @@ void CLASS_JEM_CLI_SESSION_IMPL::cleanup()
     }
     catch (...) {}
 
-    if (pid == 0)
+    if (pid <= 0)
     {
       FLOW_LOG_WARNING("Client session [" << *this << "]: During periodic cleanup found seemingly relevant "
                        "(based on prefix/form) SHM-pool named [" << shm_pool_name << "]; but client-PID term "

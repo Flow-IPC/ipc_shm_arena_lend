@@ -791,7 +791,7 @@ void CLASS_JEM_SESSION_SRV::cleanup()
       pid = lexical_cast<process_id_t>(srv_namespace_aka_pid.str());
     }
     catch (...) {}
-    if (pid == 0)
+    if (pid <= 0)
     {
       FLOW_LOG_WARNING("Session server [" << *this << "]: During periodic cleanup found seemingly relevant "
                        "(based on prefix/form) SHM-pool named [" << shm_pool_name << "]; but server-PID (a/k/a "

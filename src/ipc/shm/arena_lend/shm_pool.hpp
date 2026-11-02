@@ -26,6 +26,7 @@
 #pragma once
 
 #include "ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp"
+#include <cstdint>
 #include <string>
 #include <ostream>
 

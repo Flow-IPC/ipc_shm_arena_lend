@@ -55,7 +55,7 @@ struct IpcShmMessage
     # Root of a SHM-pool's file-system name (add globally unique pool ID => get full name).
     # Borrower must be able to compute that full name in a few different contexts.  (For such a computation
     # it needs: pool ID; and owner ID (PID) + collection ID, to look up this poolNameBase where
-    # borrower stores it.  As of this writing: Pool ID comes from LendPool below (for actual buffer-storing
+    # borrower stores it.)  As of this writing: Pool ID comes from LendPool below (for actual buffer-storing
     # pools) or on a per-constructed/lent-object basis via the SHM-handle serialization (for the
     # Lend_tracker_pool aux pools).
   }

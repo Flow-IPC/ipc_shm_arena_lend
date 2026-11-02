@@ -59,8 +59,7 @@ TEST(Shm_pool_DeathTest, Interface)
   EXPECT_DEATH(Shm_pool(S_ID, "", S_ADDRESS, S_SIZE, S_FD), "!name.empty\\(\\)");
   EXPECT_DEATH(Shm_pool(S_ID, S_NAME, nullptr, S_SIZE, S_FD), "address != nullptr");
   EXPECT_DEATH(Shm_pool(S_ID, S_NAME, S_ADDRESS, 0, S_FD), "size > 0");
-  EXPECT_DEATH(Shm_pool(S_ID, S_NAME, S_ADDRESS, S_SIZE, 0), "fd > 0");
-  EXPECT_DEATH(Shm_pool(S_ID, S_NAME, S_ADDRESS, S_SIZE, -1), "fd > 0");
+  EXPECT_DEATH(Shm_pool(S_ID, S_NAME, S_ADDRESS, S_SIZE, -1), "fd >= 0");
 }
 
 /// Class interface tests

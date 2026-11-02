@@ -26,12 +26,14 @@
 #include "ipc/shm/arena_lend/shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 #include "ipc/common.hpp"
+#include <cassert>
+#include <cerrno>
+#include <cstring>
 #include <sys/mman.h>
+#include <unistd.h>
 
 using std::shared_ptr;
 using std::make_pair;
-using std::string;
-using std::map;
 
 namespace ipc::shm::arena_lend
 {
@@ -60,7 +62,7 @@ Shm_pool_collection::~Shm_pool_collection()
 void* Shm_pool_collection::map_shm(size_t size, bool read_enabled, bool write_enabled, int fd)
 {
   assert(size > 0);
-  assert(fd > 0);
+  assert(fd >= 0);
 
   int memory_protection_flags = 0;
   if (write_enabled)
@@ -96,8 +98,9 @@ void* Shm_pool_collection::memory_map(void* address, size_t size, int memory_pro
   void* actual_address = ::mmap(address, size, memory_protection_flags, flags, fd, 0);
   if (actual_address == MAP_FAILED)
   {
+    const auto sys_err = errno; // Save it before logging machinery can clobber it.
     FLOW_LOG_WARNING("Error occurred when memory mapping size " << size << ": " <<
-                     strerror(errno) << "(" << errno << ")");
+                     strerror(sys_err) << "(" << sys_err << ")");
     // @todo Fill in, alert
     return nullptr;
   }
@@ -109,8 +112,9 @@ bool Shm_pool_collection::memory_unmap(void* address, size_t size)
 {
   if (::munmap(address, size) != 0)
   {
+    const auto sys_err = errno; // Save it before logging machinery can clobber it.
     FLOW_LOG_WARNING("Error occurred when memory unmapping address " << address << ", size " << size << ": " <<
-                     strerror(errno) << "(" << errno << ")");
+                     strerror(sys_err) << "(" << sys_err << ")");
     // @todo Fill in, alert
     return false;
   }
@@ -120,22 +124,21 @@ bool Shm_pool_collection::memory_unmap(void* address, size_t size)
 
 bool Shm_pool_collection::close_shm_pool(const shared_ptr<Shm_pool>& shm_pool)
 {
-  if (!memory_unmap(shm_pool->get_address(), shm_pool->get_size()))
-  {
-    return false;
-  }
+  // Close the FD even if unmapping failed (it has already logged); else the FD would leak.
+  const bool unmapped = memory_unmap(shm_pool->get_address(), shm_pool->get_size());
 
   // Close pool
   if (close(shm_pool->get_fd()) != 0)
   {
     // Error occurred - possibly nonexistent
+    const auto sys_err = errno; // Save it before logging machinery can clobber it.
     FLOW_LOG_WARNING("Error occurred when closing shared memory name '" << shm_pool->get_name() << "': " <<
-                     strerror(errno) << "(" << errno << ")");
+                     strerror(sys_err) << "(" << sys_err << ")");
     // @todo Handle
     return false;
   }
 
-  return true;
+  return unmapped;
 }
 
 void Shm_pool_collection::print_shm_pool_map() const

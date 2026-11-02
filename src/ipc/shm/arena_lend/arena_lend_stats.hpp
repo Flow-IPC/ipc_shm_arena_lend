@@ -435,7 +435,7 @@ struct Sharded_stats
 }; // struct Sharded_stats
 
 /**
- * Stats about the RAM use of the arena-lending SHM-provider's auxilliary (non-user-data) SHM-pools which are
+ * Stats about the RAM use of the arena-lending SHM-provider's auxiliary (non-user-data) SHM-pools which are
  * used internally to store and performantly communicate (cross-process) the current use-counts per
  * first-class (`arena.construct<T>()`ed) object.
  *

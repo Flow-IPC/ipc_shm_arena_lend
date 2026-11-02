@@ -26,6 +26,7 @@
 #pragma once
 
 #include "ipc/session/session_fwd.hpp"
+#include <ostream>
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {

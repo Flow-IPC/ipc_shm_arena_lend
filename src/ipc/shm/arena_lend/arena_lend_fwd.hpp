@@ -26,11 +26,13 @@
 #pragma once
 
 #include "ipc/util/shared_name_fwd.hpp"
+#include "ipc/util/util_fwd.hpp"
 #include <flow/log/log_fwd.hpp>
 #include <flow/util/action_registry.hpp>
 #include <flow/util/stat/stat_fwd.hpp>
 #include <sys/types.h>
 #include <cstddef>
+#include <cstdint>
 #include <memory>
 
 /**
@@ -51,7 +53,7 @@
  * It raises some questions: namely: (1) Why is `Difference_type` configurable at all?  (2) Why `int` specifically?
  * For (1) I (ygoldfel) suspect original author (echan) borrowed this configurability from
  * boost::interprocess::offset_ptr.  We do not really need it though.  For (2) we are not sure.  (It might be something
- * from from an older-than-current-min Boost version's -- 1.87 as of this writing -- `bipc::offset_ptr`.)
+ * from an older-than-current-min Boost version's -- 1.87 as of this writing -- `bipc::offset_ptr`.)
  *
  * That all may be moot at this point:
  *
@@ -158,7 +160,7 @@ namespace ipc::shm::arena_lend::stat
 
 // Types.
 
-// Find doc headers near the bodies of these compound functions.
+// Find doc headers near the bodies of these compound types.
 
 struct Uniq_arena_id;
 struct Owner_obj_stats;
@@ -319,7 +321,7 @@ void declare_stats(const flow::util::stat::Stat_name& name_prefix,
                    const Pool_stats* src_stats, Pool_stats* target_stats, Visitor&& visitor);
 
 /**
- * Declares the stats for Borrower_pool_lookup_global_stats.  Not invoked directly except by `flow::util::stat`
+ * Declares the stats for Owner_pool_lookup_global_stats.  Not invoked directly except by `flow::util::stat`
  * internals, or when composing this stat-set into another.
  * @see `flow::util::stat` namespace doc header for background on the declare/visit mechanism.
  *

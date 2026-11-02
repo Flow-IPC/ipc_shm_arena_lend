@@ -43,7 +43,7 @@ Shm_pool::Shm_pool(pool_id_t id, const string& name, void* address, size_t size,
   assert(!name.empty());
   assert(address != nullptr);
   assert(size > 0);
-  assert(fd > 0);
+  assert(fd >= 0);
 }
 
 bool Shm_pool::determine_offset(const void* address, size_t& offset) const

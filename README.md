@@ -8,7 +8,7 @@ A more grounded description of the various sub-projects of Flow-IPC, including t
 in `./src/ipc/common.hpp` off the directory containing the present README.  Look for
 `Distributed sub-components (libraries)` in a large C++ comment.
 
-Took a look at those?  Still interested in `ipc_shm` as an independent entity?  Then read on.
+Took a look at those?  Still interested in `ipc_shm_arena_lend` as an independent entity?  Then read on.
 Before you do though: it is, typically, both easier and more functional to simply treat Flow-IPC as a whole.
 To do so it is sufficient to never have to delve into topics discussed in this README.  In particular
 the Flow-IPC generated documentation guided Manual + Reference are monolithic and cover all the

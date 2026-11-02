@@ -84,7 +84,7 @@ using Uniq_collection_id = std::pair<owner_id_t, collection_id_t>;
  * to generate new ones.
  *
  * ### Impl: Why `uint32_t` was chosen ###
- * Per Shm_pool_offset_ptr_data doc header impl discussion, it must fit into Shm_pool_offset_ptr_data_base::m_rep_t in
+ * Per Shm_pool_offset_ptr_data doc header impl discussion, it must fit into Shm_pool_offset_ptr_data_base::rep_t in
  * addition to 1 selector bit and Shm_pool_offset_ptr_data_base::pool_offset_t.  We've chosen 32 LSB of 64-bit
  * `rep_t` to be `pool_offset_t`; so that leaves 31 bits; 32 bits is the smallest type available to hold a 31-bit
  * unsigned number.
@@ -102,7 +102,7 @@ using pool_id_t = uint32_t;
  *
  * If the given aux pool handle has not yet been opened on-demand, then a `collection_id_t` (arena/collection ID) is
  * also required, so as to look up that arena's *pool name base* to which to append pool ID to get the pool name.
- * As for a given arena's pool name base, from SHM-arena-lending SHM-provider module's PoV it comes form the user
+ * As for a given arena's pool name base, from SHM-arena-lending SHM-provider module's PoV it comes from the user
  * when issuing `Arena::create()` (e.g.: jemalloc::Ipc_arena::create()).  ipc::session::shm::arena_lend
  * general `ipc::session`-compliant module forms this on the user's behalf internally, if they (as encouraged)
  * choose to use that module instead of using SHM-jemalloc/etc. in standalone fashion.  `ipc::session` forms
@@ -141,7 +141,7 @@ using Lend_tracker_shm = shm::bipc_ext::Sparse_managed_shm<Use_count_registry, :
  *       the args to our function here.  Otherwise the object might be destroyed before lending process was
  *       able to transmit said blob to us and/or before this function call.  The key point:
  *       Calling `blob_here = sess_here->lend_object(p_here)` in P1 is part of 3-part procedure; part 2 is
- *       IPC-transmitting `blob_here` to P2 a `blob_there`; part 3 is
+ *       IPC-transmitting `blob_here` to P2 as `blob_there`; part 3 is
  *       `auto p_there = sess_there->borrow_object(blob_there)` which calls us upon decoding `blob_there`.
  *
  * @tparam T
@@ -213,7 +213,7 @@ namespace ipc::shm::arena_lend::detail::stat
 
 // Types.
 
-// Find doc headers near the bodies of these compound functions.
+// Find doc headers near the bodies of these compound types.
 
 /// Short-hand for brevity: `Thread_lcl_obj_db_*` and buddies make frequent mention of this.
 using Sharded_stats = arena_lend::stat::Sharded_stats;
@@ -391,7 +391,7 @@ void sharded_stats_impl(const Shm_arena& shm_arena, Sharded_stats* target_stats)
  *   - Boost machinery executes the `tsp` cleanups.  For us: in some arbitrary order:
  *     - For `_admin<Arena_type1>`:
  *       - `Thread_local_state_registry<Arena_type1>` locks registry, removes, unlocks.  Gap begins here.
- *       - It calls `~_admin()`.   Gap continues, until the shards are parked where they must during this dtor.
+ *       - It calls `~_admin()`.   Gap continues, until the shards are saved where they must be during this dtor.
  *       - Last thing `~_admin()` does: `M.unlock()`.  Gap ends here.
  *     - For `_client<Arena_type1>`: Ditto.
  *     - For `_admin<Arena_type2>`: Ditto.

@@ -33,9 +33,7 @@
  * at least ipc::session::shm::arena_lend::jemalloc.
  */
 namespace ipc::session::shm::arena_lend { }
-/* @todo There is probably a better place for that doc header; which would be finalized once SHM-jemalloc proper
- * has been integrated into the Doxygen-docs run (as of this writing it is not quite yet, even though the
- * non-standalone/ SHM-jemalloc session items are so integrated). */
+// @todo There is probably a better place for that doc header.
 
 /**
  * Support for SHM-backed ipc::session sessions and session-servers with the SHM-jemalloc
