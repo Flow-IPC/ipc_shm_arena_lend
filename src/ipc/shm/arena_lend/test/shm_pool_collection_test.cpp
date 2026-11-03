@@ -125,10 +125,6 @@ TEST_F(Shm_pool_collection_DeathTest, Interface)
   EXPECT_TRUE(collection.remove_shm_object(pool->get_name()));
 }
 
-// XXX apropos of nothing - tests now seem to be leaving stuff behind
-// - (update) cleaned everything up that we know of, but some tests are still disabled, and some will be newly written
-// - so check `ls -l /dev/shm /dev/mqueue /tmp/var/run` and CWD after unit-test run, after test-set is finalized. Leave XXX in until then.
-
 /// Tests for the public and protected interfaces.
 TEST_F(Shm_pool_collection_test, Interface)
 {

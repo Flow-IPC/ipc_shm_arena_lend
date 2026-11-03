@@ -290,8 +290,8 @@ public:
    * it via move semantics and own it.  It'll be used internally for important communications such as pool-
    * and arena-lending notifications and acks, but to a `*this` user it is black box stuff.  Hold that thought.
    *
-   * With one important exception (which we tackle just below) a `*this` cannot fail.  Things like "Linux `mmap()`
-   * failed" or "we cannot open a named SHM object that the opposing `Ipc_arena` says it created a split second ago"
+   * With one important exception (which we tackle just below) a `*this` cannot fail.  Things like Linux `mmap()`
+   * failing or "we cannot open a named SHM object that the opposing Ipc_arena says it created a split second ago"
    * are not reasonably recoverable; we log and abort or otherwise catastrophically fail.  Don't worry about these.
    *
    * @note A Shm_session, by the arena-lending design, never allocates in the user's SHM arena(s);
@@ -346,8 +346,8 @@ public:
    *
    * Because Shm_session is not itself a communication channel, we're belaboring these points.  That said this is
    * no different from other async-I/O-pattern objects in Flow-IPC.  Simply:
-   *   - Be ready for lend_arena() and lend_object() to fail, indicating "this `Shm_session` is already hosed,
-   *     and `shm_channel_error_handler()` shall fire imminently or already has."  Typically one would stop
+   *   - Be ready for lend_arena() and lend_object() to fail, indicating: this Shm_session is already hosed,
+   *     and shm_channel_error_handler() shall fire imminently or already has.  Typically one would stop
    *     normal processing but otherwise no-op.  And orthogonally:
    *   - Handle `shm_channel_error_handler(E)` -- or your other method of session-hosing detection -- swiftly.
    *     As noted before: nullify all `this->borrow_object()`-returned handles; and destroy `*this` by dropping
@@ -491,7 +491,7 @@ public:
    *         the same `Tc` as given to `arena->construct<Tc>()` -- things change if that `Tc` involves at
    *         any level STL-compliant structure(s).  A full explanation is impractical here; please see other
    *         docs including the guided manual.  Here we'll just note the main points: 1: Wherever `Tc` used
-   *         a `Stateless_allocator<R, Ipc_arena>`, `T` should use Shm_session::Borrower_arena_allocator<R>`.
+   *         a `Stateless_allocator<R, Ipc_arena>`, `T` should use `Shm_session::Borrower_arena_allocator<R>`.
    *         2: There is no allocation possible as a borrower.  As of this writing the SHM mapped borrower-side
    *         is simply read-only; but even if we hadn't made it so via kernel, allocation is still only doable
    *         by the owner, per arena-lending-SHM-provider design.  In any case you shall never perform

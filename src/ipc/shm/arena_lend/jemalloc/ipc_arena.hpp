@@ -520,9 +520,9 @@ public:
    *
    * However: If a given object `*x` happens to reach cross-process ref-count-zero (meaning the last cross-process
    * `shared_ptr` group's last `shared_ptr` releases its reference) *not* in the thread that constructed it but
-   * another thread or process, *and* (this is key) that thread stops doing **~all** SHM-jemalloc work as triggered
-   * by your code (see above list which may not be exhaustive), then no opportunistic GC shall occur, and `*x`
-   * will not be freed yet.  (Eventually it will; worst-case on thread exit.)
+   * another thread or process, *and* (this is key) that thread stops doing **nearly all** SHM-jemalloc work as
+   * triggered by your code (see above list which may not be exhaustive), then no opportunistic GC shall occur, and
+   * `*x` will not be freed yet.  (Eventually it will; worst-case on thread exit.)
    *
    * It is arguably a pathological use pattern, but it's certainly possible.  So if your thread enters an idle
    * or SHM-jemalloc-free time period, while arena(s) exist that could have this-thread-`construct()`ed objects
