@@ -73,7 +73,9 @@ public:
    *     that *must* precede us, or whether some -- or even all -- are left around is a memory-manager (e.g.: jemalloc)
    *     detail, and in actual fact at least some (e.g.: yes, still jemalloc) memory-managers will leave 1+
    *     pool around.  Not removing them here is a leak on some level; probably (no guarantees though) not of physical
-   *     RAM but at least of pool-names in the file-system (which can count against OS limits).
+   *     RAM but of pool-names in the file-system; and, until process exit, of each pool's open descriptor and mapped
+   *     vaddr area.  A process can create many arenas (with ipc::session: at least one per session), so over time
+   *     these would accumulate.
    */
   ~Owner_shm_pool_collection() override;
 
