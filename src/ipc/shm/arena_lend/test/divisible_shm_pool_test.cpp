@@ -94,4 +94,4 @@ TEST(Divisible_shm_pool_test, Interface)
   }
 }
 
-} // namespace shm::ipc::arena_lend::test
+} // namespace ipc::shm::arena_lend::test

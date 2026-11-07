@@ -198,7 +198,11 @@ if(LINUX)
   list(APPEND DEP_LIBS dl)
 endif()
 
-# There is one more thing however.  See the source file ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp
+option(FLOW_IPC_ARENA_LEND_JEMALLOC_NO_TCACHE
+       "If ON: disables SHM-jemalloc feature wherein thread-caching is auto-used for every allocation if possible."
+       OFF)
+
+# There is one* more thing however.  See the source file ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp
 # which specifies that IPC_SHM_ARENA_LEND_JEMALLOC_API_PREFIX is a macro that must be defined (to blank or otherwise)
 # for any file `#include`ing that header (but we'll just assume all our `.cpp`s).  This value, it explains,
 # must be the prefix (potentially none) that's part of every jemalloc public API function's name which is
@@ -215,6 +219,8 @@ endif()
 # Anyway!  That's what find_program() is for.  If find_program() doesn't work, they can give the location by
 # setting knob manually.  Lastly jemalloc-config can be bypassed by simply supplying the je-prefix via yet
 # another knob.
+#
+# * - Update: Oh and we still need to apply FLOW_IPC_ARENA_LEND_JEMALLOC_NO_TCACHE option as well.
 
 # Utility: Find jemalloc-config; invoke it; parse result; set je-prefix.
 function(jemalloc_config_run)
@@ -284,6 +290,63 @@ function(jemalloc_config_run)
   message(CHECK_PASS "(Done; found via jemalloc-config execution; prefix is [${FLOW_IPC_JEMALLOC_PREFIX}].)")
 endfunction()
 
+# Utility: Determine the jemalloc version; proceed if OK; or fail build.  Policy: <5.3.0: fail build.
+# Notably 5.2.1 (widely deployed) has an arena-destroy locking bug (fixed in 5.3.0; see its ChangeLog) which
+# SHM-jemalloc would trigger (stats consumption or arena creation racing arena destruction).
+function(jemalloc_version_check)
+  message(CHECK_START "(Checking jemalloc version.)")
+  list(APPEND CMAKE_MESSAGE_INDENT "- ")
+
+  # The version lives in the (always-present, prefix-independent) public header as 3 macros
+  # JEMALLOC_VERSION_{MAJOR,MINOR,BUGFIX}.  We avoid pkg-config's JEMALLOC_VERSION / `jemalloc-config --version` on
+  # purpose: the jemalloc-locating logic above has fallback paths (notably the Conan case) that set neither, whereas
+  # JEMALLOC_INCLUDEDIR (hence this header) is set in all of them.  Or in short: We've already decided not to
+  # require jemalloc-config, and this technique will work in all cases.
+  set(hdr "${JEMALLOC_INCLUDEDIR}/jemalloc/jemalloc.h")
+  if(NOT EXISTS "${hdr}")
+    message(FATAL_ERROR "jemalloc header [${hdr}] not found; cannot determine jemalloc version.  Bug?")
+  endif()
+
+  set(ver "")
+  foreach(part MAJOR MINOR BUGFIX)
+    file(STRINGS "${hdr}" line REGEX "define[ \t]+JEMALLOC_VERSION_${part}[ \t]")
+    if(NOT (line MATCHES "JEMALLOC_VERSION_${part}[ \t]+([0-9]+)"))
+      message(FATAL_ERROR "Could not parse JEMALLOC_VERSION_${part} (a number) from jemalloc header [${hdr}].")
+    endif()
+    if(ver STREQUAL "")
+      set(ver "${CMAKE_MATCH_1}")
+    else()
+      set(ver "${ver}.${CMAKE_MATCH_1}")
+    endif()
+  endforeach()
+  message(STATUS "Detected jemalloc version: [${ver}].")
+
+  set(min_supported "5.3.0") # Oldest we support (see above).
+
+  # (See jemalloc issue #2671 -- a recurring upstream problem.  Happened to us.  Might as well help out
+  # instead of saying the version is too low.)
+  if("${ver}" VERSION_LESS "1.0.0")
+    message(FATAL_ERROR
+              "jemalloc reports version [${ver}] -- jemalloc's placeholder meaning its build could not determine a "
+              "real version (no VERSION file; not a git checkout with tags; no --with-version=).  This is a jemalloc "
+              "build/packaging issue, not a Flow-IPC one: the library itself is likely fine but mis-stamped, and we "
+              "cannot apply our version-safety policy without a real version.  Fix by rebuilding jemalloc with a real "
+              "version: any of: pass --with-version=<major>.<minor>.<bugfix>-<nrev>-g<40-hex-git-sha> to its "
+              "configure (zeros are fine for the SHA); or build from an "
+              "official jemalloc release tar.bz2 (which ships a VERSION file); or, if building from a git clone, "
+              "run `git fetch --tags` first.")
+  elseif("${ver}" VERSION_LESS "${min_supported}")
+    message(FATAL_ERROR
+              "jemalloc version [${ver}] is older than the minimum supported [${min_supported}].  "
+              "Please use jemalloc >= [${min_supported}].")
+  else()
+    message(VERBOSE "jemalloc version [${ver}] >= [${min_supported}]: OK.")
+  endif()
+
+  list(POP_BACK CMAKE_MESSAGE_INDENT)
+  message(CHECK_PASS "(Done.)")
+endfunction()
+
 function(post_include_setup)
   message(CHECK_START "(Library [${PROJ}] + headers/etc.: code-gen/install targets: additional setup.)")
   list(APPEND CMAKE_MESSAGE_INDENT "- ")
@@ -308,6 +371,10 @@ function(post_include_setup)
   # Note: that could change (function templates, constexpr functions, explicitly-inlined functions) in which
   # case (as detail/jemalloc.hpp also notes) we cannot use the compiler-define technique and will need to generate
   # and export a header file.  An #error will make that clear though; until then let's do the easy thing.
+  #
+  # Update: Made it PUBLIC, just in case (though as usual that only works if people, e.g., use CMake to build
+  # against our stuff); we do have in some detail/ headers; they're not meant to be `include`d by users, but
+  # it can't hurt to try to help even then.
   block()
     set(pfx "${FLOW_IPC_JEMALLOC_PREFIX}")
     if(pfx STREQUAL "${NONE}") # The special value is b/c an actual empty value is already taken for other purposes.
@@ -318,31 +385,40 @@ function(post_include_setup)
 
   list(POP_BACK CMAKE_MESSAGE_INDENT)
   message(CHECK_PASS "(Done.)")
+
+  if (FLOW_IPC_ARENA_LEND_JEMALLOC_NO_TCACHE)
+    target_compile_definitions(${PROJ} PUBLIC "IPC_SHM_ARENA_LEND_JEMALLOC_NO_TCACHE=1")
+    message(STATUS "Option FLOW_IPC_ARENA_LEND_JEMALLOC_NO_TCACHE enabled: disabling SHM-jemalloc auto-tcache feature.")
+  else()
+    message(VERBOSE "Option FLOW_IPC_ARENA_LEND_JEMALLOC_NO_TCACHE not enabled: SHM-jemalloc auto-tcache feature = on.")
+  endif()
+
+  jemalloc_version_check()
 endfunction()
 
-# (See above if wondering why we're not auto-searching for these.  There's a good reason.)
+# (See comment in FlowLikeLib.cmake if wondering why we're not auto-searching for these.  There's a good reason.)
 # Ideally keep this in `find -s` order.  Don't forget to exclude test/.
 set(SRCS
     ipc/session/detail/shm/arena_lend/jemalloc/session_shared_name.cpp
     ipc/session/shm/arena_lend/jemalloc/error.cpp
-    ipc/session/standalone/shm/arena_lend/borrower_collection.cpp
-    ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.cpp
     ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.cpp
-    ipc/session/standalone/shm/arena_lend/lender_collection.cpp
-    ipc/session/standalone/shm/arena_lend/shm_session_data.cpp
     ipc/shm/arena_lend/borrower_shm_pool_collection.cpp
-    ipc/shm/arena_lend/borrower_shm_pool_repository.cpp
+    ipc/shm/arena_lend/detail/lend_tracker_pool.cpp
     ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.cpp
+    ipc/shm/arena_lend/detail/stats.cpp
+    ipc/shm/arena_lend/detail/use_count_registry.cpp
     ipc/shm/arena_lend/divisible_shm_pool.cpp
+    ipc/shm/arena_lend/error.cpp
+    ipc/shm/arena_lend/jemalloc/detail/stat_substrate.cpp
     ipc/shm/arena_lend/jemalloc/ipc_arena.cpp
     ipc/shm/arena_lend/jemalloc/jemalloc_pages.cpp
     ipc/shm/arena_lend/jemalloc/memory_manager.cpp
-    ipc/shm/arena_lend/jemalloc/shm_pool_collection.cpp
-    ipc/shm/arena_lend/memory_manager.cpp
+    ipc/shm/arena_lend/jemalloc/stat_info_dump.cpp
+    ipc/shm/arena_lend/jemalloc/thread_cache.cpp
     ipc/shm/arena_lend/owner_shm_pool_collection.cpp
-    ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.cpp
     ipc/shm/arena_lend/shm_pool.cpp
-    ipc/shm/arena_lend/shm_pool_collection.cpp)
+    ipc/shm/arena_lend/shm_pool_collection.cpp
+    ipc/shm/arena_lend/util.cpp)
 set(CAPNP_SCHEMAS
     ipc/session/standalone/shm/arena_lend/ipc_shm_message.capnp)
 set(HDRS
@@ -358,37 +434,42 @@ set(HDRS
     ipc/session/shm/arena_lend/jemalloc/session.hpp
     ipc/session/shm/arena_lend/jemalloc/session_server.hpp
     ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp
-    ipc/session/standalone/shm/arena_lend/borrower_collection.hpp
-    ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp
+    ipc/session/standalone/shm/arena_lend/detail/arena_lend_fwd.hpp
+    ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp
+    ipc/session/standalone/shm/arena_lend/jemalloc/jemalloc_fwd.hpp
     ipc/session/standalone/shm/arena_lend/jemalloc/shm_session.hpp
-    ipc/session/standalone/shm/arena_lend/lender_collection.hpp
-    ipc/session/standalone/shm/arena_lend/shm_session_data.hpp
     ipc/shm/arena_lend/arena_lend_fwd.hpp
+    ipc/shm/arena_lend/arena_lend_stats.hpp
     ipc/shm/arena_lend/borrower_allocator_arena.hpp
     ipc/shm/arena_lend/borrower_shm_pool_collection.hpp
-    ipc/shm/arena_lend/borrower_shm_pool_listener.hpp
-    ipc/shm/arena_lend/borrower_shm_pool_repository.hpp
-    ipc/shm/arena_lend/detail/add_reference.hpp
+    ipc/shm/arena_lend/detail/arena_lend_fwd.hpp
+    ipc/shm/arena_lend/detail/lend_tracker_pool.hpp
+    ipc/shm/arena_lend/detail/obj_disposer.hpp
+    ipc/shm/arena_lend/detail/owner_shm_pool_repository.hpp
+    ipc/shm/arena_lend/detail/owner_spc_impl.hpp
     ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp
-    ipc/shm/arena_lend/detail/shm_pool_use_tracker.hpp
+    ipc/shm/arena_lend/detail/stats.hpp
+    ipc/shm/arena_lend/detail/thread_lcl_obj_db.hpp
+    ipc/shm/arena_lend/detail/thread_lcl_pool_lookup.hpp
+    ipc/shm/arena_lend/detail/use_count_registry.hpp
     ipc/shm/arena_lend/divisible_shm_pool.hpp
+    ipc/shm/arena_lend/error.hpp
     ipc/shm/arena_lend/jemalloc/detail/jemalloc.hpp
+    ipc/shm/arena_lend/jemalloc/detail/jemalloc_fwd.hpp
+    ipc/shm/arena_lend/jemalloc/detail/stat_substrate.hpp
     ipc/shm/arena_lend/jemalloc/ipc_arena.hpp
     ipc/shm/arena_lend/jemalloc/jemalloc.hpp
     ipc/shm/arena_lend/jemalloc/jemalloc_fwd.hpp
     ipc/shm/arena_lend/jemalloc/jemalloc_pages.hpp
     ipc/shm/arena_lend/jemalloc/memory_manager.hpp
-    ipc/shm/arena_lend/jemalloc/shm_pool_collection.hpp
-    ipc/shm/arena_lend/memory_manager.hpp
+    ipc/shm/arena_lend/jemalloc/stat_info_dump.hpp
+    ipc/shm/arena_lend/jemalloc/thread_cache.hpp
     ipc/shm/arena_lend/owner_shm_pool_collection.hpp
     ipc/shm/arena_lend/owner_shm_pool_listener.hpp
-    ipc/shm/arena_lend/owner_shm_pool_listener_for_repository.hpp
     ipc/shm/arena_lend/shm_pool.hpp
     ipc/shm/arena_lend/shm_pool_collection.hpp
-    ipc/shm/arena_lend/shm_pool_holder.hpp
     ipc/shm/arena_lend/shm_pool_offset_ptr.hpp
-    ipc/shm/arena_lend/shm_pool_repository.hpp
-    ipc/shm/arena_lend/shm_pool_repository_singleton.hpp
+    ipc/shm/arena_lend/util.hpp
     ipc/transport/struc/shm/arena_lend/jemalloc/jemalloc.hpp
     ipc/transport/struc/shm/arena_lend/jemalloc/jemalloc_fwd.hpp
     ${CAPNP_SCHEMAS}) # Export these like any regular headers...

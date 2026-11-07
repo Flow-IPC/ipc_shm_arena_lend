@@ -25,6 +25,7 @@
 /// @file
 #include "ipc/session/shm/arena_lend/jemalloc/error.hpp"
 #include "ipc/util/util_fwd.hpp"
+#include <flow/util/util.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc::error
 {
@@ -32,7 +33,7 @@ namespace ipc::session::shm::arena_lend::jemalloc::error
 // Types.
 
 /**
- * The boost.system category for errors returned by the ipc::session module.  Analogous to
+ * The boost.system category for errors returned by the ipc::session::shm::arena_lend::jemalloc module.  Analogous to
  * transport::error::Category.  All notes therein apply.
  */
 class Category :
@@ -54,7 +55,7 @@ public:
   const char* name() const noexcept override;
 
   /**
-   * Analogous to transport::error::Category::name().
+   * Analogous to transport::error::Category::message().
    *
    * @param val
    *        See above.
@@ -63,7 +64,7 @@ public:
   std::string message(int val) const override;
 
   /**
-   * Analogous to transport::error::Category::name().
+   * Analogous to transport::error::Category::code_symbol().
    * @param code
    *        See above.
    * @return See above.
@@ -87,7 +88,7 @@ Error_code make_error_code(Code err_code)
 {
   /* Assign Category as the category for flow::error::Code-cast error_codes;
    * this basically glues together Category::name()/message() with the Code enum. */
-  return Error_code(static_cast<int>(err_code), Category::S_CATEGORY);
+  return {static_cast<int>(err_code), Category::S_CATEGORY};
 }
 
 Category::Category() = default;
@@ -119,6 +120,11 @@ std::string Category::message(int val) const // Virtual.
     return "Session opening: While trying to transmit resource for internal-IPC use in an arena-lending SHM-provider, "
            "server encountered incoming-direction channel error whose exact nature could not be determined at that "
            "exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.";
+  case Code::S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
+    return "Session opening: While setting up resources for internal-IPC use in an arena-lending SHM-provider, it "
+           "was found that the session master channel's transport had been hosed by an error whose exact nature was "
+           "not available at that exact moment.  Logs will indicate that exact nature; meanwhile session opening "
+           "failed.";
 
   case Code::S_END_SENTINEL:
     assert(false && "SENTINEL: Not an error.  "
@@ -140,6 +146,8 @@ util::String_view Category::code_symbol(Code code) // Static.
     return "SHM_ARENA_LEND_FAILED";
   case Code::S_SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
     return "SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR";
+  case Code::S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR:
+    return "MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR";
 
   case Code::S_END_SENTINEL:
     return "END_SENTINEL";

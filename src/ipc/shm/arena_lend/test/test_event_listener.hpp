@@ -26,18 +26,15 @@
 
 #include <gtest/gtest.h>
 #include <unordered_map>
-#include "ipc/shm/arena_lend/owner_shm_pool_collection.hpp"
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 
 namespace ipc::shm::arena_lend::test
 {
 
 /**
- * Listener for events of the Owner_shm_pool_collection class. In particular, it captures the last notifications,
- * if any.
+ * Captures SHM pool creation/removal notifications for testing.
  */
-class Test_event_listener :
-  public Owner_shm_pool_collection::Event_listener
+class Test_event_listener
 {
 public:
   /**
@@ -110,7 +107,7 @@ public:
    *
    * @param shm_pool The shared memory pool that was created.
    */
-  virtual void notify_created_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool) override
+  void notify_created_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool)
   {
     ++m_num_create_notifications;
     m_create_notification = std::make_shared<Create_notification>(shm_pool);
@@ -124,8 +121,8 @@ public:
    * @param shm_pool The shared memory pool that was removed.
    * @param removed_shared_memory Whether the underlying shared memory was actually removed.
    */
-  virtual void notify_removed_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool,
-                                       bool removed_shared_memory) override
+  void notify_removed_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool,
+                               bool removed_shared_memory)
   {
     ++m_num_remove_notifications;
     m_remove_notification = std::make_shared<Remove_notification>(shm_pool, removed_shared_memory);

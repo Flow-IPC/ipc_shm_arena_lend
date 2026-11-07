@@ -27,6 +27,9 @@
 
 #include "ipc/shm/arena_lend/jemalloc/jemalloc.hpp"
 #include "ipc/shm/stl/stateless_allocator.hpp"
+#include "ipc/transport/struc/shm/shm_fwd.hpp"
+#include "ipc/transport/struc/shm/rpc/rpc_fwd.hpp"
+#include "ipc/transport/transport_fwd.hpp"
 
 namespace ipc::session::shm::arena_lend::jemalloc
 {
@@ -35,7 +38,7 @@ namespace ipc::session::shm::arena_lend::jemalloc
 
 /**
  * Implements the SHM-related API common to shm::arena_lend::jemalloc::Server_session and
- * shm::arena_lend::jemalloc::Client_session.   It is, as of this writing, not to be instantiated by itself.
+ * shm::arena_lend::jemalloc::Client_session.  It is, as of this writing, not to be instantiated by itself.
  * Rather see shm::arena_lend::jemalloc::Server_session (and
  * shm::arena_lend::jemalloc::Client_session) regarding what to actually instantiate and
  * further context.  As for the API in Session_mv itself, it is quite critical.
@@ -59,14 +62,14 @@ public:
   /**
    * The arena object on which one may call `construct<T>(ctor_args...)`, where `ctor_args` are arguments
    * to the `T::T()` constructor.  While a full-length discussion of the allowed properties of `T` is outside
-   * out scope here (belongs in ipc::shm docs), here's a short version for convenience:
+   * our scope here (belongs in ipc::shm docs), here's a short version for convenience:
    * PODs work; STL nested container+POD combos work, as long as
    * a shm::stl allocator is used at all levels; manually-implemented non-STL-compliant data
    * structures work if care is taken to use `Arena::allocate()` and `Arena::Pointer`.
    *
    * Suppose `A->construct()` yields handle `h`, where `A` is any `Arena*` returned by a `*this` accessor --
-   * `this->app_shm()`, `this->session_shm()` (the former available only is `*this` is really an instance of sub-class
-   * Server_session_mv).  Then `h` can be passed to `this->lend_object()` which yields `Blob b`.
+   * `this->app_shm()`, `this->session_shm()` (the former available only if `*this` is really a
+   * shm::arena_lend::jemalloc::Server_session).  Then `h` can be passed to `this->lend_object()` which yields `Blob b`.
    * Further, an `h` returned by `s->borrow_object(b)`, executed on the opposing
    * `shm::arena_lend::jemalloc::Session_mv s` (after receiving `b` via IPC) shall point to the same location in
    * `A` and will become part of a cross-process `shared_ptr` group with the original `h` (and any copies/moves
@@ -99,7 +102,7 @@ public:
    * #Arena doc header and are more naturally accessed via Session_mv::lend_object() and Session_mv::borrow_object().
    *
    * That said, #Shm_session can be used for further advanced purposes.  For example one could separately create
-   * an #Arena (beyond those supplied via session_shm() and Server_session_mv::app_shm()) and register it
+   * an #Arena (beyond those supplied via session_shm() and Server_session::app_shm()) and register it
    * via `Shm_session::lend_arena()`; then it would be possible to `Shm_session::lend_object()` and transmit
    * objects `construct()`ed in that additional #Arena.  Why do such a thing?  Answer: There are various conceivable
    * use cases.  Perhaps a shorter-lived segregated `Arena` is desirable for security or safety reasons for example.
@@ -136,30 +139,53 @@ public:
   using Borrower_allocator
     = ipc::shm::stl::Stateless_allocator<T, ipc::shm::Arena_to_borrower_allocator_arena_t<Arena>>;
 
-  /**
-   * Implements Session API per contract.
-   * @see Session::Structured_channel: implemented concept.
-   */
+  /// Implements Session API per contract.
   template<typename Message_body>
   using Structured_channel
     = typename transport::struc::shm::arena_lend::jemalloc::Channel
                  <typename Base::Base::Impl::Session_base_obj::Channel_obj,
                   Message_body>;
 
-  /**
-   * Implements Session API per contract.
-   * @see Session::Structured_msg_builder_config: implemented concept.
-   */
+  /// Implements Session API per contract.
   using Structured_msg_builder_config = typename Base::Base::Impl::Structured_msg_builder_config;
 
-  /**
-   * Implements Session API per contract.
-   * @see Session::Structured_msg_reader_config: implemented concept.
-   */
+  /// Implements Session API per contract.
   using Structured_msg_reader_config = typename Base::Base::Impl::Structured_msg_reader_config;
 
   /// Alias for a light-weight blob used in borrow_object() and lend_object().
   using Blob = typename Base::Base::Impl::Blob;
+
+  /**
+   * Server_session::Vat_network and `Client_session::Vat_network` are reasonable concrete types
+   * of template transport::struc::shm::rpc::Session_vat_network for an ipc::session user to use on opposing
+   * sides of a session; use the mainstream-form ctor to straightforwardly construct your zero-copy-enabled
+   * `Vat_network` (from a `*this`) for blazing-fast capnp-RPC.
+   */
+  using Vat_network = transport::struc::shm::rpc::Session_vat_network<Session_mv, Arena>;
+
+  /// You may disregard.
+  using Async_io_obj = transport::Null_peer;
+  /**
+   * Useful for generic programming, the `sync_io`-pattern counterpart to `*this` type.
+   *
+   * @internal
+   * @todo The impl for alias jemalloc::Client_session::Sync_io_obj is hacky and should be reconsidered, even
+   * though in practice it works more or less.  Just `Client_session` is an alias to `Session_mv` parameterized
+   * a certain way, so the alias is defined inside `Session_mv` and is written in terms of `Client_session_adapter`
+   * due to knowing this fact.  Maybe jemalloc::Client_session should be a thin wrapper instead of an alias,
+   * but that's a ton of lines for such a small thing... or maybe some `rebind` craziness would work....
+   */
+  using Sync_io_obj = sync_io::Client_session_adapter<Session_mv>;
+
+  // Constants.
+
+  /**
+   * Implements Session API per contract.
+   * @internal
+   * This is explicitly here (it's inherited anyway) mostly to document it as being available at this level;
+   * in particular a certain parameterization of this class template is aliased to the commonly used #Client_session.
+   */
+  static constexpr bool S_IS_SRV_ELSE_CLI = Base::S_IS_SRV_ELSE_CLI;
 
   // Constructors/destructor.
 
@@ -196,21 +222,21 @@ public:
    * transmit over IPC.
    *
    * It is the user's responsibility to transmit the returned blob, such as via a transport::Channel,
-   * to the owning process.  Failing to do so may leak the object until arena cleanup.  (Arena cleanup time
+   * to the opposing process.  Failing to do so may leak the object until arena cleanup.  (Arena cleanup time
    * depends on the source #Arena.  If it came from session_shm(), arena cleanup occurs at Session destruction.
-   * If from Server_session_mv::app_shm(), arena cleanup occurs at Server_session destruction.  If it is a
-   * custom-created other #Arena -- not managed by ipc::session -- then it would occur whenever you choose to destroy
-   * that #Arena.  If a destructor does not run, due to crash/etc., then the leaked ipc::session-managed `Arena`s'
-   * pools are cleaned zealously by ipc::session via a heuristic algorithm.)
+   * If from Server_session::app_shm(), arena cleanup occurs once the Session_server and each Server_session it
+   * produced are destroyed.  If it is a custom-created other #Arena -- not managed by ipc::session -- then it would
+   * occur whenever you choose to destroy that #Arena.  If a destructor does not run, due to crash/etc., then the
+   * leaked ipc::session-managed `Arena`s' pools are cleaned zealously by ipc::session via a heuristic algorithm.)
    *
    * ### What it really does ###
    * It forwards to `shm_session()->lend_object()`.  I mention this for context; it is arguably desirable to not
    * count on these details in code that can generically work with a different SHM-enabled Session, such as
-   * shm::classic::Session_mv, taken as a template param.  E.g., shm::arena_lend::jemalloc::Session_mv::lend_object()
+   * shm::classic::Session_mv, taken as a template param.  E.g., shm::classic::Session_mv::lend_object()
    * does not, and cannot (as it does not exist), call any `Session_mv::shm_session()` on which to invoke
    * `lend_object()`.
    *
-   * However, if your code specifically counts on `*this` being a shm::arena_lend::jemalloc::Server_session, then
+   * However, if your code specifically counts on `*this` being a shm::arena_lend::jemalloc::Session_mv, then
    * it is not wrong to rely on this knowledge.
    *
    * ### Possibility of error ###
@@ -234,7 +260,7 @@ public:
   Blob lend_object(const typename Arena::template Handle<T>& handle);
 
   /**
-   * Completes the cross-process operation begun by oppsing Session_mv::lend_object() that returned `serialization`;
+   * Completes the cross-process operation begun by opposing Session_mv::lend_object() that returned `serialization`;
    * to be invoked in the intended new owner process which is operating `*this`.
    *
    * ### Possibility of error ###
@@ -248,18 +274,22 @@ public:
    * @return See above.  On success, non-null pointer; otherwise a null pointer.
    */
   template<typename T>
-  typename Arena::template Handle<T> borrow_object(const Blob& serialization);
+  typename Arena::template Handle<T> borrow_object(const Blob& serialization) const;
 
   /**
    * Returns builder config suitable for capnp-serializing out-messages in SHM arena session_shm().
    *
+   * @param segment1_sz
+   *        See eponymous arg to, say, transport::struc::sync_io::Channel ctor with `Serialize_via_session_shm` tag.
    * @return See above.
    */
-  Structured_msg_builder_config session_shm_builder_config();
+  Structured_msg_builder_config
+    session_shm_builder_config(size_t segment1_sz
+                                        = sizeof(::capnp::word) * ::capnp::SUGGESTED_FIRST_SEGMENT_WORDS);
 
   /**
    * When transmitting items originating in #Arena session_shm() via
-   * transport::struc::shm::Builder::emit_serialization()(and/or transport::struc::Channel send facilities),
+   * transport::struc::shm::Builder::emit_serialization() (and/or transport::struc::Channel send facilities),
    * returns additional-to-payload information necessary to target the opposing process properly.
    *
    * Internally: Since `*this` type is based on arena-lending SHM-provider type, this is simply shm_session().
@@ -298,15 +328,15 @@ public:
    * interchangeably between `*this` class or shm::classic::Session_mv.  Hence code that wants to set up
    * a transport::struc::Msg_in (or transport::struc::Channel that receives them), and requires
    * a reader-config object capable of decoding messages stored in the opposing process's `app_shm()`
-   * (session-scope #Arena), then this method can be used -- and will work, because shm_reader_config()
+   * (app-scope #Arena), then this method can be used -- and will work, because shm_reader_config()
    * will work for *any* `Arena` -- which trivially includes opposing `app_shm()`.
    *
-   * For example, transport::struc::Channel_base::Serialize_via_session_shm tag ctor of
+   * For example, transport::struc::Channel_base::Serialize_via_app_shm tag ctor of
    * transport::struc::Channel will internally invoke this when loading up its internal
    * per-app reader-config for you.
    *
-   * What if `*this` is really super-classing Server_session_mv?  The opposing object is of type
-   * Client_session_mv which lacks `app_shm()`; so isn't the present method meaningless?  Not exactly:
+   * What if `*this` is really a Server_session?  The opposing object is a Client_session, which lacks
+   * `app_shm()`; so isn't the present method meaningless?  Not exactly:
    * if someday a message *were* to arrive from a somehow-app-scope-#Arena-capable client, then this
    * would decode it just fine.  As of this writing that's impossible, so it's a moot question;
    * yet it allows for code such as the aforementioned transport::struc::Channel tag ctor to be written
@@ -377,7 +407,7 @@ typename CLASS_JEM_SESSION_MV::Blob
 TEMPLATE_JEM_SESSION_MV
 template<typename T>
 typename CLASS_JEM_SESSION_MV::Arena::template Handle<T>
-  CLASS_JEM_SESSION_MV::borrow_object(const Blob& serialization)
+  CLASS_JEM_SESSION_MV::borrow_object(const Blob& serialization) const
 {
   assert(Base::Base::impl() && "Do not call this on as-if-default-cted Session.");
   return Base::Base::impl()->template borrow_object<T>(serialization);
@@ -385,10 +415,10 @@ typename CLASS_JEM_SESSION_MV::Arena::template Handle<T>
 
 TEMPLATE_JEM_SESSION_MV
 typename CLASS_JEM_SESSION_MV::Structured_msg_builder_config
-  CLASS_JEM_SESSION_MV::session_shm_builder_config()
+  CLASS_JEM_SESSION_MV::session_shm_builder_config(size_t segment1_sz)
 {
   assert(Base::Base::impl() && "Do not call this on as-if-default-cted Session.");
-  return Base::Base::impl()->session_shm_builder_config();
+  return Base::Base::impl()->session_shm_builder_config(segment1_sz);
 }
 
 TEMPLATE_JEM_SESSION_MV

@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #include "ipc/shm/arena_lend/divisible_shm_pool.hpp"
 
 using std::string;

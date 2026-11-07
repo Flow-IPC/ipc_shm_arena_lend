@@ -22,13 +22,18 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
 #include "ipc/shm/arena_lend/arena_lend_fwd.hpp"
+#include <flow/log/log.hpp>
+#include <boost/range/adaptor/map.hpp>
+#include <boost/range/adaptor/transformed.hpp>
+#include <boost/range/algorithm/sort.hpp>
 #include <memory>
 #include <map>
 #include <set>
-#include <flow/log/log.hpp>
+#include <vector>
 
 namespace ipc::shm::arena_lend
 {
@@ -37,7 +42,19 @@ namespace ipc::shm::arena_lend
  * A set of shared memory pools related in their application usage.
  */
 class Shm_pool_collection :
-  public flow::log::Log_context
+  /* `protected`, not `public`: It's to avoid end-user set_logger() calls. Though, lots of classes routinely
+   * publicly sub-class Log_context, without really a thought as to whether set_logger() would be safe; in many
+   * cases it would not be. (That's defensible; Log_context does not promise thread-safety; Log_context_mt does.)
+   * In our case there's also skip_fast_path_verbose_logging(), whose value is based on `Logger*` given to ctor,
+   * so a subsequent set_logger() would be extra-wrong -- we just don't want to deal with the possibility at all.
+   * @todo We could publicly expose get_logger(), as that's usually available via `public Log_context` and can
+   * be useful (but hardly of blockbuster importance).
+   *
+   * Log_context, not Log_context_mt: We don't set_logger() ourselves, except when it's safe near end-of-life
+   * (as of this writing in Ipc_arena::destroy() path); and we've outlawed external set_logger(). So no point in _mt.
+   * It's also good to remember that Log_context_mt means get_logger() involves a mutex lock, opening up
+   * perf-badness possibilities with which to have to then contend. */
+  protected flow::log::Log_context
 {
 public:
   /**
@@ -46,7 +63,7 @@ public:
    * @param logger For logging purposes.
    * @param id Identifier for the collection.
    */
-  Shm_pool_collection(flow::log::Logger* logger, Collection_id id);
+  Shm_pool_collection(flow::log::Logger* logger, collection_id_t id);
   /**
    * Destructor.
    */
@@ -57,7 +74,7 @@ public:
    *
    * @return See above.
    */
-  inline Collection_id get_id() const;
+  inline collection_id_t get_id() const;
 
   /**
    * Returns the shared memory pool that the address resides in.
@@ -84,6 +101,16 @@ public:
   void print_shm_pool_map() const;
 
 protected:
+  /**
+   * Returns the cached flag indicating whether hot-path TRACE/DATA logging should be skipped.
+   * The flag is snapshotted once at construction (from `Logger::should_log()` at that time), letting hot paths
+   * skip even the `should_log()` check on every allocation/deallocation.  As `*this` is not
+   * user-`set_logger()`-able, the logger -- hence this flag -- is fixed for `*this` lifetime; a TRACE-verbosity
+   * config change after construction will not take effect here (acceptable trade-off for the hot-path savings).
+   *
+   * @return `true` if hot-path verbose logging should be skipped.
+   */
+  inline bool skip_fast_path_verbose_logging() const;
   /**
    * Maps an opened shared memory object.
    *
@@ -123,6 +150,35 @@ protected:
    */
   bool deregister_shm_pool(const std::shared_ptr<Shm_pool>& shm_pool);
 
+  /**
+   * Utility: walks through each shared memory pool in the collection, in pool-ID order (therefore, in chronological
+   * order by creation time), and executes `func(P)`, where `P` is `shared_ptr<const Shm_pool>&&`.
+   *
+   * The entire method executes under lock; this includes calling `func()` N times.
+   *
+   * ### Rationale ###
+   * The precipitating use-case was Ipc_arena::shm_pool_live_info() which is logging/monitoring/etc.-oriented.
+   * However it might be useful for some other purpose; but be mindful of perf impact of the lock (though,
+   * as of this writing, it is a read-lock of a 2-level mutex).
+   *
+   * @tparam Func See above; functor.
+   * @param func See above.
+   */
+  template<typename Func>
+  void for_each_shm_pool(const Func& func) const;
+
+  /**
+   * Identical to the `const` for_each_shm_pool() overload but feeds `shared_ptr<Shm_pool>&&` (pointer to
+   * mutable pool) to `func()`.  All notes from that doc header apply; in particular the entire method executes
+   * under (read-)lock, so `func()` must not add/remove pools (write-lock ops) -- snapshot and act afterward
+   * instead.
+   *
+   * @tparam Func See above; functor.
+   * @param func See above.
+   */
+  template<typename Func>
+  void for_each_shm_pool(const Func& func);
+
 private:
   /// Multi-reader, single-writer mutex.
   using Mutex = flow::util::Mutex_shared_non_recursive;
@@ -130,6 +186,18 @@ private:
   using Write_lock = flow::util::Lock_guard<Mutex>;
   /// Multi-reader lock for the mutex.
   using Read_lock = flow::util::Shared_lock_guard<Mutex>;
+
+  /**
+   * Implements both for_each_shm_pool() overloads (which differ only in the constness of the pool
+   * pointers fed to `func()`).  `const` despite potentially feeding pointers-to-mutable: the interface-level
+   * constness statement is made by the public overloads.
+   *
+   * @tparam Shm_pool_t Either `Shm_pool` or `const Shm_pool`.
+   * @tparam Func See for_each_shm_pool().
+   * @param func See for_each_shm_pool().
+   */
+  template<typename Shm_pool_t, typename Func>
+  void for_each_shm_pool_impl(const Func& func) const;
 
   /**
    * Wrapper around mmap().
@@ -162,23 +230,73 @@ private:
    */
   inline bool deregister_shm_pool_internal(void* address);
 
+  /**
+   * Cached flag: `true` if TRACE/DATA logging was disabled (per `Logger::should_log()`) at construction,
+   * letting hot paths skip even the `should_log()` check.  `const`: snapshotted once at construction; see
+   * skip_fast_path_verbose_logging().
+   */
+  const bool m_skip_fast_path_verbose_logging;
   /// Collection identifier.
-  const Collection_id m_id;
+  const collection_id_t m_id;
   /// Mutex for pool map.
   mutable Mutex m_shm_pool_map_mutex;
   /// Address -> Shm_pool ptr map.
-  std::map<const void*, std::shared_ptr<Shm_pool>> m_shm_pool_map;
+  std::map<void*, std::shared_ptr<Shm_pool>> m_shm_pool_map;
 }; // class Shm_pool_collection
 
-Collection_id Shm_pool_collection::get_id() const
+collection_id_t Shm_pool_collection::get_id() const
 {
   return m_id;
 }
 
+bool Shm_pool_collection::skip_fast_path_verbose_logging() const
+{
+  return m_skip_fast_path_verbose_logging;
+}
+
 bool Shm_pool_collection::deregister_shm_pool_internal(void* address)
 {
-  Write_lock write_lock(m_shm_pool_map_mutex);
-  return (m_shm_pool_map.erase(address) > 0);
+  Write_lock write_lock{m_shm_pool_map_mutex};
+  return m_shm_pool_map.erase(address) != 0;
 }
+
+template<typename Func>
+void Shm_pool_collection::for_each_shm_pool(const Func& func) const
+{
+  for_each_shm_pool_impl<const Shm_pool>(func);
+}
+
+template<typename Func>
+void Shm_pool_collection::for_each_shm_pool(const Func& func)
+{
+  for_each_shm_pool_impl<Shm_pool>(func);
+}
+
+template<typename Shm_pool_t, typename Func>
+void Shm_pool_collection::for_each_shm_pool_impl(const Func& func) const
+{
+  using boost::adaptors::map_values;
+  using boost::adaptors::transformed;
+  using boost::range::sort;
+  using std::vector;
+  using std::static_pointer_cast;
+  using std::shared_ptr;
+
+  // As advertised: lock throughout.
+  Read_lock read_lock{m_shm_pool_map_mutex};
+
+  const auto shm_pools_lame_order_rng = m_shm_pool_map | map_values | transformed([](const auto& shm_pool_ptr) -> auto
+  {
+    return static_pointer_cast<Shm_pool_t>(shm_pool_ptr); // shared_ptr<S_p> => shared_ptr<[const] S_p>.
+  });
+  vector<shared_ptr<Shm_pool_t>> shm_pools{shm_pools_lame_order_rng.begin(), shm_pools_lame_order_rng.end()};
+
+  sort(shm_pools, [](const auto& shm_pool_ptr_a, const auto& shm_pool_ptr_b) -> bool
+                    { return shm_pool_ptr_a->get_id() < shm_pool_ptr_b->get_id(); });
+  for (auto& shm_pool_ptr : shm_pools)
+  {
+    func(std::move(shm_pool_ptr));
+  }
+} // Shm_pool_collection::for_each_shm_pool_impl()
 
 } // namespace ipc::shm::arena_lend

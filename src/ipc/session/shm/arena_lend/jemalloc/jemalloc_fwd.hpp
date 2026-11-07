@@ -33,15 +33,13 @@
  * at least ipc::session::shm::arena_lend::jemalloc.
  */
 namespace ipc::session::shm::arena_lend { }
-/* @todo There is probably a better place for that doc header; which would be finalized once SHM-jemalloc proper
- * has been integrated into the Doxygen-docs run (as of this writing it is not quite yet, even though the
- * non-standalone/ SHM-jemalloc session items are so integrated). */
+// @todo There is probably a better place for that doc header.
 
 /**
  * Support for SHM-backed ipc::session sessions and session-servers with the SHM-jemalloc
  * (ipc::shm::arena_lend::jemalloc) provider.  See the doc header for the general ipc::session::shm namespace.
  */
-namespace ipc::session::shm::arena_lend::jemalloc
+namespace ipc::session::shm::arena_lend::jemalloc // See also ipc::session::shm::arena_lend::jemalloc::rpc {} below.
 {
 
 // Types.
@@ -51,16 +49,11 @@ namespace ipc::session::shm::arena_lend::jemalloc
 template<typename Session_t>
 class Session_mv;
 
-template<typename Server_session_impl_t>
-class Server_session_mv;
-template<typename Client_session_impl_t>
-class Client_session_mv;
-
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES,
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES,
          typename Mdt_payload = ::capnp::Void>
 class Server_session;
 
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES,
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES,
          typename Mdt_payload = ::capnp::Void>
 class Session_server;
 
@@ -77,27 +70,31 @@ class Session_server;
  * `Arena`s.  In a session-server process, by contrast, there is Session_server which does
  * just that and maintains `app_shm()`; hence `Server_session` can return one of those.
  *
+ * @warning See same-named section of session::Client_session_mv ctor doc header.  In short: the `Client_app`
+ *          and `Server_app` passed to the ctor must outlive `*this`.
+ *
  * @internal
+ *
  * ### Implementation ###
  * First see the Implementation section of shm::arena_lend::jemalloc::Server_session.  It gives a detailed
  * description of the overall design -- both its own side and this (client) side too.  So read it; then come back here.
  *
  * That said, shm::arena_lend::jemalloc::Client_session is a much simpler situation.  It is not inter-operating with
  * any server object; and (as explained in the referenced doc header) all it needs to do is create 1 each of
- * `Shm_session` and `Arena` objects and register the latter with the former to enable lending objects
+ * `Shm_session` and `Arena` objects and register the latter with the former to enable lending objects.
  *
  * So all we have to do is provide a modified `async_connect()` which does the above.  How?  Answer:
  *   - execute vanilla session::Client_session_impl::async_connect(); once that triggers the on-done handler:
  *   - set up `Shm_session` and `Arena` (though for the former there's a prerequisite async step to establish an
- *     interal-use IPC channel);
+ *     internal-use IPC channel);
  *   - invoke the user's original on-done handler.
  *
  * In `*this`, mechanically: the true implementation of the needed setup and accessors (explained above) is
- * split between shm::classic::Session_mv (common with `Server_session_impl`) and
+ * split between shm::arena_lend::jemalloc::Session_impl (common with `Server_session_impl`) and
  * shm::arena_lend::jemalloc::Client_session_impl, with the vanilla core in super-class
  * session::Client_session_impl.
  *
- * That's the key; then session::Client_session_mv adds movability around session::Server_session_impl; and lastly
+ * That's the key; then session::Client_session_mv adds movability around that Client_session_impl; and lastly
  * this type aliases to *that* (by way of `Session_mv`).  Session_mv completes the puzzle by pImpl-forwarding to the
  * added (SHM-focused) API.  (session::Client_session_mv only pImpl-forwards to the vanilla API.)
  *
@@ -105,21 +102,22 @@ class Session_server;
  * that shm::arena_lend::jemalloc::Client_session adds to super-class Client_session_mv: `session_shm()` and so on.
  * Just see same spot in shm::arena_lend::jemalloc::Server_session doc header; it explains both
  * client and server sides.
+ *
  * @endinternal
  *
- * @tparam S_MQ_TYPE_OR_NONE
+ * @tparam MQ_TYPE_OR_NONE
  *         Identical to session::Client_session.
- * @tparam S_TRANSMIT_NATIVE_HANDLES
+ * @tparam TRANSMIT_NATIVE_HANDLES
  *         Identical to session::Client_session.
  * @tparam Mdt_payload
  *         Identical to session::Client_session.
  */
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES,
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES,
          typename Mdt_payload = ::capnp::Void>
 using Client_session
   = Session_mv
       <session::Client_session_mv
-        <Client_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>>>;
+        <Client_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>>>;
 
 // Free functions.
 
@@ -148,10 +146,10 @@ std::ostream& operator<<(std::ostream& os, const Session_mv<Session_t>& val);
  *        Object to serialize.
  * @return `os`.
  */
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 std::ostream& operator<<(std::ostream& os,
                          const Server_session
-                                 <S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>& val);
+                                 <MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>& val);
 
 /**
  * Prints string representation of the given `Session_server` to the given `ostream`.
@@ -164,9 +162,60 @@ std::ostream& operator<<(std::ostream& os,
  *        Object to serialize.
  * @return `os`.
  */
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 std::ostream& operator<<(std::ostream& os,
                          const Session_server
-                                 <S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>& val);
+                                 <MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>& val);
 
 } // namespace ipc::session::shm::arena_lend::jemalloc
+
+/**
+ * Sub-namespace containing utilities useful when working with capnp-RPC-with-zero-copy module of Flow-IPC
+ * (transport::struc::shm::rpc) -- assuming one has chosen SHM-jemalloc as the SHM-provider for such work.
+ */
+namespace ipc::session::shm::arena_lend::jemalloc::rpc
+{
+
+// Types.
+
+/**
+ * Having decided to use SHM-jemalloc SHM-provider: Suitable template argument for
+ * transport::struc::shm::rpc::Client_context, or more generally a suitable session::Client_session for
+ * transport::struc::shm::rpc::Session_vat_network.
+ *
+ * @tparam S_MQ_TYPE_OR_NONE
+ *         Whether you want the session to include a transport::Persistent_mq_handle (MQ) pipe; and if so
+ *         what kind.  The default `NONE` is best, unless you specifically intend to create side channel(s)
+ *         in addition to the one used for the central capnp-RPC session; in the latter case choose the one
+ *         that fits your performance needs best.
+ *
+ * @internal
+ * ### Rationale ###
+ * Why this value for the alias and the ones nearby?  Answer: See shm::classic::rpc::Client_session doc header;
+ * same deal here.
+ */
+template<session::schema::MqType S_MQ_TYPE_OR_NONE = session::schema::MqType::NONE>
+using Client_session = jemalloc::Client_session<S_MQ_TYPE_OR_NONE, true>;
+
+/**
+ * Having decided to use SHM-jemalloc SHM-provider: Suitable template argument for
+ * transport::struc::shm::rpc::Context_server, or more generally a suitable session::Session_server for
+ * generating `Session`s in use with transport::struc::shm::rpc::Session_vat_network.
+ *
+ * @tparam S_MQ_TYPE_OR_NONE
+ *         See #Client_session.
+ */
+template<session::schema::MqType S_MQ_TYPE_OR_NONE = session::schema::MqType::NONE>
+using Session_server = jemalloc::Session_server<S_MQ_TYPE_OR_NONE, true>;
+
+/**
+ * Having decided to use SHM-jemalloc SHM-provider: Generally a suitable session::Server_session for
+ * transport::struc::shm::rpc::Session_vat_network.
+ *
+ * @tparam S_MQ_TYPE_OR_NONE
+ *         See #Client_session.
+ */
+template<session::schema::MqType S_MQ_TYPE_OR_NONE = session::schema::MqType::NONE>
+using Server_session = jemalloc::Server_session<S_MQ_TYPE_OR_NONE, true>;
+
+} // namespace ipc::session::shm::arena_lend::jemalloc::rpc

@@ -38,19 +38,22 @@ using std::shared_ptr;
 namespace ipc::shm::arena_lend::test
 {
 
-Test_shm_pool_collection::Test_shm_pool_collection(flow::log::Logger* logger, Collection_id id) :
+Test_shm_pool_collection::Test_shm_pool_collection(flow::log::Logger* logger, collection_id_t id,
+                                                   Shared_name&& pool_name_base) :
   Shm_pool_collection(logger, id),
-  m_name_generator(create_shm_object_name_generator())
+  m_pool_name_base(std::move(pool_name_base))
 {
 }
 
 shared_ptr<Shm_pool> Test_shm_pool_collection::create_shm_pool(size_t size)
 {
-  return create_shm_pool(m_name_generator(0 /* our name generator ignores it anyway */), size);
+  return create_shm_pool(m_pool_name_base.str(), size);
 }
 
-shared_ptr<Shm_pool> Test_shm_pool_collection::create_shm_pool(const string& name, size_t size)
+shared_ptr<Shm_pool> Test_shm_pool_collection::create_shm_pool(const string& name_base, size_t size)
 {
+  const auto id = detail::Shm_pool_offset_ptr_data_base::generate_pool_id();
+  const auto name = name_base + "_" + std::to_string(id);
   int fd = create_shm_object(name, size);
   if (fd == -1)
   {
@@ -64,8 +67,7 @@ shared_ptr<Shm_pool> Test_shm_pool_collection::create_shm_pool(const string& nam
     return nullptr;
   }
 
-  shared_ptr<Shm_pool> pool = make_shared<Shm_pool>(detail::Shm_pool_offset_ptr_data_base::generate_pool_id(),
-                                                    name, address, size, fd);
+  shared_ptr<Shm_pool> pool = make_shared<Shm_pool>(id, name, address, size, fd);
   EXPECT_TRUE(register_shm_pool(pool));
 
   return pool;
@@ -74,7 +76,8 @@ shared_ptr<Shm_pool> Test_shm_pool_collection::create_shm_pool(const string& nam
 shared_ptr<Shm_pool> Test_shm_pool_collection::open_shm_pool(const string& name, size_t size, bool write_enabled)
 {
   // Open for write as we are testing shmMap command to ensure that it is providing the proper restriction
-  int fd = shm_open(name.c_str(), O_RDWR, 0);
+  const string shm_name = '/' + name;
+  int fd = shm_open(shm_name.c_str(), O_RDWR, 0);
   if (fd == -1)
   {
     FLOW_LOG_WARNING("Could not open shared memory name '" << name << "': " << strerror(errno));
@@ -100,7 +103,8 @@ bool Test_shm_pool_collection::remove_shm_pool(const shared_ptr<Shm_pool>& shm_p
 
 int Test_shm_pool_collection::create_shm_object(const string& name, size_t size) const
 {
-  int fd = shm_open(name.c_str(), (O_RDWR | O_CREAT | O_EXCL), 0644);
+  const string shm_name = '/' + name;
+  int fd = shm_open(shm_name.c_str(), (O_RDWR | O_CREAT | O_EXCL), 0644);
   if (fd == -1)
   {
     FLOW_LOG_WARNING("Could not create SHM object '" << name << "': " << strerror(errno));
@@ -123,7 +127,8 @@ int Test_shm_pool_collection::create_shm_object(const string& name, size_t size)
 
 bool Test_shm_pool_collection::remove_shm_object(const string& name) const
 {
-  if (shm_unlink(name.c_str()) != 0)
+  const string shm_name = '/' + name;
+  if (shm_unlink(shm_name.c_str()) != 0)
   {
     FLOW_LOG_WARNING("Error occurred when removing shared memory name '" << name << "': " << strerror(errno));
     return false;

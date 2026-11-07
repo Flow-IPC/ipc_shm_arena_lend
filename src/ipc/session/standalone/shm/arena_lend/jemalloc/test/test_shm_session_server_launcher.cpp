@@ -27,12 +27,14 @@
 #include "ipc/test/test_common_util.hpp"
 #include <ipc/common.hpp>
 #include <flow/test/test_common_util.hpp>
+#include <gtest/gtest.h>
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wunused-result"
 #pragma GCC diagnostic ignored "-Wnarrowing"
-#include <boost/process/system.hpp>
+// Boost.Process v1 (v2 is the default from Boost 1.88; the un-versioned v1 headers are gone from 1.90 on).
+#include <boost/process/v1/system.hpp>
 #pragma GCC diagnostic pop
-#include <boost/process/io.hpp>
+#include <boost/process/v1/io.hpp>
 
 using std::ostream;
 using std::string;
@@ -65,13 +67,15 @@ bool Test_shm_session_server_launcher::async_run(Object_type object_type,
     Lock lock(m_mutex);
     if (m_is_running)
     {
-      FLOW_LOG_WARNING("Already running; ignoring request to run");
+      /* No caller has a legitimate reason to double-launch (each test constructs a fresh launcher), and none
+       * checks our return value; so make this mistake loud rather than silently ignored. */
+      ADD_FAILURE() << "Test_shm_session_server_launcher: already running; ignoring request to run.";
       return false;
     }
     m_is_running = true;
   }
 
-  namespace bp = boost::process;
+  namespace bp = boost::process::v1;
 
   FLOW_LOG_INFO("Executing: [" << Test_shm_session_server::get_server_path() << "]");
 
@@ -102,7 +106,19 @@ bool Test_shm_session_server_launcher::async_run(Object_type object_type,
                        result = Result::S_UNKNOWN_FAILURE;
                      }
 
-                     FLOW_LOG_INFO("Translated exit code [" << exit_code << "] to result [" << result << "]");
+                     if (result == Result::S_SUCCESS)
+                     {
+                       FLOW_LOG_INFO("Translated exit code [" << exit_code << "] to result [" << result << "]");
+                     }
+                     else
+                     {
+                       FLOW_LOG_WARNING("Server process exited with failure: exit code [" << exit_code <<
+                                        "] => result [" << result << "]. If the exit code matches no Result "
+                                        "enum value, the process likely exited abnormally -- e.g., a small "
+                                        "value is typically the killing signal number (11 = SIGSEGV). The "
+                                        "process' own log output (stdout/stderr) appears interleaved with "
+                                        "ours, above.");
+                     }
 
                      {
                        Lock lock(m_mutex);

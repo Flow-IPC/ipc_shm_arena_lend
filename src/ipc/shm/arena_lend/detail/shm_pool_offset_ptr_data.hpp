@@ -22,26 +22,28 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
 #include "ipc/common.hpp"
+#include "ipc/shm/arena_lend/detail/arena_lend_fwd.hpp"
 #include <flow/util/util.hpp>
 #include <boost/interprocess/sync/named_mutex.hpp>
+#include <limits>
+#include <type_traits>
 
-/**
- * Segregated private stuff for ipc::shm::arena_lend.
- * @todo We don't really do `detail` sub-namespaces anywhere else, so maybe don't do it here or do do it all over?
- */
-namespace ipc::shm::arena_lend::detail
-{
+/// @cond
+// -^- Doxygen, please ignore the following.  It's undef-ed later anyway.
 
-// Types.
-
+// 1 if and only if the compiler is gcc proper (not clang, which also defines `__GNUC__`); keys pragmas below.
 #if defined(__GNUC__) && !defined(__clang__)
 #  define IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER 1
 #else
 #  define IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER 0
 #endif
+
+// -v- Doxygen, please stop ignoring.
+/// @endcond
 
 /* gcc (gcc-9 at least) is pretty paranoid about some bit-field paths below and gives some *very* cryptic warnings
  * that amount to maybe-uninitialized.  The code appears solid, so let's bypass it temporarily. */
@@ -49,6 +51,12 @@ namespace ipc::shm::arena_lend::detail
 #  pragma GCC diagnostic push
 #  pragma GCC diagnostic ignored "-Wmaybe-uninitialized"
 #endif
+
+/// Segregated private stuff for ipc::shm::arena_lend.
+namespace ipc::shm::arena_lend::detail
+{
+
+// Types.
 
 /**
  * Parameterization-independent aspects of Shm_pool_offset_ptr_data segregated in non-template base.  In terms of
@@ -63,8 +71,8 @@ namespace ipc::shm::arena_lend::detail
  * unsigned number, the MSB is called bit 63, while the LSB is bit 0.
  *
  * In all the surrounding code endianness is intentionally not a factor:
- * We treat multi-byte things as numbers, not individual bytes; so for example `uint64_t n = 0x0001020304050607ull` is
- * stored in memory as `07 06 05 04 03 02 01 00`; but in code we might do `n & 0xff` to isolate the LS-byte and indeed
+ * We treat multi-byte things as numbers, not individual bytes; so, e.g., `uint64_t n = 0x0001'0203'0405'0607ull` is
+ * stored in memory as `07 06 05 04 03 02 01 00`; but in code we might do `n & 0xFF` to isolate the LS-byte and indeed
  * get `0x07`.  (Or we might use a bit-field for the same purpose, but disregard that here.)  We do *not* in this
  * code do something like `reinterpret_cast<uint8_t*>(&n)[7]` (which would be
  * wrong; in this likely-little-endian system `[0]` would be correct); it would be an unnecessary layer of
@@ -85,14 +93,28 @@ namespace ipc::shm::arena_lend::detail
 class Shm_pool_offset_ptr_data_base
 {
 public:
+  // Constants.
+
+  /**
+   * # of bits in a pool offset (determines ceiling on size of pool; but note #pool_offset_t signedness-or-not
+   * is a factor).  It is public (within `detail` though), as certain calculations involving pool max sizes and such
+   * might need to use this value.
+   */
+  static constexpr unsigned int S_N_POOL_OFFSET_BITS = 32;
+
   // Types.
 
   /**
    * Pool offset type.  Outside of Shm_pool_offset_ptr_data no entity can request a pool larger than what
    * this can index.
    *
+   * @note Maintenance/context: The width and signedness of Shm_pool_offset_ptr_data_base::pool_offset_t
+   *       determines, as of this writing, the value to which SHM-jemalloc elsewhere sets the
+   *       jemalloc per-arena option `retain_grow_limit`, having to do with limiting the growth of vaddr areas.
+   *       Calling your attention to this, as it is a subtle effect that might affect something unexpectedly.
+   *
    * ### Impl: Why 32-bit width chosen for `pool_offset_t` ###
-   * Per Shm_pool_offset_ptr_data doc header impl discussion, it must fit into #m_rep_t in addition to 1
+   * Per Shm_pool_offset_ptr_data doc header impl discussion, it must fit into #rep_t in addition to 1
    * selector bit and #pool_id_t.  We choose the full 32 LSB (of 64-bit #rep_t) to be #pool_offset_t; allowing
    * for comfy and round maximally-2-or-4GiB-sized pools.  32 LSB also synergizes with #diff_t.
    *
@@ -105,7 +127,7 @@ public:
    * type-wise (#pool_offset_t is propagated as the offset-type alias all over the code).  `to_address()`, having
    * looked up the pool base vaddr `base` (internally a `uint64_t` thing), will now do the following depending
    * on our decision.
-   *   - If unsigned: it will add an overflowed 32-bit positive 0xffffffff (~2 billion) to the `uint64_t` base and
+   *   - If unsigned: it will add an overflowed 32-bit positive 0xFFFF'FFFF (~4 billion) to the `uint64_t` base and
    *     return that; and we will return that in turn from `get()`.  That is it'll return some arbitrary location
    *     in vaddr space.
    *   - If signed: it will subtract 1 and return that.  That is it will return a somewhat less arbitrary location
@@ -129,27 +151,23 @@ public:
    */
   using pool_offset_t = int32_t;
 
-  /**
-   * Pool ID type.  Outside of Shm_pool_offset_ptr_data you must use generate_pool_id() to generate new ones.
-   *
-   * ### Impl: Why `uint32_t` was chosen ###
-   * Per Shm_pool_offset_ptr_data doc header impl discussion, it must fit into #m_rep_t in addition to 1
-   * selector bit and #pool_offset_t.  We've chosen 32 LSB of 64-bit #rep_t to be #pool_offset_t; so that
-   * leaves 31 bits; 32 bits is the smallest type available to hold a 31-bit unsigned number.
-   */
-  using pool_id_t = uint32_t;
+  /// Pool ID type alias.  Please see detail::pool_id_t doc header for discussion as to the chosen bit width.
+  using pool_id_t = detail::pool_id_t;
 
   /**
    * Analogous to `difference_type` in STL containers (but uses our naming conventions).
    *
    * ### Impl: Why `int32_t` was chosen ###
-   * Firstly `boost::offset_ptr` defaults to `int`; and we specifically require x86-64 architecture
-   * (see class Shm_pool_offset_ptr_data doc header); so `int` would be `int32_t`.  Secondly, as of this
-   * writing: for offset pointers, we've chosen the 32 LSB as the offset; and for raw pointers x86-64
+   * As of this writing: for offset pointers, we've chosen the 32 LSB as the offset; and for raw pointers x86-64
    * mandates 48 LSB as storing the vaddr.  The lesser is 32; so there you go.  (Note that it's normal
-   * to use the signed version of the size-type; e.g., `ptr_diff_t` is signed version of `size_t` normally;
+   * to use the signed version of the size-type; e.g., `ptrdiff_t` is signed version of `size_t` normally;
    * overflow can of course occur, still, but this is seen as the nature of the business we're in so to speak.)
-   */
+   *
+   * Secondarily Shm_pool_offset_ptr::difference_type as of this writing ~is `int`; and we specifically require
+   * x86-64 arch (see class Shm_pool_offset_ptr_data doc header); so `int` would be `int32_t`.  There is a to-do
+   * as of this writing, elsewhere, to eliminate the `Difference_type` template-param configurability that determines
+   * Shm_pool_offset_ptr::difference_type; in that case Shm_pool_offset_ptr::difference_type would directly be set
+   * to `diff_t` (and in practice remain `int32_t`). */
   using diff_t = int32_t;
 
   // Methods.
@@ -181,8 +199,23 @@ public:
    * Moreover we will wrap-around having reached the max 31-bit number, back to 1 (0 is special and shall not
    * be used).  If by some incredible miracle we actually do reach this overflow condition, the chances that
    * that the wrapped-around-to-processes are still around/relevant = virtually nil.  So even that should work.
+   *
+   * @return See above.
    */
   static pool_id_t generate_pool_id();
+
+  /**
+   * The max size of a SHM-pool such that any offset into it -- including the one-past-the-last-byte offset (e.g.,
+   * an `end()` iterator of a buffer at the tail of the pool) -- is representable as #pool_offset_t.
+   * Any SHM-pool-creating code whose pools may be pointed-into by Shm_pool_offset_ptr_data must not exceed it;
+   * an offset past #pool_offset_t range would be silently truncated (there is intentionally no runtime check on
+   * that perf-critical path).
+   *
+   * It is a page (4Ki) short of the precise max, as slack.
+   *
+   * @return See above.
+   */
+  static constexpr size_t max_pool_size();
 
 protected:
   // Types.
@@ -207,14 +240,6 @@ protected:
    */
   struct Offset_ptr_rep
   {
-    // Constants.
-
-    /**
-     * # of bits in #m_pool_offset (determines ceiling on size of pool; but note #pool_offset_t signedness-or-not
-     * is a factor).
-     */
-    static constexpr unsigned int S_N_POOL_OFFSET_BITS = 32;
-
     // Data.  In reverse bit order as @noted below!
 
     /**
@@ -283,7 +308,7 @@ protected:
     /**
      * Either 0 (raw or null pointer; if all other bits are also 0, then do not use the other bit members) or 1
      * (do not use the other bit members).  When converting to a canonical `void*`: leave the rest of the
-     * bits alone; but set this one to equal #m_ext_sign_msg (the next LSB).
+     * bits alone; but set this one to equal #m_ext_sign_msb (the next LSB).
      *
      * @note With gcc/clang/x64-64 this is listed *last*, because it is the *most* significant datum.
      *       The fields are thus in reverse order of bit order.
@@ -354,6 +379,8 @@ private:
  * and so on.  One can think of us implementing the core of `uint8_t*` only (conceptually speaking);
  * as opposed to a `T*` parameterized on `T`.
  *
+ * The requirements for `Repository::to_address()` and `Repository::from_address()` are below, so look for that.
+ *
  * Implementation design
  * ---------------------
  * ### Pointer tagging scheme ###
@@ -365,15 +392,26 @@ private:
  *     pool, off the aforementioned base vaddr, in bytes).  The global table is `Repository_type` template
  *     parameter and contains:
  *       - `static void* to_address(pool_id_t pool_id, pool_offset_t pool_offset)`: Get vaddr from the 2 pointer data
- *         (a/k/a *handle*).  Returning null implies the input args are corrupt/wrong.
+ *         (a/k/a *handle*).  If `pool_id` is not a known pool, undefined behavior (UB).  (We do not assume
+ *         it will return null, and your impl may be a bit faster if it skips the check and lets the UB freak flag fly.)
+ *         - (As of this writing `Borrower_shm_pool_collection_repository` and `Owner_shm_pool_repository` both
+ *           yield UB.)
+ *         - `pool_offset` may be negative or exceed pool size; this is *not* UB: `to_address()` shall yield
+ *           the out-of-pool-bounds vaddr.
  *       - `static void from_address(const void*, pool_id_t& pool_id, pool_offset_t& pool_offset)`: The opposite.
- *         Sets `pool_id = 0` (a special invalid ID), if the input `void*` is not in a SHM-pool.
+ *         - If #S_CAN_STORE_RAW_PTR template parameter is `true`:
+ *           - Sets `pool_id = 0` (a special invalid ID), if the input `void*` is not in a SHM-pool.
+ *         - Otherwise:
+ *           - Allowed to yield UB, if the input `void*` is not in a SHM-pool.
+ *             Then our subsequent get() also yields UB.
+ *             - (As of this writing `Borrower_shm_pool_collection_repository` yields UB.)
+ *           - Allowed to set `pool_id = 0` instead as well.  Then our get() yields null to try to contain UB entropy.
  *   - Alternatively, for the case where a datum is located outside any SHM pool (perhaps on the stack),
  *     so in particular `from_address()` would yield `pool_id == 0`, it instead stores a raw vaddr.
- *     - Depending on the compile-time situation this alternative may be disallowed (`CAN_STORE_RAW_PTR`
+ *     - Depending on the compile-time situation this alternative may be disallowed (#S_CAN_STORE_RAW_PTR
  *       template parameter is `false`).  In particular in the shm::arena_lend design that is the case on the borrower
  *       side (when interpreting a data structure created by another process and transmitted to -- borrowed
- *       by -- this one).
+ *       by -- this one).  (As of this writing `Borrower_shm_pool_collection_repository` is this way in particular.)
  *     - We call this (in this context) a *raw pointer*; whereas otherwise it is an *offset pointer*.
  *       - (Note that `boost::offset_ptr`, while serving a similar role to our offset pointer, is not the same
  *         thing; by using the offset-versus-`this` technique it can represent both in-SHM and raw pointers
@@ -417,7 +455,7 @@ private:
  *     - Now we have 63 bits to store the pool ID and pool offset.  We can make various decisions here about
  *       how to split up that real estate; see Shm_pool_offset_ptr_data_base for the decisions made.
  *       - However: The pool ID must never be zero.  (Offset certainly can.)  This is a reserved value which
- *         `Repository_type::from_pointer()` can efficiently use to indicate not-found-in-any-SHM-pool condition.
+ *         `Repository_type::from_address()` can efficiently use to indicate not-found-in-any-SHM-pool condition.
  *
  * ### Bit fields and type-punning versus shift/AND/OR/NOT ###
  * In the functions of this class we need to access individual bits and/or bit sequences (interpreted as numbers
@@ -468,9 +506,10 @@ private:
  *         The shared memory pool repository type that can turn an offset-pointer *handle* (as represented by
  *         pool ID + pool offset pair) into the vaddr per the present shm::arena_lend-compliant process (a `void*`);
  *         and vice versa.  It shall have the 2 `static` APIs shown above, `to_address()` and `from_address()`.
+ *         See details above regarding their expected behaviors.
  * @tparam CAN_STORE_RAW_PTR
  *         Whether a `*this` is allowed to represent a vaddr that is neither null nor belonging to any SHM-pool
- *         registered in the global Repository_type at the time of construction of a `*this` from a `void*`.
+ *         registered in the global `Repository_type` at the time of construction of a `*this` from a `void*`.
  *         If `true` in that event, then a raw pointer shall be stored; if `false`, then null is stored (but
  *         unless user code checks for this rather odd possibility, in practice subsequent undefined behavior
  *         is likely).
@@ -489,7 +528,7 @@ public:
   using Repository = Repository_type;
 
   /// Short-hand for template parameter `CAN_STORE_RAW_PTR`; may be useful for generic programming.
-  static constexpr bool S_RAW_OK = CAN_STORE_RAW_PTR;
+  static constexpr bool S_CAN_STORE_RAW_PTR = CAN_STORE_RAW_PTR;
 
   // Constructors/destructor.
 
@@ -497,8 +536,13 @@ public:
   Shm_pool_offset_ptr_data();
 
   /**
-   * Construct from vaddr.  If #S_RAW_OK is `false`, and `p` is neither `nullptr` nor belongs to #Repository, then
-   * acts as if `p` is `nullptr` after all.
+   * Construct from vaddr.
+   *
+   * Corner case: If #S_CAN_STORE_RAW_PTR is `false`, and `p` is neither `nullptr` nor belongs to #Repository,
+   * then formally behavior is undefined.  Practically:
+   *   - If `Repository::from_address()` yields `pool_id = 0` in this situation, then we shall act as if
+   *     `p == nullptr` (we become null).
+   *   - If it yields UB in this situation, then we yield UB also.
    *
    * @param p
    *        See above.
@@ -516,10 +560,16 @@ public:
   /**
    * Copy constructor from object whose type is the opposite w/r/t whether it can store a raw pointer.
    *
+   * Corner case: If #S_CAN_STORE_RAW_PTR is `false`, and `src.is_raw() == true`, then
+   * this ctor shall yield `this->to_bool() == false`.  Or in regular words: if our type is such that we
+   * can only represent in-SHM addresses, and `src` stores a raw address, then we cannot (safely) represent
+   * the address in `src` and will represent null instead.  (We are not aware of a use-case for such a
+   * conversion to be successful and prefer to deterministically result in null.)
+   *
    * @param src
    *        Source object.
    */
-  Shm_pool_offset_ptr_data(const Shm_pool_offset_ptr_data<Repository_type, !S_RAW_OK>& src);
+  Shm_pool_offset_ptr_data(const Shm_pool_offset_ptr_data<Repository_type, !S_CAN_STORE_RAW_PTR>& src);
 
   // Methods.
 
@@ -550,24 +600,28 @@ public:
    * If null is actually stored, as via default ctor, ctor from `nullptr`, or assignment of either, then we
    * return `nullptr` as required.  Now assume this is not the case.
    *
-   * If `S_RAW_OK == false`:
+   * If `S_CAN_STORE_RAW_PTR == false`:
    *   - Recall that internally a *handle* is stored: pool ID, offset into that pool.
-   *     - If this pool does not exist, we return `nullptr`.  Implications:
+   *     - If this pool does not exist, *and* `Repository::to_address()` detects this: we return `nullptr`.
+   *       Implications:
    *       - If one dereferences it, behavior is obviously undefined.  This is desirable and likely similar to
    *         what would occur with dereferencing a corrupt or (obviously) null regular pointer.
    *       - If one compares to it such as the `.end()` scenario below, they're likely to get some behavior
    *         they don't expect -- but do they expect, if the system/they allowed the pool to get unmapped
    *         while running algorithms on related data?  Not our problem.
+   *       - Even though we do this, formally it is UB.  We are just trying to contain the entropy somewhat.
+   *     - If this pool does not exist, *and* `Repository::to_address()` yields UB as a result:
+   *       we too yield UB.
    *     - If this pool does exist, but the offset is out of bounds, we will return the out-of-bounds
    *       address based on the simple `base + offset` formula.  If offset is negative, we'll return pre-pool
    *       vaddr; if offset is positive and equals or exceeds pool size, we'll return the post-pool vaddr.
    *       Reason: See #pool_offset_t doc header.
    *
-   * If `S_RAW_OK == true`:
-   *   - If `is_raw()`: See above `!S_RAW_OK` case.  Same deal here.
+   * If `S_CAN_STORE_RAW_PTR == true`:
+   *   - If `is_raw()`: See above `!S_CAN_STORE_RAW_PTR` case.  Same deal here.
    *   - Else: We return the stored address (in canonical form).
    *
-   * In short: get() will *not* yield `nullptr` for various out-of-bounds situations.  `bool()` conversion
+   * In short: get() will *not* yield `nullptr` for various out-of-bounds situations.  to_bool() conversion
    * will act consistently with this.
    *
    * @return See above.
@@ -575,20 +629,91 @@ public:
   void* get() const;
 
   /**
-   * Returns `false` if and only if `get() == nullptr`.  Please see get() doc header for notes regarding
-   * when `nullptr` is, and is not, returned (this may be subtler than one might assume).
+   * Returns `false` if and only if `get() == nullptr` (assuming `*this` is valid; otherwise
+   * formally undefined behavior; but see below).
+   *
+   * ### Corner case ###
+   * The caveat, "assuming `*this` stores a valid pointer," refers to the the following case (which implies
+   * `*this` is already in bug-somewhere territory): If
+   *   - `*this` refers to an offset, rather than raw, pointer (always the case if `S_CAN_STORE_RAW_PTR == false`), and
+   *   - somehow `*this` refers to a pool never/no longer in #Repository, and
+   *   - `Repository::to_address()` given such invalid args returns null rather than engaging in UB, then:
+   *
+   * `get()` would return null and therefore `get() == nullptr` would return `true`; whereas to_bool() as
+   * implemented -- for performance never actually invoking the (relatively expensive) `get()`/`to_address()` --
+   * will nevertheless return `false`.  Again, this entire scenario is predicated on a situation that, in the
+   * first place, means something already went wrong.  We are just pointing out to_bool(), for performance,
+   * does not actually call get(), and therefore "if and only if `get() == nullptr`" assumes no ill scenario.
    *
    * @return See above.
    */
-  explicit operator bool() const;
+  bool to_bool() const;
+
+  /**
+   * Returns `true` if and only if `get() == other.get()`, albeit with certain acceptable exceptions and a
+   * better perf profile in practice.  The purpose is to provide a faster implemention of `==` and `!=` for
+   * Shm_pool_offset_ptr.  (Flip the result of equals() to get `!=`.)
+   *
+   * Formal contract is as noted above; and the exceptions were we might not return `.get() == other.get()` are
+   * as follows.  Assume `*this` is P1, `other` is P2.
+   *   - If P1 and P2 are non-null (`.to_bool() == true`) and non-raw (`.is_raw() == false`; always the case
+   *     if #S_CAN_STORE_RAW_PTR is `false`); *and*
+   *   - P1's pool is different from P2's pool; *and*
+   *   - the offset for P1 or P2 or each of them points to outside the aforementioned pool
+   *     (hence offset is either negative or past pool's size); *then*:
+   *   - we shall return `false` (not-equal), even though in reality `get() == other.get()` is possible.
+   *   - We consider this a pathological case worth the perf gains realized.
+   *
+   * @param other
+   *        Thing against which to compare.
+   * @return See above.
+   */
+  bool equals(Shm_pool_offset_ptr_data other) const;
+
+  /**
+   * Returns `true` if and only if `get() < other.get()`.  The purpose is to provide a faster implemention of
+   * `<` and `>=` for Shm_pool_offset_ptr.  (Flip the result of less_than() to get `>=`.)
+   *
+   * @param other
+   *        Thing against which to compare.
+   * @return `get() < other.get()`.
+   */
+  bool less_than(Shm_pool_offset_ptr_data other) const;
+
+  /**
+   * Returns `true` if and only if `get() > other.get()`.  The purpose is to provide a faster implemention of
+   * `>` and `<=` for Shm_pool_offset_ptr.  (Flip the result of greater_than() to get `<=`.)
+   *
+   * @param other
+   *        Thing against which to compare.
+   * @return `get() > other.get()`.
+   */
+  bool greater_than(Shm_pool_offset_ptr_data other) const;
+
+  /**
+   * Returns (essentially) `get()` minus `other.get()` in bytes; so (assuming no overflow issues) the value `N`
+   * such that `other.increment(N)` would make `other.get() == get()`.
+   *
+   * @note The return type is #diff_t which, while also signed, is narrower than `ptrdiff_t`.  This method could
+   *       be, in and of itself, changed to return `ptrdiff_t` which would avoid some overflow possibilities.
+   *       That just wouldn't be all that useful, in context of how we're used: to implement the core of
+   *       Shm_pool_offset_ptr pointer-minus-pointer op; as increment() implements the core of pointer-`+=`.
+   *       (increment() takes `diff_t` which is an honest limitation given that #pool_offset_t is narrower than
+   *       the full #rep_t.  We don't have such a limitation, but we're on the same team.)
+   *
+   * @param other
+   *        An object.
+   * @return See above.
+   */
+  diff_t distance_from(Shm_pool_offset_ptr_data other) const;
 
   /**
    * Increments `*this` by a number of bytes (which can be positive, negative, or zero).  As explained in
    * get() and #pool_offset_t doc headers this is maximally permissive, including when essentially nonsensical
-   * get() return value might result.  Summary of edge cases including the aforementioned ones but limited to them:
+   * get() return value might result.  Summary of edge cases including the aforementioned ones but not limited to them:
    *   - If `!*this` legitimately (we are null due to being so assigned, not due to the pool referred-to within
    *     becoming invalid), this will:
-   *     - (if #S_RAW_OK is `true`) act similarly to native `+=` (become numerically equal to the bits in `bytes`);
+   *     - (if #S_CAN_STORE_RAW_PTR is `true`) act similarly to native `+=` (become numerically = the bits in `bytes`);
    *     - (else) no-op.  So don't do that.  Really, though, it would be ill-advised to do it with a raw pointer too.
    *   - If `*this` is a legit offset pointer, meaning it refers to an existing pool, and incrementing the stored
    *     offset by `bytes` (which might make it smaller) places `*this` before or past the pool boundary: We do so.
@@ -597,7 +722,7 @@ public:
    *   - If arithmetic overflow occurs:
    *     - This function will not invoke undefined behavior (crash or similar).
    *     - get() will not either.
-   *     - However no guarantees() are made as to the value get() would return numerically.  Informally speaking an
+   *     - However no guarantees are made as to the value get() would return numerically.  Informally speaking an
    *       attempt is made to hew as close to native pointer behavior as possible, depending on is_raw(), but
    *       it is a best effort only.  Informally it is generally ill-advised to rely on any particular behavior
    *       at that point.
@@ -616,8 +741,46 @@ private:
   using Offset_ptr_rep = Base::Offset_ptr_rep;
   /// Short-hand from base.
   using Raw_ptr_rep = Base::Raw_ptr_rep;
+  /// Type of `m_rep`.  @see #m_rep.
+  using Representation = union
+  {
+    /// The full raw bits.
+    rep_t m_rep;
+    /// The bits viewed in the offset-ptr form.
+    Offset_ptr_rep m_offset_ptr_rep;
+    /// The bits viewed in the raw-ptr form.
+    Raw_ptr_rep m_raw_ptr_rep;
+  };
+
+  // Methods.
+
+  /**
+   * Helper, surely inlined with any decent optimizer, that returns what get() would return if
+   * #m_rep equalled the supplied value, and its MSB were 0, but at least one other bit were 1.  In plainer language:
+   * we know it's not null, and its MSB indicates a raw pointer; this returns the valid (canonical)
+   * pointer represented.
+   *
+   * Must not be compiled unless #S_CAN_STORE_RAW_PTR is `true`.
+   *
+   * @param rep
+   *        Would-be #m_rep; does not equal zero; but MSB but be zero; or UB results.
+   * @return What get() would return given `m_rep == rep`.
+   */
+  static void* get_as_raw(Representation rep);
+
+  /**
+   * Helper a-la get_as_raw() but given only the pre-condition that `rep` is not zero (does not represent null).
+   *
+   * @param rep
+   *        See above.
+   * @return See above.
+   */
+  static void* get_if_not_null(Representation rep);
 
   // Friends.
+
+  /// Friend of this class (cross-`CAN_STORE_RAW_PTR` copy ctor needs access to `m_rep`).
+  friend class Shm_pool_offset_ptr_data<Repository_type, !S_CAN_STORE_RAW_PTR>;
 
   /// Friend of this class.
   template<typename Repository_type2, bool CAN_STORE_RAW_PTR2>
@@ -637,30 +800,23 @@ private:
    *      - get() must copy `m_rep.m_rep` but before returning this copy ensure its MSB equals `m_ext_sign_msb`.
    *        In other words if and only if `Raw_ptr_rep::m_ext_sign_msb` is 1, the MSB in the copy shall be set to 1.
    *
-   * If `!S_RAW_OK`, then (corruption/undefined behavior aside) in step 2 `m_selector_offset_else_raw == 1` always.
+   * If `!S_CAN_STORE_RAW_PTR`, then (corruption/undefined behavior aside) in step 2 `m_selector_offset_else_raw == 1`
+   * always.
    */
-  union { rep_t m_rep; Offset_ptr_rep m_offset_ptr_rep; Raw_ptr_rep m_raw_ptr_rep; } m_rep;
+  Representation m_rep;
 }; // class Shm_pool_offset_ptr_data
 
-// Free functions.
-
-/**
- * Prints string representation of the given `Shm_pool_offset_ptr_data` to the given `ostream`.
- *
- * @relatesalso Shm_pool_offset_ptr_data
- *
- * @param os
- *        Stream to which to write.
- * @param val
- *        Object to serialize.
- * @return `os`.
- */
-template<typename Repository_type, bool CAN_STORE_RAW_PTR>
-std::ostream& operator<<(std::ostream& os,
-                         Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR> val);
-
+// Free functions: in *_fwd.hpp.
 
 // Template implementations.
+
+constexpr size_t Shm_pool_offset_ptr_data_base::max_pool_size() // Static.
+{
+  constexpr size_t SLACK_SZ = 4 * 1024;
+  constexpr unsigned int N_OFFSET_MAGNITUDE_BITS
+    = S_N_POOL_OFFSET_BITS - (std::numeric_limits<pool_offset_t>::is_signed ? 1 : 0);
+  return (size_t(1) << N_OFFSET_MAGNITUDE_BITS) - SLACK_SZ;
+}
 
 template<typename Repository_type, bool CAN_STORE_RAW_PTR>
 Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_ptr_data() :
@@ -687,7 +843,7 @@ Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_pt
 
   if (pool_id_or_0 == 0)
   {
-    if constexpr(S_RAW_OK)
+    if constexpr(S_CAN_STORE_RAW_PTR)
     {
       /* This is slightly subtle; if one revisits the class doc header, one sees that, in order for
        * raw-pointer get() to at most merely need to flip one bit and otherwise return the result as-is, we
@@ -712,10 +868,12 @@ Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_pt
 
       // Set MSB to 0.  Operate on bit-field for clarity and probably speed (see class doc header for discussion).
       m_rep.m_raw_ptr_rep.m_selector_offset_else_raw = rep_t(0);
-    } // if constexpr(S_RAW_OK)
-    else // if constexpr(!S_RAW_OK)
+    } // if constexpr(S_CAN_STORE_RAW_PTR)
+    else // if constexpr(!S_CAN_STORE_RAW_PTR)
     {
-      // Just leave it as null and pray for happiness (as promised).
+      /* Just leave it as null and pray for happiness (as promised).
+       * Reminder: Repository::from_address() is allowed to behave this way, in which case we do this;
+       * and it is allowed to yield UB; then we yield UB. */
       m_rep.m_rep = 0;
     }
   } // if (!pool_id_or_0 == 0)
@@ -734,19 +892,50 @@ Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_pt
 
 template<typename Repository_type, bool CAN_STORE_RAW_PTR>
 Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_ptr_data
-  (const Shm_pool_offset_ptr_data<Repository_type, !S_RAW_OK>& src) :
-
-  Shm_pool_offset_ptr_data(src.get()) // @todo Can we do something more performant?
+  (const Shm_pool_offset_ptr_data<Repository_type, !S_CAN_STORE_RAW_PTR>& src)
 {
-#if 0 // Avoid the perf hit even from an assert().  Could enable when debugging perhaps.
-  /* We shouldn't be converting from a raw-allowing, raw pointer to an offset-only pointer, as a
-   * successful conversion wouldn't be expected and there isn't a use case to do this. -echan */
-  if constexpr(!S_RAW_OK)
+  /* The bit encoding for null (all zeros) and offset pointers (MSB=1, pool_id, pool_offset) is identical
+   * regardless of CAN_STORE_RAW_PTR.  So we can copy the bits directly for those cases, avoiding the double
+   * lookup that `Shm_pool_offset_ptr_data(src.get())` would incur (resolve to vaddr via to_address(), then
+   * from_address() back to pool_id/offset).
+   *
+   * The only case needing special handling: src is a raw pointer (non-null, MSB=0), and we are offset-only
+   * (!S_CAN_STORE_RAW_PTR).  See below. */
+
+  if constexpr(S_CAN_STORE_RAW_PTR)
   {
-    assert(((!src) || (!src.is_raw())) && "Conversion from raw pointer to offset-only pointer type.");
+    // offset-only -> raw-allowed: src can only be null or offset (never raw).  Both are valid as-is.
+    m_rep.m_rep = src.m_rep.m_rep;
   }
-#endif
-}
+  else
+  {
+    // raw-allowed -> offset-only: src can be null, offset, or raw.
+    if (src.is_raw())
+    {
+      /* src is raw (non-null, selector=0).  We cannot represent it.  We shouldn't be converting from a
+       * raw-allowing, raw pointer to an offset-only pointer, as a successful conversion wouldn't be expected,
+       * and there isn't a use case to do this, that we know of anyway.
+       *
+       * Since we cannot represent it, we store null as advertised.  (This is consistent with how the void* ctor
+       * handles not-in-a-pool addresses, if that could even be detected, when !S_CAN_STORE_RAW_PTR.)
+       *
+       * (One option -- which would mean changing our contract -- would be to essentially delegate to
+       * the void*-taking ctor, giving it src.get().  That is try Repository::from_address(); if it yields
+       * pool_id=0 then save null anyway; but otherwise yay, we found our representation as an offset-ptr after all.
+       * However that only makes our contract weirdly non-deterministic.  This raises a question: why does
+       * the void*-taking ctor do what it does then?  Answer: It is different, because it has only a raw ptr
+       * to begin with; it *must* do from_address() in the first place; from_address() is an outside force;
+       * if it happens to not explode, then we might as well also not-explode while formally promising and delivering
+       * UB.  Here, on the other hand, we don't have to call any such thing: We have `src` already as a
+       * Shm_pool_offset_ptr_data, same class template as *this; and src.is_raw() is a misuse of the API.) */
+      m_rep.m_rep = 0;
+    }
+    else
+    {
+      m_rep.m_rep = src.m_rep.m_rep; // null or offset pointer: bits are valid as-is.
+    }
+  }
+} // Shm_pool_offset_ptr_data::Shm_pool_offset_ptr_data(cross-type copy ctor)
 
 template<typename Repository_type, bool CAN_STORE_RAW_PTR>
 Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>&
@@ -754,46 +943,66 @@ Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>&
     = default;
 
 template<typename Repository_type, bool CAN_STORE_RAW_PTR>
-void* Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::get() const
+void* Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::get_as_raw(Representation rep) // Static.
 {
   // See the void* ctor and/or the class doc header; it should explain the following pretty well.  Keeping cmnts light.
 
-  // We suspect this is common enough to where doing this before any bit/bit-sequence access = overall optimization.
-  if (m_rep.m_rep == rep_t(0))
+  static_assert(S_CAN_STORE_RAW_PTR,
+                "This helper method is meaningless, unless it is possible to store raw vaddrs.  "
+                  "Granted, we are static, so it would still work algorithmically speaking; but "
+                  "this way protects from trying to call us in unqualified form for the wrong type at least.");
+
+#if 0 // Avoid the perf hit even from an assert().  Could enable when debugging perhaps.
+  assert((rep.m_offset_ptr_rep.m_selector_offset_else_raw == rep_t(0))
+         && "Precondition to helper method = the selector bit <=> raw.");
+#endif
+
+  if (rep.m_raw_ptr_rep.m_ext_sign_msb != rep_t(0))
   {
-    return nullptr;
+    rep.m_raw_ptr_rep.m_selector_offset_else_raw = rep_t(1);
   }
-  // else
+  return reinterpret_cast<void*>(rep.m_rep);
+}
+
+template<typename Repository_type, bool CAN_STORE_RAW_PTR>
+void* Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::get_if_not_null(Representation rep) // Static.
+{
+  /* See the void* ctor and/or the class doc header; it should explain the following pretty well.  Keeping cmnts light.
+   *
+   * Reminder: Pre-condition is: rep=/=zero, meaning we're not a null. */
 
   // Operate on bit-field for clarity and probably speed (see class doc header for discussion).
-  if constexpr(S_RAW_OK)
+  if constexpr(S_CAN_STORE_RAW_PTR)
   {
-    if (m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == rep_t(0))
+    if (rep.m_offset_ptr_rep.m_selector_offset_else_raw == rep_t(0))
     {
-      auto result_rep = m_rep;
-      if (result_rep.m_raw_ptr_rep.m_ext_sign_msb != rep_t(0))
-      {
-        result_rep.m_raw_ptr_rep.m_selector_offset_else_raw = rep_t(1);
-      }
-      return reinterpret_cast<void*>(result_rep.m_rep);
-    } // if (m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == rep_t(0))
-    // else if (m_rep.m_offset_ptr_rep.m_selector_offset_else_raw != rep_t(0)): Fall through.
-  } // if constexpr(S_RAW_OK)
-  else // if constexpr(!S_RAW_OK)
+      return get_as_raw(rep);
+    } // if (rep.m_offset_ptr_rep.m_selector_offset_else_raw == rep_t(0))
+    // else if (rep.m_offset_ptr_rep.m_selector_offset_else_raw != rep_t(0)): Fall through.
+  } // if constexpr(S_CAN_STORE_RAW_PTR)
+  else // if constexpr(!S_CAN_STORE_RAW_PTR)
   {
 #if 0 // Avoid the perf hit even from an assert().  Could enable when debugging perhaps.
-    assert((m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == rep_t(1))
+    assert((rep.m_offset_ptr_rep.m_selector_offset_else_raw == rep_t(1))
            && "How'd we reach such a state in 1st place?  Constructor shouldn't; increment() should not either.");
 #endif
   }
 
-  return Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id, m_rep.m_offset_ptr_rep.m_pool_offset);
-} // Shm_pool_offset_ptr_data::get()
+  // Per contract: if this yields null (pool not found), we return null.  If it yields UB, we yield UB.
+  return Repository::to_address(rep.m_offset_ptr_rep.m_pool_id, rep.m_offset_ptr_rep.m_pool_offset);
+} // Shm_pool_offset_ptr_data::get_if_not_null()
+
+template<typename Repository_type, bool CAN_STORE_RAW_PTR>
+void* Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::get() const
+{
+  // We suspect null is common enough to where checking it before any bit/bit-sequence access = overall optimization.
+  return (m_rep.m_rep == rep_t(0)) ? static_cast<void*>(nullptr) : get_if_not_null(m_rep);
+}
 
 template<typename Repository_type, bool CAN_STORE_RAW_PTR>
 bool Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::is_raw() const
 {
-  if constexpr(S_RAW_OK)
+  if constexpr(S_CAN_STORE_RAW_PTR)
   {
     // Suppose MSB = 0; if all other bits = 0 then null; if at least one is 1 then raw.  Otherwise neither.
     return (m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0))
@@ -801,16 +1010,469 @@ bool Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::is_raw() cons
   }
   else
   {
-    // Cannot be raw.
-    return false;
+    return false; // Cannot be raw.
   }
 }
 
 template<typename Repository_type, bool CAN_STORE_RAW_PTR>
-Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::operator bool() const
+bool Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::to_bool() const
 {
   return m_rep.m_rep != rep_t(0);
 }
+
+template<typename Repository_type, bool CAN_STORE_RAW_PTR>
+bool Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::equals(Shm_pool_offset_ptr_data other) const
+{
+  constexpr bool NO_RAW = !S_CAN_STORE_RAW_PTR;
+  constexpr bool RESULT_EQ = true; // Harder to have a brain-glitch this way, we've found.
+  constexpr bool RESULT_NE = false;
+
+  /* Consult doc header first, then come back here.  So: we could just `return get() == other.get()`, and we only
+   * do not, because we want higher perf than that.  However, as we reflected in doc header (which, to be fair,
+   * in this case is worded how it is *because of* the reasoning in this impl, less so the reverse), our gold
+   * standard for correctness is indeed `get() == other.get()`, *but* we are allowed to make exceptions when
+   * doing so (1) would lead to higher performance and (2) is defensible in practical terms (so, something like
+   * "in this logic branch we might not return `get == other.get()`, but it is OK because <practical reason>").
+   * So we'll do that kind of reasoning below.
+   *
+   * Since get() behavior matters for the "gold standard" of our behavior, we may at points rely on its exact
+   * impl; and that's fine; but remember one thing in particular: if we are not null (to_bool() == true), and
+   * !is_raw(), then `get() == Repository::to_address(m_pool_id, m_pool_offset)`, which in turn very specifically
+   * is:
+   *   - lookup base-vaddr by m_pool_id in (conceptual, actual impls may vary for perf reasons) map
+   *       [not found => undefined behavior (UB) => by our contract we don't care]
+   *   - add base-vaddr + m_pool_offset; return result
+   *       [result being before base-vaddr or past pool-end => *not* UB => we must handle it]
+   *
+   * The key question: How would we do better perf-wise than `get() == other.get()`?  After all if we can't,
+   * then might as well just return that.  Answer: If x is not null and !x.is_raw() (incidentally always the case
+   * if NO_RAW), then x.get() involves a map lookup of some kind.  Depending on Repository impl (and they do
+   * quite vary; as of this writing Borrower_shm_pool_collection_repository and Owner_shm_pool_repository are
+   * the two possibilities in Flow-IPC proper, and certainly their impls are quite different), at a minimum
+   * some map lookup must occur.  Conceivably there can also be locking.  In any case, the minimum case of a lock-free
+   * hash-map lookup *times two* may not sound "that bad," but consider that generally people are used to
+   * raw pointers, and with raw pointers there is *no* extra calculation; .get() would just yield the numeric
+   * value of the pointer.  A map-lookup is much slower.  Moreover we have seen production high-load environments
+   * in which .get()-due-to-ptr-equality-comparisons showed up as a processor hot spot.  (In that particular case
+   * it was due to a `for(a:b)` loop, `b` being an in-SHM vector; the comparison to b.end() meant many lookups.)
+   * So it's serious business.
+   *
+   * If we can avoid .get() -- or more precisely Repository::to_address() firstly and get_as_raw() as a distant
+   * second priority -- relying on only a few comparisons instead, then great.
+   *
+   * Spoiler alert: In the final analysis (by algorithm inspection, not necessarily empirically), the below
+   *   - reduces to a comparison of integers if !CAN_STORE_RAW_PTR; otherwise:
+   *   - reduces to same if they're indeed numerically equal (surely not uncommon); otherwise:
+   *   - reduces to a handful of 0/bit/equality comparisons in most other situations, by inducing a
+   *     likely-safe exception to the "gold standard";
+   *   - worst-case, in an atypical situation, is similar to `.get() == other.get()`. */
+
+  const auto& other_rep = other.m_rep;
+
+  if (m_rep.m_rep == other_rep.m_rep)
+  {
+    return RESULT_EQ; // Bitwise equal => get()s would be obviously also equal.
+  }
+  // else
+
+  if constexpr(NO_RAW)
+  {
+    return RESULT_NE;
+    /* Let's prove that is correct.  Analyzing possibilities:
+     *   - If we are null (!to_bool()), then other must have equal value for EQ, but it is different, so NE is right.
+     *   - Same but flipped.
+     *   - Hence neither is null; and since NO_RAW, m_pool_id/offset and other.m_pool_id/offset are all
+     *     valid and in-use values.  So:
+     *   - If m_pool/offset and other.m_pool_id/offset *were* pairwise equal, then it would result in EQ.
+     *     But `m_rep != other_rep`, so that's not the case.  So, result must be NE, unless...
+     *   - ...there is some way for m_pool/offset and other.m_pool_id/offset to *not* be pairwise equal, yet
+     *     for `get() == other.get()`.  Is there?  Let's contemplate the possibilities.  Assume
+     *     they're not pairwise equal, and result is EQ: `get() == other.get()`.
+     *   - If `m_pool_id == other.m_pool_id`, then EQ can only result if `m_pool_offset == other.m_pool_offset`;
+     *     but we've established non-pairwise-equality.  So `m_pool_id != other.m_pool_id`.
+     *   - If m_offset and other.m_pool_offset are both within-pool-bounds (not negative, not past respective
+     *     pool sizes), then get() and other.get() are within separate pools.  Pools do not overlap.
+     *     Therefore one, or both, of `m_pool_offset`s are outside their respective pool bounds.
+     *   - The answer is yes.  E.g., say m_pool_offset is 0, while other.m_pool_offset is the distance, or
+     *     negative distance (depending on whether our pool or `other` pool comes first by vaddr value),
+     *     between our base-vaddr and `other` base-vaddr -- even if that's billions of bytes apart.  In that
+     *     case `get() == other.get()` -- EQ -- but we shall return NE.
+     *
+     * We consider this to be a reasonable exception to the "gold standard" (`get() == other.get()`) and thus
+     * in our contract pointed it out.  Why?  Answer: It is a pathological case.  In practice it's difficult to
+     * conceive of a situation where this would naturally come about without trying to make it happen.  It isn't
+     * 100% inconceivable, but we document it and live with the unlikely bad consequences.  It is worth
+     * not having to do get() here.  (Though, at least it would've already correctly returned EQ on bitwise
+     * equality.) */
+  } // if constexpr(NO_RAW)
+  else // if constexpr(CAN_STORE_RAW_PTR)
+  {
+    /* The below could be written as follows, but we unwind (in admittedly relatively ugly fashion) ~everything to
+     * do as little recalculating as possible, making it all very explicit.  Overkill?  Possibly?  Maintenance risk?
+     * A bit, probably.  All in all though might be worthwhile given how paranoid about perf we are trying to be. */
+#if 0
+    return ((!to_bool()) || (!other.to_bool()) || (is_raw() == other.is_raw()))
+             ? RESULT_NE;
+             : (get() == other.get());
+#else // The actual code then:
+    if (m_rep.m_rep == rep_t(0)) { return RESULT_NE; } // `other` is not null.
+    if (other_rep.m_rep == rep_t(0)) { return RESULT_NE; } // *this is not null.
+    // else if (neither is null):
+
+    const bool is_raw = m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0);
+    if (is_raw
+        ==
+        (other_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0)))
+    {
+      return RESULT_NE;
+    }
+    // else if (neither is null) && (is_raw != other.is_raw())
+
+    return (is_raw ? (get_as_raw(m_rep)
+                      ==
+                      Repository::to_address(other_rep.m_offset_ptr_rep.m_pool_id,
+                                             other_rep.m_offset_ptr_rep.m_pool_offset))
+                   : (get_as_raw(other_rep) // !is_raw => other.is_raw()
+                      ==
+                      Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id,
+                                             m_rep.m_offset_ptr_rep.m_pool_offset)))
+             ? RESULT_EQ : RESULT_NE;
+#endif
+
+    /* Let's prove that is correct.  Please refer to the `if 0`ed nicely-readable version which is equivalent to
+     * the longer-but-hopefully-a-bit fast one just above.  Analyzing possibilities:
+     *
+     *   - If we are null, or `other` is null: See bullet points 1-2 in the proof cmnt in the NO_RAW case above.  Same.
+     *     So assume neither is null.  Hence we are raw or an offset-ptr, as it `other` one of the two.
+     *   - If `is_raw() == other.is_raw()`:
+     *     - If !is_raw(): See the proof above for the NO_RAW case (starting with bullet point 3).  Same applies.
+     *     - If is_raw(): Then it's just a regular raw vaddr comparison (except MSB is unconditionally 0 for both,
+     *       but it carries no info, as it's part of the canonial form's filler bits); certainly if they're numerically
+     *       unequal then NE is correct.  (This is stronger than the preceding bullet: There is no pathological way
+     *       for NE to be technically wrong.)
+     *   - So assume is_raw() and !other.is_raw() (the reverse could be the case, but by symmetry the same
+     *     reasoning below would apply equally well), and both are non-null.
+     *
+     * And in that case we use the (slow) "gold standard": `get() == other.get()`.  (It is unwound a bit to avoid
+     * redundant computing: since is_raw, we can directly use the get_as_raw() part of get(); and since
+     * !other.is_raw() and non-null, we can directly use the to_address() part of other.get().)
+     *
+     * That is correct by definition.  QED.
+     *
+     * ...but maybe we can do something faster and still okay?  Well, is_raw(), so get() is just
+     * equal to reinterpret_cast<void*>(m_rep) + potentially flip of MSB (get_as_raw()) -- quick enough;
+     * but there's simply no way to deal with `other` other than calling to_address(other.m_pool_id/offset)
+     * which involves one of the lookups we were trying to avoid.  If we don't want to do that, then:
+     * Our only other option is the ol' `return NE`.  Would that be okay in that any
+     * false NE would be pathological?  Answer: Kind of.  It's somewhat similar to the pathological case
+     * outlined in the NO_RAW comment but 50% less so: One of the sides is a raw address, but the other one
+     * represents the same vaddr but in a pool.  Like maybe they created an offset-pointer to a pool-free
+     * location and then allocated to create a pool at that "suspected" place and are now checking.  It's "thin";
+     * less thin than the NO_RAW scenario though.
+     *
+     * Here's our reasoning to play it safe: We just don't think the scenario of comparing an owner-side
+     * (CAN_STORE_RAW_PTR) pointer to not-in-SHM versus a pointer to in-SHM is likely enough to need to
+     * perf-optimize (at which point just doing the definitely-correct thing wins).  Copying bytes between the
+     * two, yes, totally plausible.  Why compare them though?  E.g., loop-comparing against .end() would be in
+     * the same container so probably all in-SHM or all on stack/in heap.  Or a list<> comparing node vs another
+     * node... same deal.
+     *
+     * Plus at least it's only one to_address() (map lookup) as opposed to two.
+     *
+     * @todo Revisit; gather some stats, perhaps under load with diverse production code bases. */
+  } // else if constexpr(CAN_STORE_RAW_PTR)
+} // Shm_pool_offset_ptr_data::equals()
+
+template<typename Repository_type, bool CAN_STORE_RAW_PTR>
+bool Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::less_than(Shm_pool_offset_ptr_data other) const
+{
+  constexpr bool RESULT_LT = true; // Harder to have a brain-glitch this way, we've found.
+  constexpr bool RESULT_GE = false;
+
+  /* We could just `return get() < other.get()`, and we only do not, because we want
+   * higher perf than that.  However, as we reflected in doc header, our gold
+   * standard for correctness is indeed `get() == other.get()`, *but* we are allowed to make exceptions when
+   * doing so (1) would lead to higher performance and (2) is defensible in practical terms.
+   * So we'll do that kind of reasoning below.  However: it turns out that, unlike in equals(), we are able
+   * to avoid any exceptions for the sake of perf here.
+   *
+   * Since get() behavior matters for the "gold standard" of our behavior, we may at points rely on its exact
+   * impl; and that's fine; but remember one thing in particular: if we are not null (to_bool() == true), and
+   * !is_raw(), then `get() == Repository::to_address(m_pool_id, m_pool_offset)`, which in turn very specifically
+   * is:
+   *   - lookup base-vaddr by m_pool_id in (conceptual, actual impls may vary for perf reasons) map
+   *       [not found => undefined behavior (UB) => by our contract we don't care]
+   *   - add base-vaddr + m_pool_offset; return result
+   *       [result being before base-vaddr or past pool-end => *not* UB => we must handle it]
+   *
+   * The key question: How would we do better perf-wise than `get() == other.get()`?  After all if we can't,
+   * then might as well just return that.  Answer: <similar to what we wrote in equals() in analogous spot>.
+   *
+   * If we can avoid .get() -- or more precisely Repository::to_address() firstly and get_as_raw() as a distant
+   * second priority -- relying on only a few comparisons instead, then great.
+   *
+   * Spoiler alert: In the final analysis (by algorithm inspection, not necessarily empirically), the below is
+   * pretty similar perf-wise to just `return get() < other.get()` except for one likely very-common situation:
+   * both sides non-null, non-raw (100% of the time if !CAN_STORE_RAW_PTR, most of the time otherwise), and
+   * in the same SHM-pool.  In that very-common situation it reduces to a few 0 checks and a comparison of
+   * two (in x86-64, 32-bit) integers. */
+
+  const auto& other_rep = other.m_rep;
+  const bool other_is_null = other_rep.m_rep == rep_t(0);
+
+  /* First handle/eliminate situations where we are null (!to_bool()) and/or `other` is null.  Granted
+   * `<` comparisons between null and <anything> are probably fairly rare, so it'd be nice to not check for that
+   * until we have to (all else being equal); but logically it seems hard to avoid doing it first.  At least
+   * a check-for-zero should be quite quick. */
+
+  if (m_rep.m_rep == rep_t(0))
+  {
+    return other_is_null ? RESULT_GE : RESULT_LT; // null >= null / null < non-null.
+  }
+  // else
+  if (other_is_null) // && *this is not null
+  {
+    return RESULT_GE; // non-null >= null.
+  }
+  // else neither is null:
+
+  /* Next handle/eliminate situations where one or both is a raw pointer (MSB indicates rawness; the other bits
+   * contain actual vaddr being encoded; MSB in vaddr would be copy of 2nd MSB and carries no real info).
+   * Happily !CAN_STORE_RAW_PTR means by definition neither one is raw, so that block can be skipped. */
+
+  if constexpr(S_CAN_STORE_RAW_PTR)
+  {
+    const bool is_raw = m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0);
+    if (is_raw != (other_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0)))
+    {
+      /* One is raw; the other is not.  No choice but to essentially execute .get() for both sides and compare.
+       * However we can skip some redundancies based on information we do have and reduce .get() on one side
+       * to get_as_raw() (possible bit flip but that's it) and the "slow" lookup on the other side. */
+      return (is_raw ? (get_as_raw(m_rep)
+                        <
+                        Repository::to_address(other_rep.m_offset_ptr_rep.m_pool_id,
+                                               other_rep.m_offset_ptr_rep.m_pool_offset))
+                     : (get_as_raw(other_rep) // !is_raw => other.is_raw()
+                        >
+                        Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id,
+                                               m_rep.m_offset_ptr_rep.m_pool_offset)))
+               ? RESULT_LT : RESULT_GE;
+    }
+    // else if (is_raw == other.is_raw()):
+    if (is_raw)
+    {
+      /* Both are raw.  That's promising, in that it is tempting to just return `m_rep.m_rep < other_rep.m_rep`
+       * (compare the bits' numeric values).  Unfortunately it is possible that the numeric value of actual
+       * vaddr get() (by now, get_as_raw()) flips the MSB of .m_rep.  If that were true for neither or both sides:
+       * no problem; we could still just use `m_rep.m_rep < other_rep.m_rep`.  It can be true for exactly one side
+       * too though.  Hence we need to do the bit-flip, if indeed 2nd MSB indicates this, for each side first
+       * and then compare.  It should be quick. */
+      return (get_as_raw(m_rep) < get_as_raw(other_rep)) ? RESULT_LT : RESULT_GE;
+    }
+    // else if both are non-null and non-raw (both are offset pointers).  Fall through:
+  }
+  else // if constexpr(!CAN_STORE_RAW_PTR)
+  {
+#if 0 // Avoid the perf hit even from an assert().  Could enable when debugging perhaps.
+    assert((!is_raw()) && "Cannot be raw if !CAN_STORE_RAW_PTR.");
+    assert((!other.is_raw()) && "`other` cannot be raw if !CAN_STORE_RAW_PTR.");
+#endif
+  }
+
+  // To recap: both are non-null and non-raw (both are offset pointers).
+
+  if (m_rep.m_offset_ptr_rep.m_pool_id == other_rep.m_offset_ptr_rep.m_pool_id)
+  {
+    /* This is probably quite common (certainly not universal though): things being compared tend to live near each
+     * other, within the same vaddr area (extent, pool).  So in many cases the whole thing amounts to:
+     * two comparisons against zero, [if CAN_STORE_RAW_PTR: 2ish bit computations,] and `integer1 < integer2`. */
+    return (m_rep.m_offset_ptr_rep.m_pool_offset < other_rep.m_offset_ptr_rep.m_pool_offset)
+             ? RESULT_LT : RESULT_GE;
+  }
+  // else
+
+  return (Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id, m_rep.m_offset_ptr_rep.m_pool_offset)
+          <
+          Repository::to_address(other_rep.m_offset_ptr_rep.m_pool_id, other_rep.m_offset_ptr_rep.m_pool_offset))
+           ? RESULT_LT : RESULT_GE;
+} // Shm_pool_offset_ptr_data::less_than()
+
+template<typename Repository_type, bool CAN_STORE_RAW_PTR>
+bool
+  Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::greater_than(Shm_pool_offset_ptr_data other) const
+{
+  constexpr bool RESULT_GT = true; // Harder to have a brain-glitch this way, we've found.
+  constexpr bool RESULT_LE = false;
+
+  /* This impl is similar to less_than(), so please grok that guy; then come back here.  Keeping comments light.
+   *
+   * Code reuse (beyond get_as_raw() reuse) is not impossible (maybe a template param for whether we'll do
+   * less-than or greater-than), but seems the resulting code would just be harder to understand, and the
+   * gains for easier maintenance/reduced bugginess would be marginal. */
+
+  const auto& other_rep = other.m_rep;
+  const bool other_is_null = other_rep.m_rep == rep_t(0);
+
+  if (m_rep.m_rep == rep_t(0))
+  {
+    return RESULT_LE; // null <= null / null <= non-null.
+  }
+  // else
+  if (other_is_null) // && *this is not null
+  {
+    return RESULT_GT; // non-null > null.
+  }
+  // else neither is null:
+
+  if constexpr(S_CAN_STORE_RAW_PTR)
+  {
+    const bool is_raw = m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0);
+    if (is_raw != (other_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0)))
+    {
+      return (is_raw ? (get_as_raw(m_rep)
+                        >
+                        Repository::to_address(other_rep.m_offset_ptr_rep.m_pool_id,
+                                               other_rep.m_offset_ptr_rep.m_pool_offset))
+                     : (get_as_raw(other_rep) // !is_raw => other.is_raw()
+                        <
+                        Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id,
+                                               m_rep.m_offset_ptr_rep.m_pool_offset)))
+               ? RESULT_GT : RESULT_LE;
+    }
+    // else if (is_raw == other.is_raw()):
+    if (is_raw)
+    {
+      return (get_as_raw(m_rep) > get_as_raw(other_rep)) ? RESULT_GT : RESULT_LE;
+    }
+    // else Fall through:
+  }
+  else // if constexpr(!CAN_STORE_RAW_PTR)
+  {
+#if 0 // Avoid the perf hit even from an assert().  Could enable when debugging perhaps.
+    assert((!is_raw()) && "Cannot be raw if !CAN_STORE_RAW_PTR.");
+    assert((!other.is_raw()) && "`other` cannot be raw if !CAN_STORE_RAW_PTR.");
+#endif
+  }
+
+  // To recap: both are non-null and non-raw (both are offset pointers).
+
+  if (m_rep.m_offset_ptr_rep.m_pool_id == other_rep.m_offset_ptr_rep.m_pool_id)
+  {
+    return (m_rep.m_offset_ptr_rep.m_pool_offset > other_rep.m_offset_ptr_rep.m_pool_offset)
+             ? RESULT_GT : RESULT_LE;
+  }
+  // else
+
+  return (Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id, m_rep.m_offset_ptr_rep.m_pool_offset)
+          >
+          Repository::to_address(other_rep.m_offset_ptr_rep.m_pool_id, other_rep.m_offset_ptr_rep.m_pool_offset))
+           ? RESULT_GT : RESULT_LE;
+} // Shm_pool_offset_ptr_data::greater_than()
+
+template<typename Repository_type, bool CAN_STORE_RAW_PTR>
+Shm_pool_offset_ptr_data_base::diff_t
+  Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::distance_from(Shm_pool_offset_ptr_data other) const
+{
+  static_assert(std::is_signed_v<diff_t>, "If diff_t is unsigned, we cannot properly subtract pointers.");
+
+  using wide_offset_t = std::make_signed_t<rep_t>;
+  using ret_t = diff_t; // Explicitly convert to this, as we return (for clarity at least).
+
+  /* The below is written as-if we want the distance-from result in units of sizeof(T).  Currently this class
+   * (notably our complementary increment()) conventionally deals with byte distances, so we just set
+   * T=byte.  Our caller can do the division by sizeof(T) as desired.  The code below would support either
+   * way without any perf penalty, so why not?  (Just don't forget `/ sizeof(T)` when manually doing integer
+   * arithemtic; we do avoid that below where possible.) */
+  using T = uint8_t;
+
+  // Just syntactic sugar.
+  constexpr auto as_t_ptr = [](const void* ptr) constexpr -> auto { return static_cast<const T*>(ptr); };
+  constexpr const T* T_NULLPTR = nullptr;
+
+  /* We could just `return as_t_ptr(get()) - as_t_ptr(other.get())`, and we only do not, because we want
+   * higher perf than that.  For pithiness/to avoid redundancy we don't explain in full detail further except to say:
+   *
+   * This impl is similar in its strategy to less_than(), so please grok that guy; then come back here.
+   * Keeping comments light accordingly.
+   *
+   * That said, as with less/greater_than(), there are pithier ways of getting the same answer while
+   * still getting the benefit of the main perf-saving case (where *this and `other` are both storing
+   * pool ID/offset pairs, and the pool IDs are the same, and we can thus return essentially offset1 minus offset2).
+   * Nevertheless we go with the less/greater_than() approach, where we do a ~full unwind of the logical
+   * possibilities explicitly, skipping any redundant checks/arithmetic.  As with less/greater_than(),
+   * it is perhaps questionable whether this is appreciably (or at all) faster (though it's probably not appreciably
+   * slower at least) than the pithier approaches.  Bottom line: If less/greater_than() do it like this,
+   * then we should too.  (If they are changed not to, then this should be as well.  Also consider equals().)
+   *
+   * Orthgonally: Tactically: in the various cases below, if it is (all else being equal, perf-wise particularly)
+   * possible to make the compiler itself generate code for `a - b`, where `a` and `b` are both `const T*`, then
+   * it is both pithy and correct by definition.  Better (certainly no worse) than reinterpret_cast<>ing all-over. */
+
+  if (m_rep.m_rep == rep_t(0))
+  {
+    /* Let compiler do whatever it does for `(uint8_t*)0 - (uint8_t*)p`.  Perf-wise `other` hasn't been looked-at
+     * yet, so other.get() is fair; and the only extra thing we've done is the this->m_rep=zero check. */
+    return ret_t(T_NULLPTR - as_t_ptr(other.get()));
+  }
+  // else
+  const auto& other_rep = other.m_rep;
+  if (other_rep.m_rep == rep_t(0)) // && *this is not null
+  {
+    // Same deal for the reverse case, plus we already know *this is not null.
+    return ret_t(as_t_ptr(get_if_not_null(m_rep)) - T_NULLPTR);
+  }
+  // else neither is null:
+  if constexpr(S_CAN_STORE_RAW_PTR)
+  {
+    const bool is_raw = m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0);
+    if (is_raw != (other_rep.m_offset_ptr_rep.m_selector_offset_else_raw == pool_offset_t(0)))
+    {
+      return ret_t(is_raw ? (as_t_ptr(get_as_raw(m_rep))
+                             -
+                             as_t_ptr(Repository::to_address(other_rep.m_offset_ptr_rep.m_pool_id,
+                                                             other_rep.m_offset_ptr_rep.m_pool_offset)))
+                          : (as_t_ptr(Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id,
+                                                             m_rep.m_offset_ptr_rep.m_pool_offset))
+                             - // !is_raw => other.is_raw()
+                             as_t_ptr(get_as_raw(other_rep))));
+    }
+    // else if (is_raw == other.is_raw()):
+    if (is_raw)
+    {
+      return ret_t(as_t_ptr(get_as_raw(m_rep)) - as_t_ptr(get_as_raw(other_rep)));
+    }
+    // else if both are non-null and non-raw (both are offset pointers).  Fall through:
+  }
+  else // if constexpr(!CAN_STORE_RAW_PTR)
+  {
+#if 0 // Avoid the perf hit even from an assert().  Could enable when debugging perhaps.
+    assert((!is_raw()) && "Cannot be raw if !CAN_STORE_RAW_PTR.");
+    assert((!other.is_raw()) && "`other` cannot be raw if !CAN_STORE_RAW_PTR.");
+#endif
+  }
+
+  // To recap: both are non-null and non-raw (both are offset pointers).
+
+  if (m_rep.m_offset_ptr_rep.m_pool_id == other_rep.m_offset_ptr_rep.m_pool_id)
+  {
+    return ret_t((wide_offset_t(m_rep.m_offset_ptr_rep.m_pool_offset)
+                  - wide_offset_t(other_rep.m_offset_ptr_rep.m_pool_offset))
+                 / wide_offset_t(sizeof(T))); // Signed division!  (Unsigned sizeof would break negatives, sizeof>1.)
+    /* (^-- Might as well convert (from narrower signed pool_offset_t) to the wider signed wide_offset_t to first get
+     * a clean, non-*erflowing wide_offset_t result.  We then still convert the result back to ret_t=diff_t -- narrow
+     * again -- to return, because currently that's what Shm_pool_offset_ptr wants from us (for its ptr-minus-ptr op).
+     * If we wanted to return a wider type, like the standard ptrdiff_t (currently = wide_offset_t), then ret_t
+     * could be changed to alias to that, and this would still work -- now sans possible *erflow.  Is there a perf
+     * penalty to the converting?  Probably not much given our target arch.) */
+  }
+  // else
+
+  return ret_t(as_t_ptr(Repository::to_address(m_rep.m_offset_ptr_rep.m_pool_id,
+                                               m_rep.m_offset_ptr_rep.m_pool_offset))
+               -
+               as_t_ptr(Repository::to_address(other_rep.m_offset_ptr_rep.m_pool_id,
+                                               other_rep.m_offset_ptr_rep.m_pool_offset)));
+} // Shm_pool_offset_ptr_data::distance_from()
 
 template<typename Repository_type, bool CAN_STORE_RAW_PTR>
 void Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::increment(diff_t bytes) noexcept
@@ -818,7 +1480,7 @@ void Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::increment(dif
   static_assert(std::is_signed_v<diff_t>, "If diff_t is unsigned, we cannot really decrement pointers.");
 
   // Operate on bit-field for clarity and probably speed (see class doc header for discussion).
-  if constexpr(S_RAW_OK)
+  if constexpr(S_CAN_STORE_RAW_PTR)
   {
     if (m_rep.m_offset_ptr_rep.m_selector_offset_else_raw == 0)
     {
@@ -828,7 +1490,7 @@ void Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::increment(dif
        * So we let it happen.
        *
        * Subtlety: One wonders if doing += or -= ops on native pointers keeps canonical-form rules in mind;
-       * so if one overflow the lower 48 bits, perhaps x86-64 arch will avoid touching the nearby
+       * so if one overflows the lower 48 bits, perhaps x86-64 arch will avoid touching the nearby
        * extended-sign bits.  Experimentation, backed by docs, shows that is not the case: It simply does
        * the += or -= op on the underlying uint64_t.  Of course dereferencing the result is going to blow up
        * (processor exception => SEGV-type-thing), but that's beside the point.  So we do the same thing.
@@ -838,7 +1500,7 @@ void Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::increment(dif
        * range.  This would turn us into an offset pointer; so a subsequent get() (which is not a deref yet!)
        * would behave unpredictably; it could return nullptr, or it could accidentally encode a real pool ID
        * and thus yield some real-ish address instead of the right thing (which, granted, itself is something
-       * unreal).  A native "get()" in that state would return the "right thing."  So we have to choices
+       * unreal).  A native get() in that state would return the "right thing."  So we have two choices
        * for what do after the `m_rep +=`.  1, we could force-clear the MSB (shift left, shift right).
        * This would yield, possibly, the "right thing" in subsequent get() (which flips the MSB if the
        * 2nd MSB is 1, which would probably be 1 in this scenario -- though not necessarily depending on
@@ -847,7 +1509,7 @@ void Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::increment(dif
        * a case for either.  I (ygoldfel) ultimately decided to do (2).  The motivation: in the by-far-mainstream
        * case, where no one is doing anything funky, it has higher performance.  The defense:
        * Performing overflowing pointer arithmetic is not disallowed (meaning it shouldn't lead to undefined
-       * behavior) in and of itself; and reading a resulting pointer value afterwards shouldn't lead  to
+       * behavior) in and of itself; and reading a resulting pointer value afterwards shouldn't lead to
        * any exception or crash; but counting on any particular numeric value -- honestly I haven't tried to
        * absolutely confirm this formally in terms of the standard but just intuitively let's be real here --
        * is not in the cards.  Our impl doesn't crash anything here, or in subsequent get(), but any code
@@ -857,10 +1519,10 @@ void Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::increment(dif
       return;
     } // if (raw_ptr_rep->m_selector_offset_else_raw == 0)
     // else: Fall through:
-  } // if constexpr(S_RAW_OK)
+  } // if constexpr(S_CAN_STORE_RAW_PTR)
   else
   {
-    if (m_rep.m_rep == rep_t(0)) // Recall that !S_RAW_OK.
+    if (m_rep.m_rep == rep_t(0)) // Recall that !S_CAN_STORE_RAW_PTR.
     {
       /* As advertised remain null.  We have no choice; we cannot express this any other way.  We could assert(),
        * but again we promised to behave -- ill-advised or not we stick to the promise. */
@@ -912,10 +1574,10 @@ std::ostream& operator<<(std::ostream& os,
             << "]+[" << val.m_rep.m_offset_ptr_rep.m_pool_offset << "]@" << val.get();
 } // operator<<(ostream, Shm_pool_offset_ptr_data)
 
+} // namespace ipc::shm::arena_lend::detail
+
 #if IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER
 #  pragma GCC diagnostic pop // See above.
 #endif
 
 #undef IPC_SHM_ARENA_LEND_DETAIL_GCC_COMPILER
-
-} // namespace ipc::shm::arena_lend::detail

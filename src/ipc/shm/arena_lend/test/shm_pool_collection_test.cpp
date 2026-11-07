@@ -121,7 +121,8 @@ TEST_F(Shm_pool_collection_DeathTest, Interface)
 
   EXPECT_DEATH((*static_cast<char*>(read_pool->get_address()) = 'c'), ".*");
 
-  EXPECT_TRUE(collection.remove_shm_object(S_DEATH_TEST_SHM_OBJECT_NAME));
+  // (pool->get_name() = the full as-created object name; no need to recompose it by hand.)
+  EXPECT_TRUE(collection.remove_shm_object(pool->get_name()));
 }
 
 /// Tests for the public and protected interfaces.
@@ -243,7 +244,7 @@ TEST_F(Shm_pool_collection_test, Multiprocess)
     Test_borrower borrower;
     EXPECT_EQ(0, borrower.execute_read_check(collection.get_id(),
                                              pool->get_id(),
-                                             pool->get_name(),
+                                             collection.get_pool_name_base().str(),
                                              get_pool_size(),
                                              0,
                                              S_ARBITRARY_DATA));

@@ -24,6 +24,7 @@
 
 #include "common.hpp"
 #include "schema.capnp.h"
+#include <ipc/shm/arena_lend/util.hpp>
 #include <ipc/transport/bipc_mq_handle.hpp>
 #include <ipc/session/shm/arena_lend/jemalloc/session_server.hpp>
 
@@ -51,9 +52,9 @@ int main(int argc, char const * const * argv)
 
   /* Instructed to do so by ipc::session::shm::arena_lend public docs (short version: this is basically a global,
    * and it would not be cool for ipc::session non-global objects to impose their individual loggers on it). */
-  ipc::session::shm::arena_lend::Borrower_shm_pool_collection_repository_singleton::get_instance()
-    .set_logger(&(*log_logger));
+  ipc::shm::arena_lend::set_logger(&(*log_logger));
 
+  bool ok = true;
   try
   {
     /* This test is similar to ipc_session's (it's our immediate dependency) with 2 key differences:
@@ -118,7 +119,7 @@ int main(int argc, char const * const * argv)
     msg_root.setCoolVal(42);
     msg_root.setCoolString("Hello, world!");
     FLOW_LOG_INFO("Sending a structured message over pre-opened channel.");
-    chan.send(msg);
+    chan.send(&msg);
 
     // Don't judge us.  Again, we aren't demo-ing best practices here!
     FLOW_LOG_INFO("Sleeping for a few sec to avoid yanking channel away from other side right after opening it.  "
@@ -132,8 +133,10 @@ int main(int argc, char const * const * argv)
   catch (const exception& exc)
   {
     FLOW_LOG_WARNING("Caught exception: [" << exc.what() << "].");
-    return 1;
+    ok = false;
   }
 
-  return 0;
+  ipc::shm::arena_lend::set_logger(nullptr);
+
+  return ok ? 0 : 1;
 } // main()

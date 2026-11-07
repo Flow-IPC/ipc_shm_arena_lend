@@ -31,7 +31,7 @@
 #include "ipc/shm/arena_lend/jemalloc/ipc_arena.hpp"
 #include "ipc/shm/shm.hpp"
 #include "ipc/session/standalone/shm/arena_lend/arena_lend_fwd.hpp"
-#include "ipc/session/standalone/shm/arena_lend/borrower_shm_pool_collection_repository.hpp"
+#include "ipc/session/standalone/shm/arena_lend/detail/borrower_shm_pool_collection_repository.hpp"
 
 namespace ipc::shm
 {
@@ -47,8 +47,8 @@ struct Arena_to_borrower_allocator_arena<arena_lend::jemalloc::Ipc_arena>
    */
   using Type
     = arena_lend::Borrower_allocator_arena
-        <arena_lend::Shm_pool_repository_singleton
-           <ipc::session::shm::arena_lend::Borrower_shm_pool_collection_repository>>;
+        <ipc::session::shm::arena_lend::detail::Borrower_shm_pool_collection_repository
+           <arena_lend::jemalloc::Ipc_arena>>;
 };
 
 } // namespace ipc::shm

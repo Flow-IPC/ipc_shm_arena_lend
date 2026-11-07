@@ -3,8 +3,4 @@
 # incomplete; please refer to the code revision
 # history to see individual contributions.
 
-Akamai Technologies, Inc.
-  (principal original contributors:
-   Eddy Chan of Akamai - src/ipc/shm/arena_lend/** except src/ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.?pp
-                         src/ipc/session/standalone/**
-   Yuri Goldfeld of Akamai - the rest)
+Akamai Technologies, Inc. (principal contributors: Yuri Goldfeld, Eddy Chan of Akamai)
