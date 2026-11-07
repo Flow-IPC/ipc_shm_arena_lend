@@ -57,7 +57,7 @@ namespace ipc::shm::arena_lend
  * attempted, or even compiled, there is no issue: STL code will only use Stateless_allocator::Pointer which
  * is simply our #Pointer here.
  *
- * No allocate() or deallocate() methods are provided, as that would be nonsensical.
+ * No `allocate()` or `deallocate()` methods are provided, as that would be nonsensical.
  *
  * @tparam Repository_type
  *         See `Repository_type` parameter to Shm_pool_offset_ptr.

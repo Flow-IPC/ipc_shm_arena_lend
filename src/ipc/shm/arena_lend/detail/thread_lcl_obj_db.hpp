@@ -220,7 +220,7 @@ public:
 
   /**
    * Constructs thread-local `*this` as invoked internally by Static_state::m_obj_db_registry (on first
-   * this_thread_obj_db() call -- in fact `this_thread_obj_db()from a given thread).
+   * this_thread_obj_db() call -- in fact `this_thread_obj_db()` from a given thread).
    *
    * @param logger_ptr
    *        Logger to use for logging subsequently; taken from Static_state::m_obj_db_registry.

@@ -61,12 +61,12 @@ namespace ipc::shm::arena_lend::jemalloc
  * Represents/manages a segregated collection of in-SHM (shared memory) objects and buffers allocated using
  * the memory manager *jemalloc*, acting according to the SHM-arena-lend design.  It is arguably the central
  * class of SHM-jemalloc, a type SHM-arena-lending SHM-provider in Flow-IPC.  SHM-jemalloc's key objects
- * (Ipc_arena and ipc::session::shm::arena_lend::Shm_session, principally) can be plugged into a
+ * (Ipc_arena and ipc::session::shm::arena_lend::jemalloc::Shm_session, principally) can be plugged into a
  * general Flow-IPC session, as established via ipc::session machinery; or they can be used on a standalone basis.
  * It is generally significantly easier to do the former: a successfully established `Session` will get you
- * an Ipc_arena (2, even, one of session-scope, another of app-scope) and Shm_session for free (~no additional
- * coding effort is required).  You may access jemalloc::Session::session_shm() (`Ipc_arena*`),
- * jemalloc::Server_session::app_shm() (ditto), and jemalloc::Session::shm_session() (`Shm_session*`).
+ * an Ipc_arena (2, even, one of session-scope, another of app-scope) and `Shm_session` for free (~no additional
+ * coding effort is required).  You may access `jemalloc::Session::session_shm()` (`Ipc_arena*`),
+ * `jemalloc::Server_session::app_shm()` (ditto), and `jemalloc::Session::shm_session()` (`Shm_session*`).
  *
  * @note These notes (in Ipc_arena doc header) are written from the standpoint of presenting it (and the rest of
  *       SHM-jemalloc) as a standalone system.  In most situations a general Flow-IPC user can think of
@@ -78,8 +78,9 @@ namespace ipc::shm::arena_lend::jemalloc
  *      constructed via Ipc_arena with other process(es).
  *
  * The key relevant ops are as follows.  Let `*arena` be an Ipc_arena.  Let `*session` be a
- * jemalloc::Shm_session connected to an entity (process, usually not the process holding `*arena`) P.  Both are
- * `shared_ptr`s but never mind for now.  Let `*session2` be the peer object of `*session`, in process P.
+ * session::shm::arena_lend::jemalloc::Shm_session connected to an entity (process, usually not the process holding
+ * `*arena`) P.  Both are `shared_ptr`s but never mind for now.  Let `*session2` be the peer object of `*session`,
+ * in process P.
  *   - `shared_ptr<T> p = arena->construct<T>(...)`: Constructs a `T{...}` in SHM as *owned* by `*this` arena; jemalloc
  *     is used for allocation of actual buffers.
  *   - `session->lend_arena(arena)`: Makes it possible to share -- *lend* -- `p` (and others) to P.
@@ -149,7 +150,7 @@ namespace ipc::shm::arena_lend::jemalloc
  *          `*this`) reaching ref-count-zero concurrently to a *relevant thread* exiting can lead to undefined behavior.
  *          A *relevant thread* is defined as one in this process that has touched a `this->construct<T>()`ed
  *          handle group through any of the following operations: Ipc_arena::construct() itself,
- *          Shm_session::lend_object(), and the *disposer*.  The *disposer* executes when the handle
+ *          `Shm_session::lend_object()`, and the *disposer*.  The *disposer* executes when the handle
  *          (#Handle a/k/a `shared_ptr<T>`) group reaches ref-count-zero.  Loosely speaking this means either
  *          join the threads that work with SHM-objects `construct()`ed by `*this` before ending `*this` arena;
  *          or end this arena before joining such threads.
@@ -242,7 +243,7 @@ public:
    *
    * @warning `*logger` -- unless `logger` is null -- must exist at least past (1) all
    *          `construct()`-returned pointers' groups, (2) all `Shm_session`s through which you'd
-   *          Shm_session::lend_arena() the returned `Ipc_arena`, and (3) of course the returned pointer group.
+   *          `Shm_session::lend_arena()` the returned `Ipc_arena`, and (3) of course the returned pointer group.
    *
    * ### Errors ###
    * If jemalloc fails to create a jemalloc-arena a `flow::error::Runtime_error` exception shall be thrown.
@@ -288,7 +289,7 @@ public:
    * ref-counted handle, so that the resulting object shall be garbage-collected w/r/t this process as well
    * as any subsequent *borrower* process(es).  That is to say, `~T()` dtor shall be called, followed by deallocate(),
    * in this process -- but only after (1) the returned handle's `shared_ptr` group reaches ref-count zero,
-   * *and* (2) the same happens to any similar `Handle<T>` returned by Shm_session::borrow_object().
+   * *and* (2) the same happens to any similar `Handle<T>` returned by `Shm_session::borrow_object()`.
    *
    * Does not return null.  Throws on any error (details below).
    *
@@ -500,8 +501,8 @@ public:
    * in-SHM buffers, typically through allocator #Allocator action) and then freeing its `sizeof(*x)` in-SHM buffer.
    *
    * What are *user references*?  Answer: Firstly: `x` itself (from the given `A.construct()`) is a `shared_ptr` in a
-   * group; so all `shared_ptr`s in that group are references.  Secondly: there is the Shm_session::lend_object() +
-   * Shm_session::borrow_object() (the latter of which returns a `shared_ptr` similar to `x`) mechanism.  Without
+   * group; so all `shared_ptr`s in that group are references.  Secondly: there is the `Shm_session::lend_object()` +
+   * `Shm_session::borrow_object()` (the latter of which returns a `shared_ptr` similar to `x`) mechanism.  Without
    * delving into exact formal details, essentially: `x2 = S2.borrow_object()`, usually invoked in another process
    * on `Shm_session S2` in a procedure starting with `S.lend_object(x)` (in our process), returns a `shared_ptr`;
    * so the `shared_ptr`s in that `shared_ptr` group are also references (albeit typically cross-process ones).
@@ -513,7 +514,7 @@ public:
    * Ideally you should not need to call this, and informally we recommend against doing so willy-nilly in the
    * middle of your SHM-using algorithm(s); not because it is a costly call (it is not), but because it cuts
    * against the (we humbly hope) easy-to-use design of SHM-jemalloc.  In short: Most SHM-jemalloc activities --
-   * including *any* call to construct(), create(), Shm_session::lend_object(), Shm_session::borrow_object(),
+   * including *any* call to construct(), create(), `Shm_session::lend_object()`, `Shm_session::borrow_object()`,
    * `construct()`ed-object disposer, ditto borrowed, at thread exit -- will already perform the necessary
    * garbage-collection.  Moreover, in many cases (depending on your use patterns), the specific object that has
    * just reached cross-process ref-count-zero will be *immediately* disposed (no later GC needed).
@@ -1372,7 +1373,7 @@ private:
    * The monotonically increasing collection (arena ID).
    *
    * One of these globally-uniquely identifies an `Ipc_arena` *of any given one process* (itself identified in relevant
-   * contexts -- generally Shm_session et al when tracking borrowed arenas -- by an `owner_id_t` which as of this
+   * contexts -- generally `Shm_session` et al when tracking borrowed arenas -- by an `owner_id_t` which as of this
    * writing is simply that process's PID).  Together those 2 make up a detail::Uniq_collection_id.
    */
   static std::atomic<collection_id_t> m_collection_id_counter;

@@ -82,7 +82,7 @@ struct Owner_obj_stats
 }; // struct Owner_obj_stats
 
 /**
- * Cousin of arena_lend::Owner_obj_stats, this tracks the *zombie-reaper scan* algorithm whose task
+ * Cousin of arena_lend::stat::Owner_obj_stats, this tracks the *zombie-reaper scan* algorithm whose task
  * is to find all first-class objects `arena.construct()`ed by this thread (or by the now-joined thread whose
  * exit caused this specialized drain-thread to be spawned) that are *zombie objects*; and to destroy them.
  * A zombie object is one such that no user thread, cross-process, holds a reference to it any longer.

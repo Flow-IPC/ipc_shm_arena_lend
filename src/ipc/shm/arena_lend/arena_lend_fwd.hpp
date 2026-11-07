@@ -88,7 +88,8 @@ struct Set_logger_tag;
 /**
  * Determines the `shared_ptr` variety returned by `A::construct()` and `S::borrow_object()` for any
  * arena-lending SHM-provider, where for a given SHM-provider `A` is the arena type
- * (SHM-jemalloc: jemalloc::Ipc_arena), `S` is the SHM-session type (SHM-jemalloc: jemalloc::Shm_session).
+ * (SHM-jemalloc: jemalloc::Ipc_arena), `S` is the SHM-session type
+ * (SHM-jemalloc: session::shm::arena_lend::jemalloc::Shm_session).
  *
  * ### Opportunistic background ###
  * For a given SHM-provider, those 2 APIs are the only sources of *first-class* a/k/a *outer* object handles.

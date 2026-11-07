@@ -65,10 +65,10 @@ namespace ipc::shm::arena_lend::detail
  *       context, it might really mean "pretty much `T`" in this sense.
  *
  * A secondary role (hence the `_and_mdt`) of this object is to store and provide, via `shared_ptr::get_deleter()`, a
- * few key immutable scalars required to implement Shm_session::lend_object().  That method's impl grabs such
+ * few key immutable scalars required to implement `Shm_session::lend_object()`.  That method's impl grabs such
  * things as #m_lend_tracker_pool_id and #m_use_ct_idx and shoves them into the small handle-serialization returned
  * by `lend_object()`.  The user then IPC-transmits the handle-serialization to a borrowing process; and
- * in that process Shm_session::borrow_object() obtains those values, with which it can create a borrower-side
+ * in that process `Shm_session::borrow_object()` obtains those values, with which it can create a borrower-side
  * counterpart to the owner-side-`construct()`-returned `shared_ptr<T>` handle.  The nearby free function
  * construct_with_borrower_obj_disposer() does this; note that it takes values largely matching the ones
  * stored in a `*this` (including the aforementioned #m_lend_tracker_pool_id and #m_use_ct_idx).
@@ -170,7 +170,7 @@ struct Owner_obj_disposer_and_mdt
    * The thread-token (`flow::util::this_thread_unique_token()`) of the thread that `Shm_arena::construct()`ed the
    * linked object; captured by the ctor, per its same-thread requirement.  `operator()()` compares the disposing
    * thread's token against this to decide which module to inform (same thread => *admin*; any other => *client*);
-   * Shm_session::lend_object() similarly, via direct member access.
+   * `Shm_session::lend_object()` similarly, via direct member access.
    */
   const flow::util::Thread_token m_cting_thread_token;
 }; // struct Owner_obj_disposer_and_mdt

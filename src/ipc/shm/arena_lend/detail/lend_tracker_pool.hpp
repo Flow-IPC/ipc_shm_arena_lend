@@ -497,7 +497,7 @@ private:
    *
    * ### Tuning ###
    * Why have this be larger?  Answer: The max value of `Atomic_use_ct::value_type` (2^32 minus 1, as of this writing)
-   * is the max number of outstanding Shm_session::lend_object() calls + 1 Ipc_arena::construct() call (outstanding
+   * is the max number of outstanding `Shm_session::lend_object()` calls + 1 Ipc_arena::construct() call (outstanding
    * meaning the resulting `shared_ptr` group has not reached ref-count 0).  If it is exceeded, everything explodes;
    * so if this is large, then that won't happen.
    *
@@ -682,7 +682,7 @@ private:
    *
    * @param sz
    *        As for `m_pool->allocate()`.
-   * @return As from `m_pool->allocate().
+   * @return As from `m_pool->allocate()`.
    */
   void* pool_allocate(size_t sz);
 

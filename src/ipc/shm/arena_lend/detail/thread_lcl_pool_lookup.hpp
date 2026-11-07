@@ -250,13 +250,13 @@ public:
  *
  * ### Stats -- If #S_LOOKUP_CAN_FAIL is `true` only ###
  * The object at `static` Pool_lookup_global_stats<Shm_arena, true>::stats() -- a global, per-`decltype(*this)`
- * arena_lend::Owner_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
+ * arena_lend::stat::Owner_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
  *
  * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, true>::stats_reset().
  *
  * ### Stats -- If #S_LOOKUP_CAN_FAIL is `false` only ###
  * The object at `static` Pool_lookup_global_stats<Shm_arena, false>::stats() -- a global, per-`decltype(*this)`
- * arena_lend::Borrower_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
+ * arena_lend::stat::Borrower_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
  *
  * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, false>::stats_reset().
  *
@@ -397,7 +397,7 @@ private:
  *
  * ### Stats ###
  * The object at `static` Pool_lookup_global_stats<Shm_arena, false>::stats() -- a global, per-`decltype(*this)`
- * arena_lend::Borrower_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
+ * arena_lend::stat::Borrower_pool_lookup_global_stats -- contains some interesting stats as updated by every `*this`.
  *
  * To reset this stat-set, use Pool_lookup_global_stats<Shm_arena, false>::stats_reset().
  *

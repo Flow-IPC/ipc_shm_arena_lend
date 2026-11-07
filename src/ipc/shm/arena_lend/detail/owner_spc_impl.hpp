@@ -33,7 +33,7 @@ namespace ipc::shm::arena_lend::detail
 /**
  * This is the `friend` facade of Owner_shm_pool_collection that exposes non-public APIs hidden from public
  * user by providing public access to them; this is used internally by various Flow-IPC components
- * (Thread_lcl_obj_db_admin, Shm_session, etc.) that hold a pointer to an Owner_shm_pool_collection subclass
+ * (Thread_lcl_obj_db_admin, `Shm_session`, etc.) that hold a pointer to an Owner_shm_pool_collection subclass
  * and need access to a small privileged interface not intended for external users.
  *
  * @tparam Base_t

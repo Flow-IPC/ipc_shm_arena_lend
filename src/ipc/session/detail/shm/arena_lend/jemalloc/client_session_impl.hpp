@@ -183,7 +183,7 @@ private:
    *
    * ### Rationale ###
    * Why not piggy-back on session::Client_session_impl's thread W?  Answer: That guy actually does important stuff
-   * sometimes; we would not want some endless scan through /dev/shm (or whatever) to delay a channel opening
+   * sometimes; we would not want some endless scan through `/dev/shm` (or whatever) to delay a channel opening
    * or some-such.  So just parallelize it.
    */
   flow::async::Single_thread_task_loop m_async_cleanup_worker;

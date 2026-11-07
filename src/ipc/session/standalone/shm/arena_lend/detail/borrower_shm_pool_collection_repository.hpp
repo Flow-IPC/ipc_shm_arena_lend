@@ -368,7 +368,7 @@ public:
    *       The reason the other 2 things are required is that, specifically, we need the `pool_name_base` from
    *       earlier register_collection().  We need `pool_name_base`, which includes such things as owner application
    *       name and PID and more, for two broad reasons.  1 is it's nice for debugging/etc. (one can see the nature
-   *       of a SHM-pool in Linux /dev/shm or logs at a glance).  2 (more critically) is it allows for (owner-side)
+   *       of a SHM-pool in Linux `/dev/shm` or logs at a glance).  2 (more critically) is it allows for (owner-side)
    *       cleanup-on-crash algorithm to remove-from-file-system (a/k/a unlink) whole swathes of names just by
    *       checking against a particular prefix.  (E.g., "delete all pools created by owner app A except by my own
    *       PID P.")  This note is strictly educational in nature.
@@ -517,7 +517,7 @@ private:
   boost::unordered_flat_map<Uniq_collection_id, Collection_data> m_collection_data_map;
 
   /**
-   * Generally similar to Shm_session::m_borrower_pool_stats but across *all* `Shm_session`s (for the
+   * Generally similar to `Shm_session::m_borrower_pool_stats` but across *all* `Shm_session`s (for the
    * same SHM-provider <=> #Shm_arena type).  Read that guy's doc header first.  Then continue here:
    *
    * Regarding perf: basically same thing; there shall be potentially multiple `Shm_session`s around, but

@@ -876,7 +876,7 @@ protected:
    *        The message to send.
    * @param operation
    *        The use case that the message is related to (for logging).
-   * @return `true` iff sent OK and got ack.  See ipc_shm_message.capnp for the (straightforward) schema.
+   * @return `true` iff sent OK and got ack.  See `ipc_shm_message.capnp` for the (straightforward) schema.
    */
   bool send_sync_request(Shm_struc_channel::Msg_out& message, util::String_view operation);
 

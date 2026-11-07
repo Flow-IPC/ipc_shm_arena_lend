@@ -63,7 +63,7 @@ class Test_shm_session;
  * execute_allocation_performance_test() in shm_session_test.cpp for the full story).
  *
  * Client/server discovery is path- and PID-based, with no config files: the Server_app/Client_app specs are
- * derived from the current (or given) process's binary path, and /tmp/<class name> serves as the
+ * derived from the current (or given) process's binary path, and `/tmp/<class name>` serves as the
  * kernel-persistent run dir (created in ctor, removed in dtor).
  */
 class Test_shm_session_server :

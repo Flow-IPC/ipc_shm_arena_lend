@@ -60,9 +60,9 @@ namespace ipc::shm::arena_lend::jemalloc::stat
  * about arena X, they'll want to know about data/algorithms that make arena X (...but also other arenas)
  * work properly.  I.e.: the more the merrier.
  *
- * @see The other, disjoint such bundling in SHM-jemalloc is Shm_session_info_dump (<=> jemalloc::Shm_session);
- *      it is generally *borrower-side* info.  (Arena_info_dump (<=> jemalloc::Ipc_arena) is SHM-jemalloc's
- *      *owner-side* info.)
+ * @see The other, disjoint such bundling in SHM-jemalloc is Shm_session_info_dump
+ *      (<=> session::shm::arena_lend::jemalloc::Shm_session); it is generally *borrower-side* info.
+ *      (Arena_info_dump (<=> jemalloc::Ipc_arena) is SHM-jemalloc's *owner-side* info.)
  */
 struct Arena_info_dump
 {
@@ -115,7 +115,7 @@ struct Arena_info_dump
  * One fills-out the payload by calling `sess.info_dump(&x)`, where `sess` is a `Shm_session`; `x` is a `*this`.
  *
  * Some of the items saved in a `*this` were (pre-copying-them-into-`*this`) owned by/pertaining to the
- * specific target Shm_session `sess`.  (E.g.: #m_borrower_pool_stats.)
+ * specific target `Shm_session sess`.  (E.g.: #m_borrower_pool_stats.)
  *
  * Others (e.g.: #m_borrower_pool_lookup_global_stats) are global -- not pertaining to any particular session -- but
  * pertain to SHM-session(s) in general, at least tangentially.  Such entities are a/k/a *borrower-side*.  So they
@@ -125,8 +125,8 @@ struct Arena_info_dump
  * global-style members, have potentially mutually-redundant -- but still of potential interest -- information.
  *
  * @see The other, disjoint such bundling in SHM-jemalloc is Arena_info_dump (<=> jemalloc::Ipc_arena);
- *      it is generally *owner-side* info.  (Shm_session_info_dump (<=> jemalloc::Shm_session) is SHM-jemalloc's
- *      *borrower-side* info.)
+ *      it is generally *owner-side* info.  (Shm_session_info_dump (<=> session::shm::arena_lend::jemalloc::Shm_session)
+ *      is SHM-jemalloc's *borrower-side* info.)
  */
 struct Shm_session_info_dump
 {
@@ -142,25 +142,25 @@ struct Shm_session_info_dump
    */
   util::stat::Info_dump_format m_fmt;
 
-  /// Target `Shm_session`'s stats from: Shm_session::borrower_pool_stats().
+  /// Target `Shm_session`'s stats from: `Shm_session::borrower_pool_stats()`.
   arena_lend::stat::Borrower_pool_stats m_borrower_pool_stats;
 
-  /// Global stats from: `static` Shm_session::borrower_pool_stats_process_wide(): return value.
+  /// Global stats from: `static Shm_session::borrower_pool_stats_process_wide()`: return value.
   arena_lend::stat::Borrower_pool_stats m_borrower_pool_stats_process_wide_total;
 
-  /// Global stats from: `static` Shm_session::borrower_pool_stats_process_wide(): the per-arena out-arg.
+  /// Global stats from: `static Shm_session::borrower_pool_stats_process_wide()`: the per-arena out-arg.
   std::vector<arena_lend::stat::Borrower_pool_stats> m_borrower_pool_stats_process_wide_per_arena;
 
   /**
-   * If `m_fmt.m_verbose == false` at Shm_session::info_dump() time, this is the # (possibly zero) of entries excluded
+   * If `m_fmt.m_verbose == false` at `Shm_session::info_dump()` time, this is the # (possibly zero) of entries excluded
    * from #m_borrower_pool_stats_process_wide_per_arena to keep it small; otherwise zero (as then none is omitted).
    */
   size_t m_borrower_pool_stats_process_wide_per_arena_n_omitted = 0;
 
-  /// Global stats from: `static` Shm_session::borrower_pool_lookup_global_stats().
+  /// Global stats from: `static Shm_session::borrower_pool_lookup_global_stats()`.
   arena_lend::stat::Borrower_pool_lookup_global_stats m_borrower_pool_lookup_global_stats;
 
-  /// Global info from: `static` Shm_session::shm_pool_live_info().
+  /// Global info from: `static Shm_session::shm_pool_live_info()`.
   std::vector<arena_lend::stat::Shm_pool_info> m_borrowed_shm_pool_live_info;
 }; // struct Shm_session_info_dump
 

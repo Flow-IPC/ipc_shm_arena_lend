@@ -218,13 +218,13 @@ protected:
    *        return of the contained native handle to the OS at the proper time (the caller can rest easy).
    * @param pool_name_fragment_or_empty
    *        Fragment to add, unless empty, into the SHM-pool name when pool(s) is/are created by SHM-provider.
-   *        In particular the final absolute pool name, for each pool, shall be /P/X/R, where P and R will
+   *        In particular the final absolute pool name, for each pool, shall be `/P/X/R`, where P and R will
    *        be determined by `*this` internally; while X -- which shall exclude the leading and trailing
    *        util::Shared_name::S_SEPARATOR (represented as forward-slash in this explanation) -- is
-   *        supplied in `pool_name_fragment_or_empty`.  If the arg is `.empty()`, then the /X/ part shall be
+   *        supplied in `pool_name_fragment_or_empty`.  If the arg is `.empty()`, then the `/X/` part shall be
    *        omitted.  Rationale: for cleanup purposes Client_session_impl needs to encode certain info
    *        (spoiler alert: session-client process ID) that can be later parsed-out upon performing a
-   *        `for_each_persistent()` (spoiler alert: directory-listing of /dev/shm in Linux at least).
+   *        `for_each_persistent()` (spoiler alert: directory-listing of `/dev/shm` in Linux at least).
    *        More generally perhaps other info could be encoded there so as to be acquired from an existing
    *        pool-name later.  So this here provides the opportunity for our sub-classes to do that.
    * @param app_shm_or_null
