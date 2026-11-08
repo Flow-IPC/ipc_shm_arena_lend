@@ -23,7 +23,6 @@
  * THE SOFTWARE. */
 
 #include "ipc/shm/arena_lend/test/test_owner_shm_pool_collection.hpp"
-#include "ipc/shm/arena_lend/memory_manager.hpp"
 #include <sys/mman.h>
 
 using std::shared_ptr;
@@ -33,14 +32,12 @@ namespace ipc::shm::arena_lend::test
 {
 
 Test_owner_shm_pool_collection::Test_owner_shm_pool_collection(flow::log::Logger* logger,
-                                                               Collection_id id,
-                                                               const shared_ptr<Memory_manager>& memory_manager,
-                                                               Shm_object_name_generator&& name_generator,
+                                                               collection_id_t id,
+                                                               Shared_name&& pool_name_base,
                                                                util::Permissions_level permissions_level) :
   Owner_shm_pool_collection(logger,
                             id,
-                            memory_manager,
-                            std::move(name_generator),
+                            std::move(pool_name_base),
                             util::shared_resource_permissions(permissions_level)),
   m_memory_map_functor([this](int fd, size_t size, [[maybe_unused]] void* new_address) -> void*
                        {
@@ -48,7 +45,7 @@ Test_owner_shm_pool_collection::Test_owner_shm_pool_collection(flow::log::Logger
                        }),
   m_memory_unmap_functor([](const std::shared_ptr<Shm_pool>& shm_pool) -> bool
                          {
-                           return (::munmap(shm_pool->get_address(), shm_pool->get_size()) == 0);
+                           return ::munmap(shm_pool->get_address(), shm_pool->get_size()) == 0;
                          })
 {
   FLOW_LOG_TRACE("Constructed with id [" << id << "]");
@@ -57,11 +54,6 @@ Test_owner_shm_pool_collection::Test_owner_shm_pool_collection(flow::log::Logger
 Test_owner_shm_pool_collection::~Test_owner_shm_pool_collection()
 {
   FLOW_LOG_TRACE("Destructed with id [" << get_id() << "]");
-}
-
-void* Test_owner_shm_pool_collection::allocate(size_t size)
-{
-  return get_memory_manager()->allocate(size);
 }
 
 } // namespace ipc::shm::arena_lend::test

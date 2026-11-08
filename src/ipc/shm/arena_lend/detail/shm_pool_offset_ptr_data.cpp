@@ -27,7 +27,7 @@
 #include "ipc/session/detail/session_shared_name.hpp"
 #include "ipc/util/util_fwd.hpp"
 #include "ipc/util/detail/util.hpp"
-#include "ipc/shm/classic/error.hpp"
+#include "ipc/shm/arena_lend/error.hpp"
 #include <flow/log/simple_ostream_logger.hpp>
 #include <boost/interprocess/permissions.hpp>
 #include <boost/interprocess/shared_memory_object.hpp>
@@ -78,7 +78,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
     using bipc::permissions;
     using bipc::interprocess_exception;
 
-    Config std_log_config(Sev::S_WARNING); // Errors only.  (Only errors would appear anyway as of now but still.)
+    Config std_log_config{Sev::S_WARNING}; // Errors only.  (Only errors would appear anyway as of now but still.)
     std_log_config.init_component_to_union_idx_mapping<Flow_log_component>
       (1000, Config::standard_component_payload_enum_sparse_length<Flow_log_component>(), true);
     std_log_config.init_component_names<Flow_log_component>(flow::S_FLOW_LOG_COMPONENT_NAME_MAP, false, "flow-");
@@ -86,7 +86,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       (2000, Config::standard_component_payload_enum_sparse_length<Log_component>(), true);
     std_log_config.init_component_names<Log_component>(S_IPC_LOG_COMPONENT_NAME_MAP, false, "ipc-");
 
-    Simple_ostream_logger std_logger(&std_log_config); // Go to default (cout, cerr).  Only cerr in practice.
+    Simple_ostream_logger std_logger{&std_log_config}; // Go to default (cout, cerr).  Only cerr in practice.
     FLOW_LOG_SET_CONTEXT(&std_logger, Log_component::S_SHM);
 
     /* The post-condition of this call_once():
@@ -131,7 +131,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
 
     // The bipc SHM manip procedures can throw.  Spoiler alert: if that happens sans remedy => kaput/abort program.
     Error_code err_code;
-    op_with_possible_bipc_exception(&std_logger, &err_code, classic::error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR,
+    op_with_possible_bipc_exception(&std_logger, &err_code, error::Code::S_SHM_BIPC_MISC_LIBRARY_ERROR,
                                     "generate_pool_id().init",
                                     [&]()
     {
@@ -143,13 +143,13 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       // Okay, now we can lock it as noted above; and we will reuse this handle to it from now on in this process.
 
       {
-        Sh_lock sh_lock(*s_pool_id_mutex_or_none);
+        Sh_lock sh_lock{*s_pool_id_mutex_or_none};
 
         // Let's see if indeed pool already exists.
         try
         {
           s_pool_id_shm_obj_or_none // Currently default-cted.
-            = Shm_obj(util::OPEN_ONLY, little_pool_name.native_str(), bipc::read_write);
+            = Shm_obj{util::OPEN_ONLY, little_pool_name.native_str(), bipc::read_write};
 
           // Didn't throw?  Then pool already existed and was therefore initialized by someone else; we have a handle.
         }
@@ -164,7 +164,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
           // else: Indeed, not found.  Must create underlying pool.
 
           s_pool_id_shm_obj_or_none // Currently default-cted (still).
-            = Shm_obj(util::CREATE_ONLY, little_pool_name.native_str(), bipc::read_write, perms);
+            = Shm_obj{util::CREATE_ONLY, little_pool_name.native_str(), bipc::read_write, perms};
           // It threw if failed.
 
           /* We were the ones to create it; so we must initialize it for everyone before unlocking.  Mutex
@@ -174,8 +174,8 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
           s_pool_id_shm_obj_or_none.truncate(sizeof(pool_id_t));
           // It threw if failed.
 
-          // To actually initialize it we must map a local vaddr area to it,
-          s_pool_id_shm_region_or_none = Shm_region(s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t));
+          // To actually initialize it we must map a local vaddr area to it.
+          s_pool_id_shm_region_or_none = Shm_region{s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t)};
           // It threw if failed.
 
           // Lastly start the ID in this deterministic initial state.  (Only ++ after this, in all processes.)
@@ -193,7 +193,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
       } // Sh_lock sh_lock(*s_pool_id_mutex_or_none)
 
       // Got here: opened pool handle, and pool in solid shape, but we do still need to map it for subsequent access.
-      s_pool_id_shm_region_or_none = Shm_region(s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t));
+      s_pool_id_shm_region_or_none = Shm_region{s_pool_id_shm_obj_or_none, bipc::read_write, sizeof(pool_id_t)};
       // It threw if failed.
     }); // op_with_possible_bipc_exception()
     if (id != 0)
@@ -228,7 +228,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
    * the other way.  Not quite a to-do in my opinion (ygoldfel).) */
 
   {
-    Sh_lock sh_lock(*s_pool_id_mutex_or_none);
+    Sh_lock sh_lock{*s_pool_id_mutex_or_none};
 
     // Get the next ID; and zero the MSB (reserved for the selector), leaving the proper-width next pool ID.
     auto& id_ref = *(static_cast<pool_id_t*>(s_pool_id_shm_region_or_none.get_address()));
@@ -247,7 +247,7 @@ Shm_pool_offset_ptr_data_base::pool_id_t Shm_pool_offset_ptr_data_base::generate
      * before the full 32-bit # fully wraps around, meaning when it goes from 00...0 to 01...1 to 10...0; and
      * then a 2nd time when it goes from 11...1 to 0...0).  If that occurs, we need to skip the 0.
      * (@todo Maybe WARNING if this shockingly unlikely thing does get observed?) */
-  } // Sh_lock sh_lock(*s_pool_id_mutex_or_none)
+  } // Sh_lock sh_lock{*s_pool_id_mutex_or_none}
 
   return id;
 } // Shm_pool_offset_ptr_data_base::generate_pool_id()

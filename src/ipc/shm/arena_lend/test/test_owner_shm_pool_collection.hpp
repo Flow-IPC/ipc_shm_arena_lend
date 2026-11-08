@@ -28,12 +28,7 @@
 #include "ipc/shm/arena_lend/test/test_shm_object.hpp"
 #include "ipc/util/util_fwd.hpp"
 
-namespace ipc::shm::arena_lend
-{
-
-class Memory_manager;
-
-namespace test
+namespace ipc::shm::arena_lend::test
 {
 
 /**
@@ -53,28 +48,18 @@ public:
    *
    * @param logger Used for logging purposes.
    * @param id Identifier for the collection.
-   * @param memory_manager The memory allocator.
-   * @param name_generator Shared object name generator.
+   * @param pool_name_base Pool-name prefix.
    * @param permissions_level The file permissions for the shared memory pool that are created.
    *
    * @see Owner_shm_pool_collection::Owner_shm_pool_collection()
    */
   Test_owner_shm_pool_collection(flow::log::Logger* logger,
-                                 Collection_id id,
-                                 const std::shared_ptr<Memory_manager>& memory_manager,
-                                 Shm_object_name_generator&& name_generator = create_shm_object_name_generator(),
+                                 collection_id_t id,
+                                 Shared_name&& pool_name_base = create_test_pool_name_base(),
                                  util::Permissions_level permissions_level = util::Permissions_level::S_GROUP_ACCESS);
   /// Destructor.
   virtual ~Test_owner_shm_pool_collection() override;
 
-  /**
-   * Allocates memory from the memory manager.
-   *
-   * @param size The amount of memory to allocate.
-   *
-   * @return The resulting allocation upon success, or nullptr, upon failure.
-   */
-  virtual void* allocate(std::size_t size) override;
   /**
    * Creates a shared memory object and maps it in the process' address space.
    *
@@ -146,7 +131,8 @@ const Owner_shm_pool_collection::Memory_unmap_functor& Test_owner_shm_pool_colle
 
 std::shared_ptr<Shm_pool> Test_owner_shm_pool_collection::create_shm_pool(std::size_t size)
 {
-  return create_shm_pool(generate_shm_object_name(0 /* our name-generator ignores it anyway */), size);
+  return create_shm_pool(generate_shm_object_name(detail::Shm_pool_offset_ptr_data_base::generate_pool_id()).str(),
+                                                  size);
 }
 
 std::shared_ptr<Shm_pool> Test_owner_shm_pool_collection::create_shm_pool(const std::string& name,
@@ -168,5 +154,4 @@ bool Test_owner_shm_pool_collection::remove_shm_pool(const std::shared_ptr<Shm_p
   return Owner_shm_pool_collection::remove_shm_pool(shm_pool, m_memory_unmap_functor, unmapped_memory_pool);
 }
 
-} // namespace test
-} // namespace ipc::shm::arena_lend
+} // namespace ipc::shm::arena_lend::test

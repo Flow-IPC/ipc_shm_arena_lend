@@ -22,10 +22,11 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
-#include "ipc/shm/arena_lend/detail/add_reference.hpp"
 #include "ipc/shm/arena_lend/detail/shm_pool_offset_ptr_data.hpp"
+#include <boost/interprocess/detail/type_traits.hpp> // For add_reference<>, as std::add_lvalue_reference<> not enough.
 
 namespace ipc::shm::arena_lend
 {
@@ -44,11 +45,12 @@ namespace ipc::shm::arena_lend
  * @tparam CAN_STORE_RAW_PTR Whether a raw pointer can be stored if a pointer cannot be converted to a fancy
  *                               pointer; otherwise, an invalid fancy pointer would be stored that converts to nullptr.
  *
- * @todo - Move method definitions out of class declarations.
+ * @todo Move method definitions out of class declarations; and other such stylistic conformance refactoring.
+ * Once all done be sure to enable this class et al for Doxygen doc-generation (currently excluded).
  */
 template <typename Pointed_type,
           typename Repository_type,
-          typename Difference_type,
+          typename Difference_type, // See to-do in arena_lend_fwd.hpp about eliminating this.
           bool CAN_STORE_RAW_PTR>
 class Shm_pool_offset_ptr
 {
@@ -66,8 +68,15 @@ public:
   using pointer = Pointed_type*;
   /// Alias to follow naming convention.
   using Pointer = pointer;
-  /// Alias for std::iterator_traits compliance.
-  using reference = typename detail::Add_reference<Pointed_type>::m_type;
+  /**
+   * Alias for std::iterator_traits compliance.
+   * @internal
+   * Unfortunately `std::add_lvalue_reference<>` doesn't save us here, as we refer to `Reference arg` in some
+   * signatures; with `Pointed_type` being `void` it fails to compile. Arguably it is cheesy to reuse an
+   * internal bipc thing but also... eh.
+   */
+  using reference = typename ::ipc::bipc::ipcdetail::add_reference<Pointed_type>::type;
+
   /// Alias to follow naming convention.
   using Reference = reference;
   /// Alias for std::iterator_traits compliance.
@@ -79,11 +88,13 @@ public:
   Shm_pool_offset_ptr() = default;
 
   /**
-   * Construction from raw pointer.
+   * Construction from raw pointer.  It must be a `Pointed_type*`, or implicitly convertible to one, like with a native
+   * pointer (e.g., `nullptr`; derived-to-base); so, e.g., not a pointer to an unrelated type, nor to a more
+   * cv-qualified one.
    *
    * @param p The pointer to an object or nullptr.
    */
-  Shm_pool_offset_ptr(const void* p) :
+  Shm_pool_offset_ptr(Pointer p) :
     m_data(p)
   {
   }
@@ -112,16 +123,16 @@ public:
    * We copy the data directly when this is the case for a potential optimization.
    *
    * @tparam Other_type The underlying type of the object being held in the other offset pointer.
-   * @tparam OTHER_CAN_STORE_RAW_POINTER Whether the other offset pointer can store a raw pointer.
+   * @tparam OTHER_CAN_STORE_RAW_PTR Whether the other offset pointer can store a raw pointer.
    * @param other The other offset pointer to convert from.
    * @param unused_type_param Unused parameter affecting method selection.
    */
-  template <typename Other_type, bool OTHER_CAN_STORE_RAW_POINTER>
+  template <typename Other_type, bool OTHER_CAN_STORE_RAW_PTR>
   Shm_pool_offset_ptr(
     Shm_pool_offset_ptr<Other_type,
                         Repository_type,
                         Difference_type,
-                        OTHER_CAN_STORE_RAW_POINTER> other,
+                        OTHER_CAN_STORE_RAW_PTR> other,
     [[maybe_unused]] typename std::enable_if_t<std::is_convertible_v<Other_type*, Pointer> &&
                                                std::is_same_v<std::remove_cv_t<Other_type>,
                                                               std::remove_cv_t<Pointed_type>>>* = nullptr) :
@@ -129,7 +140,7 @@ public:
     m_data(*reinterpret_cast<
              const detail::Shm_pool_offset_ptr_data<
                Repository_type,
-               OTHER_CAN_STORE_RAW_POINTER>*>(&(reinterpret_cast<const Shm_pool_offset_ptr&>(other).m_data)))
+               OTHER_CAN_STORE_RAW_PTR>*>(&(reinterpret_cast<const Shm_pool_offset_ptr&>(other).m_data)))
   {
   }
 
@@ -149,16 +160,16 @@ public:
    * different address. We convert from the translated pointer when this is the case.
    *
    * @tparam Other_type The underlying type of the object being held in the other pointer.
-   * @tparam OTHER_CAN_STORE_RAW_POINTER Whether the other pointer can store a raw pointer.
+   * @tparam OTHER_CAN_STORE_RAW_PTR Whether the other pointer can store a raw pointer.
    * @param other The other offset pointer to convert from.
    * @param unused_type_param Unused parameter affecting method selection.
    */
-  template <typename Other_type, bool OTHER_CAN_STORE_RAW_POINTER>
+  template <typename Other_type, bool OTHER_CAN_STORE_RAW_PTR>
   Shm_pool_offset_ptr(
     const Shm_pool_offset_ptr<Other_type,
                               Repository_type,
                               Difference_type,
-                              OTHER_CAN_STORE_RAW_POINTER>& other,
+                              OTHER_CAN_STORE_RAW_PTR>& other,
     [[maybe_unused]] typename std::enable_if_t<std::is_convertible_v<Other_type*, Pointer> &&
                                                !std::is_same_v<std::remove_cv_t<Other_type>,
                                                                std::remove_cv_t<Pointed_type>>>* = nullptr) :
@@ -197,7 +208,7 @@ public:
    */
   static Shm_pool_offset_ptr pointer_to(Reference object)
   {
-    return Shm_pool_offset_ptr(&object);
+    return Shm_pool_offset_ptr{&object};
   }
 
   /**
@@ -257,7 +268,7 @@ public:
    */
   Shm_pool_offset_ptr operator--(int)
   {
-    Shm_pool_offset_ptr tmp(*this);
+    Shm_pool_offset_ptr tmp{*this};
     --*this;
     return tmp;
   }
@@ -288,7 +299,11 @@ public:
    */
   friend Difference_type operator-(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return static_cast<Difference_type>(ptr1.get() - ptr2.get());
+    /* Careful: divide by a *signed* sizeof; else the (possibly negative) distance converts to unsigned size_t,
+     * possibly yielding garbage for negative distances. */
+    using diff_t = typename Data::diff_t;
+    return static_cast<Difference_type>(ptr1.m_data.distance_from(ptr2.m_data)
+                                        / static_cast<diff_t>(sizeof(Pointed_type)));
   }
 
   /**
@@ -322,7 +337,7 @@ public:
    */
   Shm_pool_offset_ptr operator++(int)
   {
-    Shm_pool_offset_ptr tmp(*this);
+    Shm_pool_offset_ptr tmp{*this};
     ++*this;
     return tmp;
   }
@@ -358,7 +373,7 @@ public:
    */
   explicit operator bool() const
   {
-    return bool(m_data);
+    return m_data.to_bool();
   }
   /**
    * Returns whether the offset pointer is not holding an object.
@@ -379,7 +394,7 @@ public:
    */
   friend bool operator==(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return ptr1.get() == ptr2.get();
+    return ptr1.m_data.equals(ptr2.m_data);
   }
   /**
    * Compares two pointers for inequality.
@@ -403,7 +418,7 @@ public:
    */
   friend bool operator<(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return ptr1.get() < ptr2.get();
+    return ptr1.m_data.less_than(ptr2.m_data);
   }
   /**
    * Compares two pointers to see if the first is less than or equal to the second.
@@ -415,7 +430,7 @@ public:
    */
   friend bool operator<=(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return ptr1.get() <= ptr2.get();
+    return !operator>(ptr1, ptr2);
   }
   /**
    * Compares two pointers to see if the first is greater than the second.
@@ -427,7 +442,7 @@ public:
    */
   friend bool operator>(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return ptr1.get() > ptr2.get();
+    return ptr1.m_data.greater_than(ptr2.m_data);
   }
   /**
    * Compares two pointers to see if the first is greater than or equal to the second.
@@ -439,7 +454,7 @@ public:
    */
   friend bool operator>=(Shm_pool_offset_ptr ptr1, Shm_pool_offset_ptr ptr2)
   {
-    return ptr1.get() >= ptr2.get();
+    return !operator<(ptr1, ptr2);
   }
 
   /**
@@ -460,9 +475,10 @@ private:
   static_assert(std::is_signed_v<Difference_type>, "Pointer difference type must be signed.");
   static_assert(sizeof(typename decltype(m_data)::diff_t) >= sizeof(Difference_type),
                 "Due to internal requirements the pointer difference type cannot exceed a certain "
-                  "(reasonably generous) bit width; for comparison note that boost::offset_ptr<> defaults to `int`.  "
-                  "This requiremenet could be relaxed, in which case a problem would occur at run-time, but only "
-                  "if a sufficient giant pointer difference is actually involved at some point.");
+                  "(reasonably generous) bit width.  This requirement could be relaxed, in which case a problem "
+                  "would occur at run-time, but only if a sufficient giant pointer difference is actually "
+                  "involved at some point.");
+  // (^-- A to-do in arena_lend_fwd.hpp involves eliminating configurability of difference_type and thus such asserts.)
 }; // class Shm_pool_offset_ptr
 
 } // namespace ipc::shm::arena_lend

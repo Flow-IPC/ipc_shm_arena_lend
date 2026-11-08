@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #include "ipc/shm/arena_lend/shm_pool.hpp"
 #include <cassert>
 
@@ -42,7 +43,7 @@ Shm_pool::Shm_pool(pool_id_t id, const string& name, void* address, size_t size,
   assert(!name.empty());
   assert(address != nullptr);
   assert(size > 0);
-  assert(fd > 0);
+  assert(fd >= 0);
 }
 
 bool Shm_pool::determine_offset(const void* address, size_t& offset) const
@@ -56,15 +57,10 @@ bool Shm_pool::determine_offset(const void* address, size_t& offset) const
   return true;
 }
 
-void* Shm_pool::to_address(size_t offset) const
-{
-  // Intentional/as promised: no check against get_size() nor 0.  And yes, as of this writing, our size_t is signed.
-  return m_address + offset;
-}
-
 bool Shm_pool::operator==(const Shm_pool& other) const
 {
-  return (m_name == other.m_name) &&
+  return (m_id == other.m_id) &&
+         (m_name == other.m_name) &&
          (m_address == other.m_address) &&
          (m_size == other.m_size) &&
          (m_fd == other.m_fd);

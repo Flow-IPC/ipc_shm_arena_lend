@@ -22,6 +22,7 @@
  * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
  * THE SOFTWARE. */
 
+/// @file
 #pragma once
 
 #include <boost/core/noncopyable.hpp>
@@ -32,6 +33,10 @@ namespace ipc::shm::arena_lend::jemalloc
 /**
  * This class contains an API to access functionality that is internal to jemalloc. It is derived from jemalloc's
  * pages.c source file in version 5.2.1.x.
+ *
+ * It is a standalone copy: it includes no jemalloc-internal headers and uses no jemalloc-internal macros or
+ * symbols. Hence the linked jemalloc version does not affect it, and upstream refactors of jemalloc internals
+ * (such as the OS-abstraction layer introduced in 5.4.0, which reorganized the code around pages.c) cannot break it.
  */
 class Jemalloc_pages :
   private boost::noncopyable
@@ -58,7 +63,7 @@ public:
    *
    * @param address Specific address to map to or nullptr to allow system to select.
    * @param size Size of memory to map; must be a multiple of system page size.
-   * @param alignment Offset from the specified address.
+   * @param alignment Required alignment of the mapped region; a power of 2, at least the page size.
    * @param commit Specifies whether to commit the pages to memory; it will be overwritten based on whether the
    *               memory was committed or not. In addition, the input may be disregarded if the system overcommits
    *               memory, which results in always setting to commit.
@@ -76,7 +81,8 @@ public:
    */
   static void unmap(void* address, std::size_t size);
   /**
-   * Commits a contiguous set of virtual memory pages into physical memory.
+   * Commits a contiguous set of virtual memory pages (makes them accessible).  If the system overcommits memory,
+   * does nothing and returns `false`, as jemalloc's own code does: memory is then always committed.
    *
    * @param address The base address of the pages.
    * @param size The size of the region.
@@ -85,7 +91,9 @@ public:
    */
   static bool commit(void* address, std::size_t size);
   /**
-   * Decommits a contiguous set of virtual memory pages from physical memory that are mapped to a file.
+   * Decommits a contiguous set of virtual memory pages that are mapped to a file: purges them (see purge_forced())
+   * and then makes them inaccessible.  If the system overcommits memory, and `!force`, does nothing and returns
+   * `false`, as jemalloc's own code does.
    *
    * @param address The base address of the pages.
    * @param fd A valid file descriptor to a memory mapped file.

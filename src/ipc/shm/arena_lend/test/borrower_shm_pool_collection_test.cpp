@@ -66,7 +66,10 @@ public:
   Borrower_shm_pool_collection_test() :
     m_test_logger(flow::log::Sev::S_TRACE),
     m_owner_collection(&m_test_logger),
-    m_borrower_collection(&m_test_logger, Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID)
+    /* The borrower must share the owner's pool-name base: open_shm_pool() recomputes a pool's SHM-object
+     * name as base + separator + pool-ID, and the owner names its (namelessly-created) pools the same way. */
+    m_borrower_collection(&m_test_logger, Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID,
+                          Shared_name(m_owner_collection.get_pool_name_base()))
   {
   }
 
@@ -118,12 +121,16 @@ TEST_F(Borrower_shm_pool_collection_DeathTest, Interface)
   Test_shm_pool_collection& owner_collection = get_owner_collection();
   Borrower_shm_pool_collection& borrower_collection = get_borrower_collection();
 
-  Owner_shm_pool_collection::Shm_object_name_generator name_generator = create_shm_object_name_generator();
-  shared_ptr<Shm_pool> pool = owner_collection.create_shm_pool(name_generator(0 /* ignored by us */), get_pool_size());
+  /* Create namelessly: the owner collection then names the SHM object base + separator + pool-ID -- the
+   * same name open_shm_pool() below shall recompute. */
+  shared_ptr<Shm_pool> pool = owner_collection.create_shm_pool(get_pool_size());
   EXPECT_NE(pool, nullptr);
   // Read only pool
+  Error_code err_code;
   shared_ptr<Shm_pool> read_pool
-    = borrower_collection.open_shm_pool(pool->get_id(), pool->get_name(), pool->get_size());
+    = borrower_collection.open_shm_pool(pool->get_id(), pool->get_size(), &err_code);
+  EXPECT_FALSE(err_code);
+  ASSERT_NE(read_pool, nullptr);
   // Ensure that we cannot write
   EXPECT_DEATH((*static_cast<char*>(read_pool->get_address()) = 'c'), ".*");
 
@@ -135,6 +142,8 @@ TEST_F(Borrower_shm_pool_collection_test, Interface)
 {
   Test_shm_pool_collection& owner_collection = get_owner_collection();
 
+  EXPECT_EQ(get_borrower_collection().get_id(), Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID);
+
   // Access tests
   {
     shared_ptr<Shm_pool> pool = owner_collection.create_shm_pool(get_pool_size());
@@ -144,11 +153,15 @@ TEST_F(Borrower_shm_pool_collection_test, Interface)
     {
       Test_logger test_logger(flow::log::Sev::S_TRACE);
       auto borrower_collection =
-        make_shared<Borrower_shm_pool_collection>(&test_logger, Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID);
+        make_shared<Borrower_shm_pool_collection>(&test_logger, Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID,
+                                                  Shared_name(owner_collection.get_pool_name_base()));
 
       // Read only pool
+      Error_code err_code;
       shared_ptr<Shm_pool> read_pool
-        = borrower_collection->open_shm_pool(pool->get_id(), pool->get_name(), pool->get_size());
+        = borrower_collection->open_shm_pool(pool->get_id(), pool->get_size(), &err_code);
+      EXPECT_FALSE(err_code);
+      ASSERT_NE(read_pool, nullptr);
       EXPECT_EQ(memcmp(read_pool->get_address(), get_arbitrary_data().c_str(), get_arbitrary_data().size()), 0);
       EXPECT_EQ(memcmp(pool->get_address(), read_pool->get_address(), get_pool_size()), 0);
       EXPECT_TRUE(borrower_collection->release_shm_pool(read_pool));
@@ -159,78 +172,6 @@ TEST_F(Borrower_shm_pool_collection_test, Interface)
     }
 
     EXPECT_TRUE(owner_collection.remove_shm_pool(pool));
-  }
-
-  // Create shared object tests
-  {
-    Borrower_shm_pool_collection& borrower_collection = get_borrower_collection();
-
-    EXPECT_EQ(borrower_collection.get_id(), Test_shm_pool_collection::S_DEFAULT_COLLECTION_ID);
-
-    // Ensure that the specified callback is executed properly and that the underlying object is not deleted
-    shared_ptr<bool> destructor_executed = make_shared<bool>(false);
-
-    // Test class
-    class Foo
-    {
-     public:
-      Foo(shared_ptr<bool>& destructor_executed) :
-        m_destructor_executed(destructor_executed)
-      {
-        *m_destructor_executed = false;
-      }
-
-      ~Foo()
-      {
-        *m_destructor_executed = true;
-      }
-
-     private:
-      shared_ptr<bool> m_destructor_executed;
-    }; // class Foo
-    Foo* foo = new Foo(destructor_executed);
-
-    bool callback_executed = false;
-    {
-      // Create object
-      shared_ptr<Foo> foo_ptr = borrower_collection.construct<Foo>(foo,
-                                                                   [&](void* p)
-                                                                   {
-                                                                     callback_executed = true;
-                                                                     EXPECT_EQ(p, foo);
-                                                                   });
-      EXPECT_NE(foo_ptr, nullptr);
-      EXPECT_FALSE(callback_executed);
-      // Ensure deletion callback is executed, but object should not be destroyed
-      foo_ptr = nullptr;
-      EXPECT_TRUE(callback_executed);
-      EXPECT_FALSE(*destructor_executed);
-    }
-
-    // Reset variables
-    callback_executed = false;
-    *destructor_executed = false;
-    {
-      // Create object
-      shared_ptr<Foo> foo_ptr = borrower_collection.construct<Foo>(foo,
-                                                                   0UL,
-                                                                   [&](void* p)
-                                                                   {
-                                                                     callback_executed = true;
-                                                                     EXPECT_EQ(p, foo);
-                                                                   });
-      EXPECT_NE(foo_ptr, nullptr);
-      EXPECT_FALSE(callback_executed);
-      // Ensure deletion callback is executed, but object should not be destroyed
-      foo_ptr = nullptr;
-      EXPECT_TRUE(callback_executed);
-      EXPECT_FALSE(*destructor_executed);
-    }
-
-    // Actual object deletion occurs here
-    *destructor_executed = false;
-    delete foo;
-    EXPECT_TRUE(*destructor_executed);
   }
 }
 
@@ -248,7 +189,7 @@ TEST_F(Borrower_shm_pool_collection_test, Multiprocess)
     Test_borrower borrower;
     EXPECT_EQ(0, borrower.execute_read_check(owner_collection.get_id(),
                                              pool->get_id(),
-                                             pool->get_name(),
+                                             owner_collection.get_pool_name_base().str(),
                                              get_pool_size(),
                                              0,
                                              get_arbitrary_data()));

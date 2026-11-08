@@ -37,8 +37,8 @@ namespace ipc::session::shm::arena_lend::jemalloc::error
 constexpr int S_CODE_LOWEST_INT_VALUE = 1;
 
 /**
- * All possible errors returned (via `Error_code` arguments) by ipc::session functions/methods *outside of*
- * ipc::transport-triggered errors involved in transport involved in doing session-related work; and possibly
+ * All possible errors returned (via `Error_code` arguments) by SHM-jemalloc-enabled ipc::session functions/methods
+ * *outside of* ipc::transport-triggered errors encountered in the course of session-related work; and possibly
  * system-triggered errors.
  *
  * All notes from transport::error::Code doc header apply here.
@@ -50,11 +50,14 @@ enum class Code
    * an error occurred thus hosing the session before it could be opened.  Logs may indicate the reason.
    *
    * @internal
-   * @todo If ipc::shm::arena_lend arena-creation API(s) are modified to output an `Error_code` instead of
-   * reporting just success-versus-failure, then ipc::session::error::Code::S_SHM_ARENA_CREATION_FAILED should go
-   * away.
+   *
+   * Emitted only if the arena-creation API throws an exception lacking an `Error_code`; if the exception carries
+   * one, then that is emitted instead.
+   *
+   * @todo If ipc::shm::arena_lend arena-creation API(s) are modified to always output an `Error_code` (e.g.,
+   * Flow-style via `Error_code*` out-arg), then `Code::S_SHM_ARENA_CREATION_FAILED` should go away.
    */
-  S_SHM_ARENA_CREATION_FAILED,
+  S_SHM_ARENA_CREATION_FAILED = S_CODE_LOWEST_INT_VALUE,
 
   /**
    * Session opening: While registering the session's locally-managed SHM-arena(s) of an arena-lending SHM-provider
@@ -62,10 +65,11 @@ enum class Code
    * indicate the reason.  Most likely it was an internal-IPC failure when sending arena info.
    *
    * @internal
+   *
    * @todo If ipc::shm::arena_lend arena-lending API(s) are modified to output an `Error_code` instead of
    * reporting just success-versus-failure and reporting problem through an async callback, then
-   * ipc::session::error::Code::S_SHM_ARENA_CREATION_FAILED should go away.  See
-   * shm::arena_lend::jemalloc::init_shm() body for more discussion.
+   * ipc::session::shm::arena_lend::jemalloc::error::Code::S_SHM_ARENA_LEND_FAILED should go away.  See
+   * Session_impl::init_shm() body for more discussion.
    */
   S_SHM_ARENA_LEND_FAILED,
 
@@ -75,6 +79,13 @@ enum class Code
    * exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.
    */
   S_SERVER_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR,
+
+  /**
+   * Session opening: While setting up resources for internal-IPC use in an arena-lending SHM-provider, it was found
+   * that the session master channel's transport had been hosed by an error whose exact nature was not available at
+   * that exact moment.  Logs will indicate that exact nature; meanwhile session opening failed.
+   */
+  S_MASTER_SHM_UNEXPECTED_TRANSPORT_ERROR,
 
   /// SENTINEL: Not an error.  This Code must never be issued by an error/success-emitting API; I/O use only.
   S_END_SENTINEL
@@ -101,7 +112,7 @@ Error_code make_error_code(Code err_code);
  * @return See above.
  */
 std::istream& operator>>(std::istream& is, Code& val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 /**
  * Analogous to transport::error::operator<<().
@@ -113,7 +124,7 @@ std::istream& operator>>(std::istream& is, Code& val);
  * @return See above.
  */
 std::ostream& operator<<(std::ostream& os, Code val);
-// @todo - `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
+// @todo `@relatesalso Code` makes Doxygen complain; maybe it doesn't work with `enum class`es like Code.
 
 } // namespace ipc::session::shm::arena_lend::jemalloc::error
 
@@ -125,8 +136,8 @@ namespace boost::system
 /**
  * Ummm -- it specializes this `struct` to -- look -- the end result is boost.system uses this as
  * authorization to make `enum` `Code` convertible to `Error_code`.  The non-specialized
- * version of this sets `value` to `false`, so that random arbitary `enum`s can't just be used as
- * `Error_code`s.  Note that this is the offical way to accomplish that, as (confusingly but
+ * version of this sets `value` to `false`, so that random arbitrary `enum`s can't just be used as
+ * `Error_code`s.  Note that this is the official way to accomplish that, as (confusingly but
  * formally) documented in boost.system docs.
  */
 template<>

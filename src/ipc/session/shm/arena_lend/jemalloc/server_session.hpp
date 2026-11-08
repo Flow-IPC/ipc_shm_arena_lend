@@ -30,6 +30,8 @@
 #include "ipc/session/detail/shm/arena_lend/jemalloc/server_session_impl.hpp"
 #include "ipc/session/shm/arena_lend/jemalloc/session.hpp"
 #include "ipc/session/server_session.hpp"
+#include "ipc/transport/struc/shm/shm_fwd.hpp"
+#include "ipc/transport/transport_fwd.hpp"
 #include <boost/move/make_unique.hpp>
 
 namespace ipc::session::shm::arena_lend::jemalloc
@@ -74,8 +76,8 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *       a null pointer, both indicating an error: the session is hosed (opposing process likely down).  See their
  *       doc headers for a bit more info on this.
  *
- * By using `shm::stl::Arena_activator<Arena>` (alias shm::arena_lend::jemalloc::Ipc_arena_activator) and
- * #Allocator (alias shm::arena_lend::jemalloc::Ipc_arena_allocator)
+ * By using `shm::stl::Arena_activator<Arena>` (alias shm::arena_lend::jemalloc::Ipc_arena::Activator) and
+ * #Allocator (alias shm::arena_lend::jemalloc::Ipc_arena::Allocator)
  * it is possible to construct and transmit not just POD (Plain Old Datatype) objects but combinations of those
  * with unlimited nested levels of STL-compliant containers.  On the borrowing side use
  * #Borrower_allocator (no activator necessary).
@@ -95,17 +97,17 @@ namespace ipc::session::shm::arena_lend::jemalloc
  * copied into/out of the low-level transport are merely the SHM handle (and all of this is hidden from the user
  * outside of the delightful near-zero-copy perf properties).
  *
- * There are two ways to make this happen.  The easiest and best way is, when constructing the
- * `struc::Channel`, to use the alias session::shm::arena_lend::jemalloc::Session_mv::Structured_channel and
- * create one via tag-form ctor with tag transport::struc::Channel_base::Serialize_via_session_shm
- * (or `Serialize_via_app_shm`, server-side only).  Simply provide that tag and `this` (or, symmetrically,
- * `shm::arena_lend::jemalloc::Client_session::this` on the other side).
- *
- * The harder way, albeit allowing for certain advanced setups, is to manually create a
- * `transport::struc::shm::arena_lend::jemalloc::Builder::Config` and/or `Reader::Config`,
- * passing in `this->session_shm()` and/or `this->app_shm()` and/or `this->session_shm()`, to those;
- * and then pass the `Config` or `Config`s, plus `this->shm_session()`, to the non-tag-form of `struc::Channel`
- * ctor.
+ * There are a few ways to make this happen, including and ranging between the following:
+ *   - Use type alias session::shm::arena_lend::jemalloc::Session_mv::Structured_channel (`Session_mv` is super-class of
+ *     jemalloc::Server_session and jemalloc::Client_session).  To the ctor provide
+ *     either transport::struc::Channel_base::Serialize_via_session_shm or `...Serialize_via_app_shm`
+ *     (thus selecting the scope); and `this` (or `Client_session` counterpart on the other side -- by that
+ *     point they're both conceptually `Session`s).
+ *   - The harder way, albeit allowing for certain advanced setups, is to manually create a
+ *     `transport::struc::shm::arena_lend::jemalloc::Builder::Config` and/or replace `Builder` with `Reader`,
+ *     passing in `this->session_shm()` and/or `this->app_shm()`, to those;
+ *     and then pass the `Config` or `Config`s to the non-tag-form of `struc::Channel`
+ *     ctor.
  *
  * This is all documented on transport::struc::Channel.  Do realize, though, that those niceties are
  * really built on this class template and/or the opposing shm::arena_lend::jemalloc::Client_session.
@@ -215,17 +217,17 @@ namespace ipc::session::shm::arena_lend::jemalloc
  *
  * @endinternal
  *
- * @tparam S_MQ_TYPE_OR_NONE
+ * @tparam MQ_TYPE_OR_NONE
  *         Identical to session::Server_session.
- * @tparam S_TRANSMIT_NATIVE_HANDLES
+ * @tparam TRANSMIT_NATIVE_HANDLES
  *         Identical to session::Server_session.
  * @tparam Mdt_payload
  *         Identical to session::Server_session.
  */
-template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
+template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, typename Mdt_payload>
 class Server_session : public Session_mv
                                 <session::Server_session_mv
-                                   <Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>>>
+                                   <Server_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>>>
 {
 public:
   // Types.
@@ -233,13 +235,35 @@ public:
   /// Short-hand for our base class.  To the user: note its `public` API is inherited.
   using Base = Session_mv
                  <session::Server_session_mv
-                    <Server_session_impl<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>>>;
+                    <Server_session_impl<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>>>;
 
   /// Short-hand for base class member alias Session_mv::Arena.  Its doc header contains useful context and tips.
   using Arena = typename Base::Arena;
 
   /// Short-hand for base class member alias Session_mv::Structured_msg_builder_config.
   using Structured_msg_builder_config = typename Base::Structured_msg_builder_config;
+
+  /**
+   * Server_session::Vat_network and `Client_session::Vat_network` are reasonable concrete types
+   * of template transport::struc::shm::rpc::Session_vat_network for an ipc::session user to use on opposing
+   * sides of a session; use the mainstream-form ctor to straightforwardly construct your zero-copy-enabled
+   * `Vat_network` (from a `*this`) for blazing-fast capnp-RPC.
+   */
+  using Vat_network = transport::struc::shm::rpc::Session_vat_network<Server_session, Arena>;
+
+  /// You may disregard.
+  using Async_io_obj = transport::Null_peer;
+  /// Useful for generic programming, the `sync_io`-pattern counterpart to `*this` type.
+  using Sync_io_obj = sync_io::Server_session_adapter<Server_session>;
+
+  // Constants.
+
+  /**
+   * Implements Session API per contract: equals `true`.
+   * @internal
+   * This is explicitly here (it's inherited anyway) mostly to document it as being available at this level.
+   */
+  static constexpr bool S_IS_SRV_ELSE_CLI = Base::S_IS_SRV_ELSE_CLI;
 
   // Constructors/destructor.
 
@@ -274,9 +298,13 @@ public:
   /**
    * Returns builder config suitable for capnp-serializing out-messages in SHM arena app_shm().
    *
+   * @param segment1_sz
+   *        See eponymous arg to, say, transport::struc::sync_io::Channel ctor with `Serialize_via_app_shm` tag.
    * @return See above.
    */
-  Structured_msg_builder_config app_shm_builder_config();
+  Structured_msg_builder_config
+    app_shm_builder_config(size_t segment1_sz
+                                    = sizeof(::capnp::word) * ::capnp::SUGGESTED_FIRST_SEGMENT_WORDS);
 
   /**
    * When transmitting items originating in #Arena app_shm() via transport::struc::shm::Builder::emit_serialization()
@@ -290,7 +318,7 @@ public:
    */
   typename Structured_msg_builder_config::Builder::Session app_shm_lender_session();
 
-protected:
+private:
   // Constructors.
 
   /**
@@ -313,11 +341,11 @@ protected:
 
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define TEMPLATE_JEM_SRV_SESSION \
-  template<session::schema::MqType S_MQ_TYPE_OR_NONE, bool S_TRANSMIT_NATIVE_HANDLES, \
+  template<session::schema::MqType MQ_TYPE_OR_NONE, bool TRANSMIT_NATIVE_HANDLES, \
            typename Mdt_payload>
 /// Internally used macro; public API users should disregard (same deal as in struc/channel.hpp).
 #define CLASS_JEM_SRV_SESSION \
-  Server_session<S_MQ_TYPE_OR_NONE, S_TRANSMIT_NATIVE_HANDLES, Mdt_payload>
+  Server_session<MQ_TYPE_OR_NONE, TRANSMIT_NATIVE_HANDLES, Mdt_payload>
 
 TEMPLATE_JEM_SRV_SESSION
 CLASS_JEM_SRV_SESSION::Server_session(flow::log::Logger* logger_ptr, const Server_app& srv_app_ref_arg,
@@ -345,10 +373,10 @@ std::shared_ptr<typename CLASS_JEM_SRV_SESSION::Arena> CLASS_JEM_SRV_SESSION::ap
 
 TEMPLATE_JEM_SRV_SESSION
 typename CLASS_JEM_SRV_SESSION::Structured_msg_builder_config
-  CLASS_JEM_SRV_SESSION::app_shm_builder_config()
+  CLASS_JEM_SRV_SESSION::app_shm_builder_config(size_t segment1_sz)
 {
   assert(Base::Base::Base::impl() && "Do not call this on as-if-default-cted Session.");
-  return Base::Base::Base::impl()->app_shm_builder_config();
+  return Base::Base::Base::impl()->app_shm_builder_config(segment1_sz);
 }
 
 TEMPLATE_JEM_SRV_SESSION
