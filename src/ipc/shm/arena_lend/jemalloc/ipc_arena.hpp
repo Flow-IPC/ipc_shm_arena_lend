@@ -257,7 +257,7 @@ public:
    *
    * @note Consider using Shared_name::sanitize() w/r/t `pool_name_base`.
    *
-   * Other errors are of a truly exceptional nature to the best of our knoweldge.
+   * Other errors are of a truly exceptional nature to the best of our knowledge.
    *
    * @todo Ipc_arena::create() should follow normalized Flow error emission semantics (take `Error_code*`, set
    * to success or specific failure, if null then throw on failure, encapsulating the truthy `Error_code`).
