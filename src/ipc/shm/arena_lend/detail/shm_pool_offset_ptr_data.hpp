@@ -880,9 +880,16 @@ Shm_pool_offset_ptr_data<Repository_type, CAN_STORE_RAW_PTR>::Shm_pool_offset_pt
   else // if (pool_id_or_0 != 0): Found in a SHM pool.
   {
     // Operate on bit-field for clarity and probably speed (see class doc header for discussion).
-    m_rep.m_offset_ptr_rep.m_selector_offset_else_raw = rep_t(1);
-    m_rep.m_offset_ptr_rep.m_pool_id = pool_id_or_0;
-    m_rep.m_offset_ptr_rep.m_pool_offset = pool_offset;
+    m_rep.m_offset_ptr_rep = { .m_pool_offset = pool_offset,
+                               .m_pool_id = pool_id_or_0,
+                               .m_selector_offset_else_raw = rep_t(1) };
+
+    /* (Note: Could instead assign each field m_offset_ptr_rep.m_* in separate statements, m_rep being uninitalized
+     * garbage initially.  Harmless -- the entire m_rep would get overwritten by the end of it -- but some compilers
+     * (at least gcc-15) then cryptically warn about each assignment, as technically in composing the overall
+     * bit-string each time, it is potentially using uninitialized bits (the not-yet-set ones that are being left
+     * alone in the given sub-bit-string replacement).  So we don't do it that way but instead init the whole thing
+     * in one statement.  That way avoids those warnings and should be no slower/worse, nor less readable.) */
   }
 } // Shm_pool_offset_ptr_data::Shm_pool_offset_ptr_data(const void* p)
 

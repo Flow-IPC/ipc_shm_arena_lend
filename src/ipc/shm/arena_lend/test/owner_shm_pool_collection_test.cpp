@@ -39,6 +39,7 @@
 #include <sys/types.h>
 #include <unistd.h>
 #include <iostream>
+#include <cstdint>
 #include <cstdlib>
 #include <new>
 #include <unordered_set>
@@ -174,7 +175,7 @@ public:
    */
   void deallocate(void* address) noexcept
   {
-    m_last_address_deallocated = address;
+    m_last_address_deallocated = reinterpret_cast<uintptr_t>(address);
     std::free(address);
   }
 
@@ -189,11 +190,12 @@ public:
   }
 
   /**
-   * Returns the last address deallocated or nullptr, if there was none.
+   * Returns the last address deallocated or 0, if there was none.  It is an integer, not a pointer, as the
+   * memory at that address is freed, and compilers (at least gcc-15) warn about touching such a pointer's value.
    *
    * @return See above.
    */
-  void* get_last_address_deallocated() const
+  uintptr_t get_last_address_deallocated() const
   {
     return m_last_address_deallocated;
   }
@@ -353,8 +355,8 @@ private:
 
   /// The last address allocated or nullptr, if there was none.
   void* m_last_address_allocated = nullptr;
-  /// The last address deallocated or nullptr, if there was none.
-  void* m_last_address_deallocated = nullptr;
+  /// The last address deallocated or 0, if there was none.  See get_last_address_deallocated() regarding the type.
+  uintptr_t m_last_address_deallocated = 0;
   /// Optional test event listener for capturing notifications.
   Test_event_listener* m_test_event_listener = nullptr;
 }; // class Test_owner_shm_pool_collection_2
@@ -465,9 +467,10 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
       shared_ptr<size_t> m_destructor_counter;
     }; // class Foo
 
-    void* last_address_deallocated = collection.get_last_address_deallocated();
+    const uintptr_t last_address_deallocated = collection.get_last_address_deallocated();
     shared_ptr<Foo> foo_ptr = collection.construct<Foo>(constructor_counter, destructor_counter);
     Foo* foo = foo_ptr.get();
+    const auto foo_address = reinterpret_cast<uintptr_t>(foo); // Save it before `*foo` is freed.
     // Ensure constructor is called exactly once
     EXPECT_EQ(collection.get_last_address_allocated(), foo);
     EXPECT_EQ(*constructor_counter, 1UL);
@@ -480,7 +483,7 @@ TEST_F(Owner_shm_pool_collection_test, Interface)
     // Ensure constructor was not called
     EXPECT_EQ(collection.get_last_address_allocated(), foo);
     EXPECT_EQ(*constructor_counter, 1UL);
-    EXPECT_EQ(collection.get_last_address_deallocated(), foo);
+    EXPECT_EQ(collection.get_last_address_deallocated(), foo_address);
     // Ensure destructor is only called once
     EXPECT_EQ(*destructor_counter, 1UL);
   }
